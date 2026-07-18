@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Glowcave</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #05030C; overflow: hidden; }
+  canvas { display: block; touch-action: none; -webkit-tap-highlight-color: transparent; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+/* ============================================================
+   GLOWCAVE — a firefly in the dark. hold to rise.
+   Pure Canvas2D + WebAudio. 960x540 virtual, letterboxed.
+   ============================================================ */
+const W = 960, H = 540;
+const FLYX = 240;            // firefly screen x
+const PXM = 42;              // pixels per meter
+const SLUG = 'glowcave';
+const HANDFONT = '"Chalkboard SE","Comic Neue","Segoe Print","Bradley Hand",cursive';
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// darkness mask at half res (soft light falloff for free)
+const LSC = 0.5;
+const mask = document.createElement('canvas');
+mask.width = W * LSC; mask.height = H * LSC;
+const mctx = mask.getContext('2d');
+
+let dpr = 1, scale = 1, ox = 0, oy = 0, cw = 0, chh = 0;
+function resize() {
+  dpr = Math.min(2.5, window.devicePixelRatio || 1);
+  cw = window.innerWidth; chh = window.innerHeight;
+  canvas.width = Math.round(cw * dpr);
+  canvas.height = Math.round(chh * dpr);
+  canvas.style.width = cw + 'px';
+  canvas.style.height = chh + 'px';
+  scale = Math.min(cw / W, chh / H);
+  ox = (cw - W * scale) / 2;
+  oy = (chh - H * scale) / 2;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---------- deterministic RNG ----------
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hash32(n) {
+  n = Math.imul(n ^ (n >>> 16), 0x45d9f3b);
+  n = Math.imul(n ^ (n >>> 16), 0x45d9f3b);
+  n ^= n >>> 16;
+  return (n >>> 0) / 4294967296;
+}
+// 1D value noise, seeded
+function vn(seed, x) {
+  const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f);
+  return hash32(Math.imul(i, 374761393) + seed) * (1 - u) +
+         hash32(Math.imul(i + 1, 374761393) + seed) * u;
+}
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const TAU = Math.PI * 2;
+
+// ---------- run state ----------
+let state = 'idle';            // idle | run | dead
+let runIndex = 0;
+let rng = mulberry32(1);
+let S1 = 0, S2 = 0, S3 = 0, S4 = 0, S5 = 0, S6 = 0;   // cave noise seeds
+let camX = 0, dist = 0, speed = 0, emberBoost = 0;
+let flyY = H / 2, vy = 0, glow = 185, glowPulse = 0;
+let graceT = 0, deadT = 0, shake = 0, reveal = 0, flash = 0;
+let now = 0;                    // global clock (real seconds)
+let hintFade = 1, titleFade = 1, everHeld = false;
+let goFade = 0;                 // gameover panel fade
+let milestone = 0, scorePulse = 0;
+let lastScorePost = 0;
+let holding = false;
+let audioOK = false;
+
+let best = 0;
+try { best = parseInt(localStorage.getItem('gs_best:' + SLUG) || '0', 10) || 0; } catch (e) {}
+let newBest = false;
+
+// challenge param
+let target = 0, targetBeaten = false, targetFlash = 0;
+try {
+  const c = parseInt(new URLSearchParams(location.search).get('c') || '', 10);
+  if (c > 0) target = c;
+} catch (e) {}
+
+// ---------- cave shape ----------
+const cvA = { top: 0, bot: 0 }, cvB = { top: 0, bot: 0 }; // scratch
+function caveAt(wx, out) {
+  const dm = wx / PXM;
+  // gap narrows with distance
+  let gap = Math.max(148, 344 - dm * 0.5);
+  gap += Math.max(0, 130 * (1 - dm / 12));          // wide-open first meters
+  const wander = (vn(S1, wx * 0.0012) * 2 - 1) * 0.74 + (vn(S2, wx * 0.0042) * 2 - 1) * 0.26;
+  const maxAmp = Math.min((H - gap) / 2 - 24, 90 + dm * 0.55);
+  let center = H / 2 + wander * Math.max(0, maxAmp) * clamp(dm / 10, 0, 1);
+  // jagged rock teeth grow with distance
+  const jag = Math.min(42, 7 + dm * 0.11);
+  let top = center - gap / 2 + vn(S3, wx * 0.021) * jag;
+  let bot = center + gap / 2 - vn(S4, wx * 0.021 + 77.7) * jag;
+  // stalactites / stalagmites
+  const spikeAmp = Math.min(88, Math.max(0, dm - 40) * 0.55);
+  if (spikeAmp > 0) {
+    const sT = Math.max(0, vn(S5, wx * 0.0135) - 0.62) / 0.38;
+    const sB = Math.max(0, vn(S6, wx * 0.0135 + 31.3) - 0.62) / 0.38;
+    top += Math.pow(sT, 1.6) * spikeAmp;
+    bot -= Math.pow(sB, 1.6) * spikeAmp;
+  }
+  if (bot - top < 116) { const m = (top + bot) / 2; top = m - 58; bot = m + 58; }
+  out.top = top; out.bot = bot;
+  return out;
+}
+
+// ---------- entities (pooled / reused) ----------
+const embers = [];        // {wx, y, ph, big, alive}
+let nextEmberX = 0;
+const sparks = [];        // {x,y,vx,vy,age,life}
+for (let i = 0; i < 56; i++) sparks.push({ x: 0, y: 0, vx: 0, vy: 0, age: 0, life: 0 });
+let sparksAlive = 0;
+const pings = [];         // {x,y,age,txt,big}
+for (let i = 0; i < 10; i++) pings.push({ x: 0, y: 0, age: 9, txt: '', big: false });
+const motes = [];         // dust in the glow
+{
+  const mr = mulberry32(777);
+  for (let i = 0; i < 42; i++) motes.push({ x: mr() * W, y: mr() * H, s: 0.7 + mr() * 1.4, ph: mr() * TAU, sp: 0.5 + mr() });
+}
+const TRAIL = 22;
+const trail = new Float32Array(TRAIL * 2);
+let trailN = 0, trailHead = 0;
+
+function addPing(x, y, txt, big) {
+  let p = pings[0];
+  for (const q of pings) if (q.age > p.age) p = q;
+  p.x = x; p.y = y; p.age = 0; p.txt = txt; p.big = !!big;
+}
+
+// ---------- audio (WebAudio synth, init on gesture) ----------
+let AC = null, master = null, humGain = null, noiseBuf = null;
+function initAudio() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    master = AC.createGain(); master.gain.value = 0.5; master.connect(AC.destination);
+    // wing hum
+    humGain = AC.createGain(); humGain.gain.value = 0;
+    const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 320;
+    humGain.connect(lp); lp.connect(master);
+    const o1 = AC.createOscillator(); o1.type = 'triangle'; o1.frequency.value = 84;
+    const o2 = AC.createOscillator(); o2.type = 'sawtooth'; o2.frequency.value = 127;
+    const g2 = AC.createGain(); g2.gain.value = 0.3;
+    const lfo = AC.createOscillator(); lfo.frequency.value = 23;
+    const lg = AC.createGain(); lg.gain.value = 11;
+    lfo.connect(lg); lg.connect(o1.frequency);
+    o1.connect(humGain); o2.connect(g2); g2.connect(humGain);
+    o1.start(); o2.start(); lfo.start();
+    // noise buffer (death shimmer)
+    noiseBuf = AC.createBuffer(1, AC.sampleRate, AC.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    audioOK = true;
+  } catch (e) { AC = null; }
+}
+function setHum(on) {
+  if (!AC || !humGain) return;
+  humGain.gain.setTargetAtTime(on ? 0.05 : 0.0, AC.currentTime, 0.06);
+}
+function sChime(big) {
+  if (!AC) return;
+  const t = AC.currentTime, vr = 0.9 + Math.random() * 0.2;
+  const o = AC.createOscillator(); o.type = 'sine'; o.frequency.value = (big ? 620 : 760) * vr;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(big ? 0.13 : 0.09, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+  const o2 = AC.createOscillator(); o2.type = 'sine'; o2.frequency.value = 760 * vr * 2.76;
+  const g2 = AC.createGain();
+  g2.gain.setValueAtTime(0.025, t);
+  g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+  o.connect(g); g.connect(master); o2.connect(g2); g2.connect(master);
+  o.start(t); o.stop(t + 0.6); o2.start(t); o2.stop(t + 0.25);
+}
+function sTick() {
+  if (!AC) return;
+  const t = AC.currentTime, vr = 0.92 + Math.random() * 0.16;
+  const o = AC.createOscillator(); o.type = 'sine'; o.frequency.value = 470 * vr;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.05, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.16);
+}
+function sDeath() {
+  if (!AC) return;
+  const t = AC.currentTime;
+  // felt low thud
+  const o = AC.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(130, t);
+  o.frequency.exponentialRampToValueAtTime(40, t + 0.3);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.32, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.42);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.45);
+  // spark shimmer
+  const src = AC.createBufferSource(); src.buffer = noiseBuf;
+  const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 3200; bp.Q.value = 0.8;
+  const ng = AC.createGain();
+  ng.gain.setValueAtTime(0.11, t + 0.02);
+  ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+  src.connect(bp); bp.connect(ng); ng.connect(master);
+  src.start(t); src.stop(t + 1);
+}
+
+// ---------- bridge ----------
+function post(msg) { try { parent.postMessage(msg, '*'); } catch (e) {} }
+
+// ---------- run control ----------
+function resetRun() {
+  runIndex++;
+  const rs = mulberry32(0x51CA7E ^ (runIndex * 0x9E3779B9));
+  S1 = (rs() * 1e9) | 0; S2 = (rs() * 1e9) | 0; S3 = (rs() * 1e9) | 0;
+  S4 = (rs() * 1e9) | 0; S5 = (rs() * 1e9) | 0; S6 = (rs() * 1e9) | 0;
+  rng = mulberry32(0xF17EF1 ^ (runIndex * 7919 + 13));
+  camX = 0; dist = 0; emberBoost = 0; speed = 165;
+  flyY = H / 2; vy = 0; glow = 190; glowPulse = 0;
+  graceT = 0; deadT = 0; shake = 0; reveal = 0; flash = 0; goFade = 0;
+  newBest = false; targetBeaten = false; targetFlash = 0;
+  milestone = 0;
+  embers.length = 0; nextEmberX = 620;
+  sparksAlive = 0; for (const s of sparks) s.life = 0;
+  for (const p of pings) p.age = 9;
+  trailN = 0; trailHead = 0;
+}
+resetRun(); runIndex = 0; // seed run 1 fresh on first start
+
+function startRun() {
+  state = 'run';
+}
+function die() {
+  state = 'dead'; deadT = 0;
+  setHum(false); sDeath();
+  shake = 1; reveal = 0; flash = 1;
+  // burst of sparks — the firefly's light scatters
+  const n = 46;
+  for (let i = 0; i < n && i < sparks.length; i++) {
+    const s = sparks[i];
+    const a = rng() * TAU, sp = 50 + rng() * 300;
+    s.x = FLYX; s.y = flyY;
+    s.vx = Math.cos(a) * sp + 20; s.vy = Math.sin(a) * sp - 30;
+    s.age = 0; s.life = 0.8 + rng() * 1.15;
+  }
+  sparksAlive = n;
+  const score = Math.floor(dist);
+  if (score > best) { best = score; newBest = true; try { localStorage.setItem('gs_best:' + SLUG, String(best)); } catch (e) {} }
+  post({ gs: 'gameover', score: score });
+}
+
+// ---------- input: one button ----------
+function press() {
+  initAudio();
+  if (state === 'idle') { resetRun(); startRun(); }
+  else if (state === 'dead' && deadT > 0.35) { resetRun(); startRun(); }
+  holding = true; everHeld = true;
+  if (state === 'run') setHum(true);
+}
+function release() { holding = false; setHum(false); }
+canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); press(); });
+window.addEventListener('pointerup', release);
+window.addEventListener('pointercancel', release);
+window.addEventListener('blur', release);
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW' || e.code === 'Enter') {
+    e.preventDefault(); press();
+  }
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW' || e.code === 'Enter') release();
+});
+
+// ---------- update ----------
+function update(rdt) {
+  now += rdt;
+  const ts = (state === 'dead' && deadT < 0.38) ? 0.12 : 1;  // hit-stop slow-mo
+  const dt = rdt * ts;
+
+  if (everHeld) hintFade = Math.max(0, hintFade - rdt * 1.4);
+  if (state !== 'idle') titleFade = Math.max(0, titleFade - rdt * 2.2);
+  shake = Math.max(0, shake - rdt * 2.6);
+  flash = Math.max(0, flash - rdt * 2.2);
+  glowPulse = Math.max(0, glowPulse - rdt * 3);
+  scorePulse = Math.max(0, scorePulse - rdt * 3);
+  targetFlash = Math.max(0, targetFlash - rdt * 0.8);
+
+  if (state === 'idle') {
+    flyY = H / 2 + Math.sin(now * 1.6) * 7;
+    glow = 190 + Math.sin(now * 1.1) * 10;
+  } else if (state === 'run') {
+    // pace: ramps with distance, plus per-ember cost
+    speed = Math.min(445, 165 + dist * 0.5 + emberBoost);
+    camX += speed * dt;
+    dist = camX / PXM;
+
+    // vertical: inertia, no snap
+    vy += ((holding ? -2350 : 0) + 1150) * dt;
+    vy = clamp(vy, -350, 350);
+    flyY += vy * dt;
+
+    // glow hunger
+    glow = clamp(glow - (6.5 + dist * 0.008) * dt, 78, 300);
+
+    // trail
+    trail[trailHead * 2] = camX + FLYX; trail[trailHead * 2 + 1] = flyY;
+    trailHead = (trailHead + 1) % TRAIL;
+    if (trailN < TRAIL) trailN++;
+
+    // embers: spawn ahead, drift, collect
+    while (nextEmberX < camX + W + 240) {
+      caveAt(nextEmberX, cvA);
+      const risky = rng() < 0.32 && dist > 25;
+      let ey;
+      if (risky) ey = rng() < 0.5 ? cvA.top + 30 : cvA.bot - 30;
+      else ey = cvA.top + 58 + rng() * Math.max(10, (cvA.bot - cvA.top) - 116);
+      embers.push({ wx: nextEmberX, y: ey, ph: rng() * TAU, big: risky, alive: true });
+      nextEmberX += 300 + rng() * 290;
+    }
+    for (let i = embers.length - 1; i >= 0; i--) {
+      const e = embers[i];
+      if (e.wx < camX - 60) { embers.splice(i, 1); continue; }
+      if (!e.alive) continue;
+      const sx = e.wx - camX, dy = (e.y + Math.sin(now * 2 + e.ph) * 6) - flyY, dx = sx - FLYX;
+      const rr = e.big ? 24 : 21;
+      if (dx * dx + dy * dy < rr * rr) {
+        e.alive = false;
+        glow = Math.min(300, glow + (e.big ? 66 : 42));
+        emberBoost += e.big ? 8 : 5;
+        glowPulse = 1; scorePulse = 1;
+        sChime(e.big);
+        addPing(sx, e.y - 22, e.big ? '+ glow + glow' : '+ glow', e.big);
+      }
+    }
+
+    // milestones
+    const m100 = Math.floor(dist / 100);
+    if (m100 > milestone) { milestone = m100; sTick(); scorePulse = 1; addPing(FLYX + 120, flyY - 46, milestone * 100 + ' m', true); }
+
+    // challenge target
+    if (target && !targetBeaten && dist >= target) {
+      targetBeaten = true; targetFlash = 2; sChime(true); sTick();
+      post({ gs: 'challenge_beaten', score: Math.floor(dist) });
+    }
+
+    // collision: hitbox ~70% of visual, 60ms grace
+    const rHit = 9;
+    let overlap = false, hard = false;
+    for (let k = -1; k <= 1; k++) {
+      caveAt(camX + FLYX + k * rHit * 0.8, cvB);
+      if (flyY - rHit < cvB.top || flyY + rHit > cvB.bot) overlap = true;
+      if (flyY < cvB.top - 7 || flyY > cvB.bot + 7) hard = true;
+    }
+    if (overlap) graceT += rdt; else graceT = 0;
+    if (hard || graceT > 0.06) die();
+
+    // live score to platform (throttled)
+    if (now - lastScorePost > 0.5) { lastScorePost = now; post({ gs: 'score', score: Math.floor(dist) }); }
+  } else { // dead
+    deadT += rdt;
+    reveal = deadT < 0.25 ? deadT / 0.25 : Math.max(0, 1 - (deadT - 0.8) / 1.2);
+    if (deadT > 0.5) goFade = Math.min(1, goFade + rdt * 3);
+  }
+
+  // sparks
+  if (sparksAlive > 0) {
+    sparksAlive = 0;
+    for (const s of sparks) {
+      if (s.life <= 0 || s.age >= s.life) { continue; }
+      s.age += dt;
+      s.vx *= (1 - 1.1 * dt); s.vy = s.vy * (1 - 1.1 * dt) + 60 * dt;
+      s.x += s.vx * dt; s.y += s.vy * dt;
+      sparksAlive++;
+    }
+  }
+
+  // dust motes drift through the glow
+  const drift = state === 'run' ? 14 + speed * 0.10 : 6;
+  for (const mo of motes) {
+    mo.x -= drift * mo.sp * dt;
+    if (mo.x < -4) { mo.x += W + 8; mo.y = (mo.y * 31 % H + H) % H; }
+  }
+
+  // pings float up
+  for (const p of pings) if (p.age < 9) p.age += rdt;
+}
+
+// ---------- hand-inked 7-seg digits ----------
+const SEGPTS = {
+  A: [0.10, 0.00, 0.90, 0.00], B: [1.00, 0.10, 1.00, 0.92], C: [1.00, 1.08, 1.00, 1.90],
+  D: [0.10, 2.00, 0.90, 2.00], E: [0.00, 1.08, 0.00, 1.90], F: [0.00, 0.10, 0.00, 0.92],
+  G: [0.10, 1.00, 0.90, 1.00]
+};
+const DIGSEG = ['ABCDEF', 'BC', 'ABGED', 'ABGCD', 'FGBC', 'AFGCD', 'AFGEDC', 'ABC', 'ABCDEFG', 'ABCDFG'];
+function jit(n) { return (hash32(n) - 0.5) * 0.09; }
+// draws string of digits; returns width. align: 0 left, 0.5 center, 1 right
+function drawDigits(str, x, y, s, align, color, alpha, glowPx) {
+  const cwd = s * 1.38;
+  const total = str.length * cwd - s * 0.38;
+  let cx = x - total * align;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = alpha;
+  ctx.lineWidth = s * 0.17;
+  ctx.lineCap = 'round';
+  if (glowPx) { ctx.shadowColor = color; ctx.shadowBlur = glowPx; }
+  ctx.beginPath();
+  for (let i = 0; i < str.length; i++) {
+    const d = str.charCodeAt(i) - 48;
+    if (d >= 0 && d <= 9) {
+      const segs = DIGSEG[d];
+      for (let k = 0; k < segs.length; k++) {
+        const p = SEGPTS[segs[k]];
+        const j = (i * 131 + k * 17);
+        ctx.moveTo(cx + (p[0] + jit(j)) * s, y + (p[1] + jit(j + 7)) * s);
+        ctx.lineTo(cx + (p[2] + jit(j + 3)) * s, y + (p[3] + jit(j + 11)) * s);
+      }
+    }
+    cx += cwd;
+  }
+  ctx.stroke();
+  ctx.restore();
+  return total;
+}
+
+// ---------- draw helpers ----------
+function punch(x, y, r, strength) {
+  if (r <= 1) return;
+  const g = mctx.createRadialGradient(x * LSC, y * LSC, 0, x * LSC, y * LSC, r * LSC);
+  g.addColorStop(0, 'rgba(0,0,0,' + strength + ')');
+  g.addColorStop(0.45, 'rgba(0,0,0,' + (strength * 0.8).toFixed(3) + ')');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  mctx.fillStyle = g;
+  mctx.fillRect((x - r) * LSC, (y - r) * LSC, r * 2 * LSC, r * 2 * LSC);
+}
+
+function drawParallaxLayer(seedT, seedB, factor, reach, color) {
+  const off = camX * factor;
+  ctx.fillStyle = color;
+  const step = 16;
+  // ceiling band
+  ctx.beginPath();
+  ctx.moveTo(-step, -10);
+  for (let x = -step; x <= W + step; x += step) {
+    const wxp = x + off;
+    ctx.lineTo(x, reach * (0.45 + vn(seedT, wxp * 0.006) * 0.75) + vn(seedT, wxp * 0.03) * 18);
+  }
+  ctx.lineTo(W + step, -10);
+  ctx.closePath();
+  ctx.fill();
+  // floor band
+  ctx.beginPath();
+  ctx.moveTo(-step, H + 10);
+  for (let x = -step; x <= W + step; x += step) {
+    const wxp = x + off;
+    ctx.lineTo(x, H - reach * (0.45 + vn(seedB, wxp * 0.006) * 0.75) - vn(seedB, wxp * 0.03) * 18);
+  }
+  ctx.lineTo(W + step, H + 10);
+  ctx.closePath();
+  ctx.fill();
+}
+
+let bgGrad = null;
+function drawWorld() {
+  // background — near-black indigo, breathing faintly toward the middle
+  if (!bgGrad) {
+    bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+    bgGrad.addColorStop(0, '#0C0920');
+    bgGrad.addColorStop(0.5, '#191339');
+    bgGrad.addColorStop(1, '#0C0920');
+  }
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  // parallax rock silhouettes (deep to near)
+  drawParallaxLayer(S1 ^ 1234567, S2 ^ 7654321, 0.32, 215, 'rgba(36,28,66,0.6)');
+  drawParallaxLayer(S3 ^ 999331, S4 ^ 331999, 0.58, 168, 'rgba(22,16,45,0.9)');
+
+  // dust motes (visible only inside light)
+  ctx.fillStyle = '#FFE9B8';
+  for (const mo of motes) {
+    ctx.globalAlpha = 0.14 + 0.1 * Math.sin(now * 1.3 + mo.ph);
+    ctx.beginPath();
+    ctx.arc(mo.x, mo.y + Math.sin(now * 0.8 + mo.ph) * 5, mo.s, 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // the cave itself — ink-black walls with a warm rim line
+  const step = 8;
+  ctx.beginPath();               // ceiling
+  ctx.moveTo(-step, -20);
+  for (let x = -step; x <= W + step; x += step) {
+    caveAt(camX + x, cvA);
+    ctx.lineTo(x, cvA.top);
+  }
+  ctx.lineTo(W + step, -20);
+  ctx.closePath();
+  ctx.fillStyle = '#05030C';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,194,75,0.22)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.beginPath();               // floor
+  ctx.moveTo(-step, H + 20);
+  for (let x = -step; x <= W + step; x += step) {
+    caveAt(camX + x, cvA);
+    ctx.lineTo(x, cvA.bot);
+  }
+  ctx.lineTo(W + step, H + 20);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+}
+
+function drawDarkness() {
+  // rebuild the mask: darkness minus light sources
+  mctx.globalCompositeOperation = 'source-over';
+  mctx.clearRect(0, 0, mask.width, mask.height);
+  const rev = state === 'dead' ? Math.max(reveal, 0.17) : reveal;
+  const dark = 0.965 * (1 - rev * 0.93);
+  mctx.globalAlpha = dark;
+  mctx.fillStyle = '#04020A';
+  mctx.fillRect(0, 0, mask.width, mask.height);
+  mctx.globalAlpha = 1;
+  mctx.globalCompositeOperation = 'destination-out';
+  // firefly light
+  if (state !== 'dead') {
+    const r = glow * (1 + glowPulse * 0.14) + Math.sin(now * 5.2) * 4;
+    punch(FLYX, flyY, r * 1.55, 1);
+  } else if (deadT < 0.4) {
+    punch(FLYX, flyY, glow * (1 - deadT * 1.8), 1);
+  }
+  // embers glow on their own — visible from the dark ahead
+  for (const e of embers) {
+    if (!e.alive) continue;
+    const sx = e.wx - camX;
+    if (sx < -40 || sx > W + 40) continue;
+    const pr = (e.big ? 62 : 46) + Math.sin(now * 3 + e.ph) * 8;
+    punch(sx, e.y + Math.sin(now * 2 + e.ph) * 6, pr, 0.85);
+  }
+  // death sparks are tiny lanterns
+  if (sparksAlive > 0) {
+    for (const s of sparks) {
+      if (s.life <= 0 || s.age >= s.life) continue;
+      const f = 1 - s.age / s.life;
+      punch(s.x, s.y, 18 + 34 * f, 0.8 * f);
+    }
+  }
+  mctx.globalCompositeOperation = 'source-over';
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(mask, 0, 0, W, H);
+
+  // warm amber cast — the light is firelight, not moonlight
+  if (state !== 'dead' || deadT < 0.4) {
+    const wr = (state === 'dead' ? glow * (1 - deadT * 1.8) : glow * (1 + glowPulse * 0.14)) * 1.3;
+    if (wr > 6) {
+      ctx.globalCompositeOperation = 'lighter';
+      const wg = ctx.createRadialGradient(FLYX, flyY, 0, FLYX, flyY, wr);
+      wg.addColorStop(0, 'rgba(255,194,75,0.22)');
+      wg.addColorStop(0.4, 'rgba(255,194,75,0.10)');
+      wg.addColorStop(0.75, 'rgba(255,194,75,0.035)');
+      wg.addColorStop(1, 'rgba(255,194,75,0)');
+      ctx.fillStyle = wg;
+      ctx.fillRect(FLYX - wr, flyY - wr, wr * 2, wr * 2);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+  }
+}
+
+function drawEmbers() {
+  for (const e of embers) {
+    if (!e.alive) continue;
+    const sx = e.wx - camX;
+    if (sx < -20 || sx > W + 20) continue;
+    const ey = e.y + Math.sin(now * 2 + e.ph) * 6;
+    const pu = 0.75 + 0.25 * Math.sin(now * 3.4 + e.ph);
+    const r = (e.big ? 6.4 : 4.6) * pu;
+    ctx.globalAlpha = 0.5 * pu;
+    ctx.fillStyle = '#FFC24B';
+    ctx.beginPath(); ctx.arc(sx, ey, r * 2.1, 0, TAU); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#FFE9B8';
+    ctx.beginPath(); ctx.arc(sx, ey, r, 0, TAU); ctx.fill();
+  }
+}
+
+function drawFirefly() {
+  if (state === 'dead') return;
+  // trailing ribbon of light
+  ctx.fillStyle = '#FFC24B';
+  for (let i = 0; i < trailN; i++) {
+    const idx = (trailHead - 1 - i + TRAIL * 2) % TRAIL;
+    const tx = trail[idx * 2] - camX, ty = trail[idx * 2 + 1];
+    if (tx < -10) continue;
+    const f = 1 - i / TRAIL;
+    ctx.globalAlpha = 0.28 * f * f;
+    ctx.beginPath(); ctx.arc(tx, ty, 1 + 4 * f, 0, TAU); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  const tilt = clamp(vy * 0.0012, -0.4, 0.4);
+  ctx.save();
+  ctx.translate(FLYX, flyY);
+  ctx.rotate(tilt);
+  // halo
+  const hg = ctx.createRadialGradient(0, 0, 0, 0, 0, 30);
+  hg.addColorStop(0, 'rgba(255,194,75,0.55)');
+  hg.addColorStop(0.5, 'rgba(255,194,75,0.18)');
+  hg.addColorStop(1, 'rgba(255,194,75,0)');
+  ctx.fillStyle = hg;
+  ctx.fillRect(-30, -30, 60, 60);
+  // wings — quick flutter while rising
+  const flap = Math.sin(now * (holding ? 46 : 14)) * (holding ? 0.9 : 0.35);
+  ctx.fillStyle = 'rgba(255,233,184,0.5)';
+  for (const side of [-1, 1]) {
+    ctx.save();
+    ctx.rotate(side * (0.5 + flap * 0.5));
+    ctx.beginPath();
+    ctx.ellipse(side * 5, -8, 3.4, 8.5, side * 0.5, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+  // body
+  ctx.fillStyle = '#FFE9B8';
+  ctx.beginPath(); ctx.arc(0, 0, 4.6, 0, TAU); ctx.fill();
+  ctx.fillStyle = '#FFC24B';
+  ctx.beginPath(); ctx.arc(-3.4, 0, 3, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+function drawSparks() {
+  if (sparksAlive <= 0) return;
+  for (const s of sparks) {
+    if (s.life <= 0 || s.age >= s.life) continue;
+    const f = 1 - s.age / s.life;
+    ctx.globalAlpha = Math.min(1, f * 1.6);
+    ctx.fillStyle = f > 0.5 ? '#FFE9B8' : '#FFC24B';
+    ctx.beginPath(); ctx.arc(s.x, s.y, 1.2 + 2.4 * f, 0, TAU); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawUI() {
+  // floating pings (+glow, milestones)
+  for (const p of pings) {
+    if (p.age >= 1.1) continue;
+    const f = 1 - p.age / 1.1;
+    ctx.globalAlpha = f * 0.9;
+    ctx.fillStyle = p.big ? '#FFC24B' : '#FFE9B8';
+    ctx.font = 'italic ' + (p.big ? 19 : 15) + 'px ' + HANDFONT;
+    ctx.textAlign = 'center';
+    ctx.fillText(p.txt, p.x, p.y - (1 - f) * 34);
+    ctx.globalAlpha = 1;
+  }
+
+  // score — always visible, hand-inked mono digits
+  const sc = String(Math.floor(dist));
+  const ss = 15 * (1 + scorePulse * 0.09);
+  drawDigits(sc, W / 2, 26, ss, 0.5, '#FFC24B', 0.95, 10);
+  ctx.fillStyle = 'rgba(255,233,184,0.6)';
+  ctx.font = 'italic 16px ' + HANDFONT;
+  ctx.textAlign = 'left';
+  ctx.fillText('m', W / 2 + (sc.length * ss * 1.38 - ss * 0.38) / 2 + 9, 26 + ss * 2);
+
+  // best, quiet, top right
+  if (best > 0) {
+    ctx.fillStyle = 'rgba(255,233,184,0.42)';
+    ctx.font = 'italic 14px ' + HANDFONT;
+    ctx.textAlign = 'right';
+    ctx.fillText('best ' + best + ' m', W - 22, 32);
+  }
+
+  // challenge target
+  if (target) {
+    const hot = targetBeaten;
+    const a = hot ? 0.6 + 0.35 * Math.sin(now * 6) * Math.min(1, targetFlash) : 0.75;
+    ctx.textAlign = 'left';
+    ctx.font = 'italic 15px ' + HANDFONT;
+    ctx.fillStyle = hot ? 'rgba(255,194,75,' + a + ')' : 'rgba(255,233,184,0.55)';
+    ctx.fillText(hot ? 'target beaten!' : 'target', 22, 30);
+    drawDigits(String(target), 22, 40, 9, 0, hot ? '#FFC24B' : '#FFE9B8', hot ? 0.95 : 0.5, hot ? 8 : 0);
+    ctx.font = 'italic 12px ' + HANDFONT;
+    ctx.fillStyle = 'rgba(255,233,184,0.45)';
+    ctx.fillText('m', 26 + String(target).length * 9 * 1.38, 57);
+  }
+
+  // title + hint (idle / first moments)
+  if (titleFade > 0) {
+    ctx.globalAlpha = titleFade;
+    ctx.fillStyle = '#FFE9B8';
+    ctx.font = '46px ' + HANDFONT;
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#FFC24B'; ctx.shadowBlur = 22;
+    ctx.fillText('g l o w c a v e', W / 2, 176);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  }
+  if (hintFade > 0) {
+    const bob = Math.sin(now * 2.4) * 3;
+    ctx.globalAlpha = hintFade * (0.65 + 0.25 * Math.sin(now * 3));
+    ctx.fillStyle = '#FFE9B8';
+    ctx.font = 'italic 21px ' + HANDFONT;
+    ctx.textAlign = 'center';
+    ctx.fillText('hold to rise', FLYX, flyY + 64 + bob);
+    ctx.globalAlpha = 1;
+  }
+
+  // death flash
+  if (flash > 0) {
+    ctx.globalAlpha = flash * 0.22;
+    ctx.fillStyle = '#FFC24B';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+
+  // game over panel — in-world, inked
+  if (state === 'dead' && goFade > 0) {
+    const a = goFade;
+    ctx.globalAlpha = a * 0.62;
+    ctx.fillStyle = '#04020A';
+    const pw = 460, ph = 240, px = W / 2 - pw / 2, py = H / 2 - ph / 2 + 8;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(px, py, pw, ph, 18); else ctx.rect(px, py, pw, ph);
+    ctx.fill();
+    ctx.globalAlpha = a * 0.35;
+    ctx.strokeStyle = '#FFC24B';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(255,233,184,0.75)';
+    ctx.font = 'italic 20px ' + HANDFONT;
+    ctx.textAlign = 'center';
+    ctx.fillText('the dark takes you', W / 2, py + 40);
+    const sc2 = String(Math.floor(dist));
+    drawDigits(sc2, W / 2 - 14, py + 62, 21, 0.5, '#FFC24B', a, 14);
+    ctx.fillStyle = 'rgba(255,233,184,0.7)';
+    ctx.font = 'italic 18px ' + HANDFONT;
+    ctx.fillText('m', W / 2 + (sc2.length * 21 * 1.38 - 21 * 0.38) / 2 + 4, py + 104);
+    if (newBest) {
+      ctx.fillStyle = '#FFC24B';
+      ctx.font = 'italic 20px ' + HANDFONT;
+      const wig = Math.sin(now * 7) * 2;
+      ctx.fillText('☼ new best ☼', W / 2, py + 138 + wig);
+    } else {
+      ctx.fillStyle = 'rgba(255,233,184,0.6)';
+      ctx.font = 'italic 17px ' + HANDFONT;
+      ctx.fillText('best  ' + best + ' m', W / 2, py + 138);
+    }
+    if (deadT > 0.35) {
+      ctx.globalAlpha = a * (0.6 + 0.35 * Math.sin(now * 3.4));
+      ctx.fillStyle = '#FFE9B8';
+      ctx.font = 'italic 19px ' + HANDFONT;
+      ctx.fillText('tap or press space — fly again', W / 2, py + 192);
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ---------- main loop ----------
+// read-only hook for automated play-testing harnesses
+window.__gcdebug = function () {
+  caveAt(camX + FLYX, cvA);
+  return { y: flyY, top: cvA.top, bot: cvA.bot, dist: dist, glow: glow, state: state };
+};
+
+let last = performance.now();
+let postedReady = false;
+function frame(t) {
+  const rdt = Math.min(0.033, (t - last) / 1000);
+  last = t;
+  update(rdt);
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#05030C';
+  ctx.fillRect(0, 0, cw, chh);
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+
+  // shake (world only, capped)
+  const shx = shake > 0 ? (hash32((t | 0) * 7) - 0.5) * 14 * shake : 0;
+  const shy = shake > 0 ? (hash32((t | 0) * 13) - 0.5) * 14 * shake : 0;
+  ctx.translate(shx, shy);
+  drawWorld();
+  drawDarkness();      // scene darkens; lights punch through
+  drawEmbers();        // emissive — drawn above the dark
+  drawFirefly();
+  drawSparks();
+  ctx.translate(-shx, -shy);
+  drawUI();
+  ctx.restore();
+
+  if (!postedReady) { postedReady = true; post({ gs: 'ready' }); }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

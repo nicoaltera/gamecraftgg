@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0B0819"/>
+      <stop offset="0.5" stop-color="#151030"/>
+      <stop offset="1" stop-color="#0B0819"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFC24B" stop-opacity="0.9"/>
+      <stop offset="0.35" stop-color="#FFC24B" stop-opacity="0.32"/>
+      <stop offset="0.7" stop-color="#FFC24B" stop-opacity="0.09"/>
+      <stop offset="1" stop-color="#FFC24B" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="emberg" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFE9B8" stop-opacity="0.9"/>
+      <stop offset="0.4" stop-color="#FFC24B" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFC24B" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dark" cx="0.42" cy="0.47" r="0.75">
+      <stop offset="0" stop-color="#04020A" stop-opacity="0"/>
+      <stop offset="0.55" stop-color="#04020A" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#04020A" stop-opacity="0.96"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="640" height="400" fill="url(#bg)"/>
+
+  <!-- deep parallax silhouettes -->
+  <path d="M0,0 L0,96 L46,72 L88,110 L132,64 L178,98 L224,58 L262,92 L310,54 L356,88 L404,50 L448,84 L500,46 L544,78 L592,44 L640,80 L640,0 Z" fill="#241C42" opacity="0.55"/>
+  <path d="M0,400 L0,316 L52,342 L96,300 L148,338 L198,296 L246,330 L300,292 L348,326 L398,288 L452,322 L502,284 L552,318 L600,282 L640,314 L640,400 Z" fill="#241C42" opacity="0.55"/>
+
+  <!-- near cave walls, ink black, jagged with stalactites -->
+  <path d="M0,0 L0,150 L34,118 L58,168 L84,112 L104,196 L118,110 L152,140 L186,96 L214,158 L238,92 L268,128 L292,86 L318,178 L332,84 L368,120 L402,78 L428,150 L452,74 L488,110 L516,70 L540,164 L556,66 L590,100 L620,60 L640,96 L640,0 Z" fill="#05030C" stroke="#FFC24B" stroke-opacity="0.14" stroke-width="2"/>
+  <path d="M0,400 L0,268 L30,296 L60,246 L88,300 L112,238 L134,330 L150,240 L184,282 L214,232 L244,290 L272,226 L300,262 L326,338 L344,224 L378,266 L410,218 L440,286 L468,214 L500,254 L528,208 L552,318 L572,206 L602,244 L628,202 L640,240 L640,400 Z" fill="#05030C" stroke="#FFC24B" stroke-opacity="0.14" stroke-width="2"/>
+
+  <!-- embers ahead in the dark -->
+  <circle cx="452" cy="196" r="30" fill="url(#emberg)"/>
+  <circle cx="452" cy="196" r="4" fill="#FFE9B8"/>
+  <circle cx="560" cy="152" r="22" fill="url(#emberg)" opacity="0.8"/>
+  <circle cx="560" cy="152" r="3" fill="#FFE9B8"/>
+  <circle cx="520" cy="262" r="18" fill="url(#emberg)" opacity="0.6"/>
+  <circle cx="520" cy="262" r="2.6" fill="#FFE9B8"/>
+
+  <!-- the firefly and her glow -->
+  <circle cx="268" cy="188" r="150" fill="url(#glow)"/>
+  <!-- trailing ribbon -->
+  <circle cx="243" cy="196" r="3.4" fill="#FFC24B" opacity="0.55"/>
+  <circle cx="222" cy="203" r="2.8" fill="#FFC24B" opacity="0.4"/>
+  <circle cx="203" cy="212" r="2.2" fill="#FFC24B" opacity="0.28"/>
+  <circle cx="186" cy="222" r="1.7" fill="#FFC24B" opacity="0.18"/>
+  <circle cx="171" cy="233" r="1.3" fill="#FFC24B" opacity="0.1"/>
+  <!-- wings + body -->
+  <ellipse cx="262" cy="177" rx="4.5" ry="11" fill="#FFE9B8" opacity="0.55" transform="rotate(-28 262 177)"/>
+  <ellipse cx="274" cy="177" rx="4.5" ry="11" fill="#FFE9B8" opacity="0.55" transform="rotate(28 274 177)"/>
+  <circle cx="268" cy="188" r="7" fill="#FFE9B8"/>
+  <circle cx="262" cy="188" r="4.6" fill="#FFC24B"/>
+
+  <!-- dust motes -->
+  <circle cx="308" cy="150" r="1.6" fill="#FFE9B8" opacity="0.5"/>
+  <circle cx="330" cy="214" r="1.2" fill="#FFE9B8" opacity="0.4"/>
+  <circle cx="238" cy="150" r="1.4" fill="#FFE9B8" opacity="0.45"/>
+  <circle cx="292" cy="245" r="1.1" fill="#FFE9B8" opacity="0.32"/>
+  <circle cx="352" cy="176" r="1.3" fill="#FFE9B8" opacity="0.35"/>
+
+  <!-- darkness closes in at the edges -->
+  <rect width="640" height="400" fill="url(#dark)"/>
+
+  <!-- title, hand-drawn feel -->
+  <g font-family="Chalkboard SE, Comic Neue, Segoe Print, Bradley Hand, cursive" text-anchor="middle">
+    <text x="320" y="356" font-size="52" fill="#FFE9B8" letter-spacing="10" opacity="0.96"
+          transform="rotate(-1.2 320 356)">glowcave</text>
+    <text x="320" y="356" font-size="52" fill="none" stroke="#FFC24B" stroke-opacity="0.35" stroke-width="1"
+          letter-spacing="10" transform="rotate(-1.2 320 356)">glowcave</text>
+    <text x="322" y="384" font-size="17" fill="#FFC24B" opacity="0.75" letter-spacing="3"
+          transform="rotate(-1.2 322 384)">hold to rise</text>
+  </g>
+</svg>
