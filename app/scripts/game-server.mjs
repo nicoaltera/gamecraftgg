@@ -27,11 +27,17 @@ http
     let filePath = null;
     const play = url.pathname.match(/^\/play\/([a-z0-9-]+)\/?(.*)$/);
     if (play) {
-      filePath = path.join(ROOT, 'games', play[1], play[2] || 'index.html');
+      const gameDir = path.resolve(ROOT, 'games', play[1]);
+      filePath = path.resolve(gameDir, play[2] || 'index.html');
+      // contain to the game dir (matches the production route's guard) and never serve _shots
+      if (!filePath.startsWith(gameDir + path.sep) && filePath !== path.join(gameDir, 'index.html')) filePath = null;
+      if (filePath && (play[2] || '').includes('_shots')) filePath = null;
     } else if (url.pathname.startsWith('/vendor/')) {
-      filePath = path.join(ROOT, 'public', url.pathname);
+      const vendorDir = path.resolve(ROOT, 'public', 'vendor');
+      filePath = path.resolve(ROOT, 'public', url.pathname.replace(/^\//, ''));
+      if (!filePath.startsWith(vendorDir + path.sep)) filePath = null;
     }
-    if (!filePath || !filePath.startsWith(ROOT) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    if (!filePath || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
       res.writeHead(404).end('not found');
       return;
     }

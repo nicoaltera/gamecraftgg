@@ -25,6 +25,7 @@ export function db(): Database.Database {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   _db = new Database(path.join(DATA_DIR, 'gamesight.db'));
   _db.pragma('journal_mode = WAL');
+  _db.pragma('busy_timeout = 5000'); // app + detached pipeline share the WAL db
   migrate(_db);
   syncGamesFromDisk(_db);
   _lastSync = Date.now();
@@ -80,6 +81,7 @@ function migrate(d: Database.Database) {
     CREATE TABLE IF NOT EXISTS reports (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       slug TEXT NOT NULL,
+      session_id TEXT,
       reason TEXT DEFAULT '',
       created_at INTEGER NOT NULL
     );
@@ -99,6 +101,9 @@ function migrate(d: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_plays_slug ON plays(slug, started_at);
     CREATE INDEX IF NOT EXISTS idx_edges_slug ON referral_edges(slug, kind);
   `);
+  // additive migrations for DBs created before a column existed
+  const reportCols = (d.prepare('PRAGMA table_info(reports)').all() as { name: string }[]).map((c) => c.name);
+  if (!reportCols.includes('session_id')) d.exec('ALTER TABLE reports ADD COLUMN session_id TEXT');
 }
 
 export type GameMeta = {
@@ -143,7 +148,7 @@ function syncGamesFromDisk(d: Database.Database) {
         scoreOrder: meta.scoreOrder === 'asc' ? 'asc' : 'desc',
         palette: JSON.stringify(meta.palette ?? []),
         author: meta.author ?? 'gamesight',
-        createdAt: fs.statSync(htmlPath).mtimeMs | 0,
+        createdAt: Math.floor(fs.statSync(htmlPath).mtimeMs), // NOT | 0 — that 32-bit-truncates a ~1.7e12 ms value
       });
     } catch {
       // a malformed meta.json never takes the site down; the game just stays unlisted

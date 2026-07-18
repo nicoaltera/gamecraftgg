@@ -14,7 +14,7 @@ export default function GameCard({ game }: { game: FeedItem }) {
       <div className="card-title">{game.title}</div>
       <div className="card-sub">
         <span>{game.verb}</span>
-        <span className="mono">{game.plays > 0 ? `${game.plays} plays` : 'new'}</span>
+        <span className="mono">{game.plays > 0 ? `${game.plays} ${game.plays === 1 ? 'play' : 'plays'}` : 'new'}</span>
       </div>
     </Link>
   );

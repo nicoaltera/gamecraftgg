@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, getGame } from '@/lib/db';
+import { readJson } from '@/lib/http';
 
 // Records a share event on the K-graph (someone generated a dare link).
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => null);
+  const body = await readJson(req);
   const slug = typeof body?.slug === 'string' ? body.slug : '';
   const ref = typeof body?.ref === 'string' ? body.ref.slice(0, 64) : '';
   if (!getGame(slug) || !ref) return NextResponse.json({ ok: false }, { status: 400 });

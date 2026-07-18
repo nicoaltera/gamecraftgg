@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db, getGame } from '@/lib/db';
+import { readJson } from '@/lib/http';
 
 // A play session is minted when a game page loads. Score submits require a
 // live session — the cheapest honest layer of the accept-cheating-v1 posture.
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => null);
+  const body = await readJson(req);
   const slug = typeof body?.slug === 'string' ? body.slug : null;
   if (!slug || !getGame(slug)) return NextResponse.json({ error: 'unknown game' }, { status: 404 });
 

@@ -11,11 +11,14 @@
 }
 
 * { box-sizing: border-box; }
+.hand-frame > svg { display: block; width: 100%; height: 100%; }
 
-html, body {
+html {
+  background: var(--paper);
+}
+body {
   margin: 0;
   padding: 0;
-  background: var(--paper);
   color: var(--ink);
   font-family: var(--font-body), system-ui, sans-serif;
   font-size: 16px;
@@ -93,7 +96,7 @@ main {
   align-items: stretch;
 }
 .prompt-frame { position: relative; flex: 1; }
-.prompt-frame svg.hand-frame { position: absolute; inset: -6px; width: calc(100% + 12px); height: calc(100% + 12px); pointer-events: none; }
+.prompt-frame .hand-frame { position: absolute; inset: -6px; pointer-events: none; }
 .prompt-input {
   width: 100%;
   border: none;
@@ -148,7 +151,7 @@ main {
   object-fit: cover;
   display: block;
 }
-.game-card svg.hand-frame { position: absolute; inset: -4px; width: calc(100% + 8px); height: calc(100% + 8px); pointer-events: none; z-index: 2; }
+.game-card .hand-frame { position: absolute; inset: -4px; pointer-events: none; z-index: 2; }
 .game-card .card-title {
   font-family: var(--font-display), cursive;
   font-weight: 600;
@@ -158,11 +161,14 @@ main {
 .game-card .card-sub {
   display: flex;
   justify-content: space-between;
+  gap: 10px;
   color: var(--graphite);
   font-size: 13px;
   margin-top: 2px;
 }
-.game-card:hover .cover-wrap { transform: translate(-1px, -2px); }
+.game-card .card-sub span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game-card .card-sub span:last-child { flex-shrink: 0; white-space: nowrap; }
+.game-card:hover .cover-wrap { transform: translate(-1px, -2px); box-shadow: var(--lift); }
 .game-card .cover-wrap { transition: transform 140ms ease; }
 
 /* ---------- game page ---------- */
@@ -171,7 +177,7 @@ main {
 .game-title-row h1 { font-family: var(--font-display), cursive; font-weight: 600; font-size: 32px; }
 .game-verb { color: var(--graphite); font-size: 15px; }
 .stage-wrap { position: relative; margin: 20px 0 8px; }
-.stage-wrap svg.hand-frame { position: absolute; inset: -8px; width: calc(100% + 16px); height: calc(100% + 16px); pointer-events: none; z-index: 2; }
+.stage-wrap .hand-frame { position: absolute; inset: -8px; pointer-events: none; z-index: 2; }
 .game-stage {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -184,6 +190,8 @@ main {
   font-family: var(--font-display), cursive;
   font-size: 20px;
   margin: 10px 0;
+  position: relative;
+  z-index: 0;
 }
 .challenge-banner .swipe { position: relative; padding: 0 6px; }
 .swipe::before {
@@ -210,6 +218,7 @@ main {
   font-size: 15px;
 }
 .board li .score { font-family: var(--font-mono), monospace; font-variant-numeric: tabular-nums; }
+.board li:first-child { position: relative; z-index: 0; }
 .board li:first-child .score { position: relative; padding: 0 5px; }
 .board li:first-child .score::before {
   content: '';
@@ -262,19 +271,19 @@ main {
 }
 
 /* draw-in animation for hand frames */
-svg.hand-frame path {
-  stroke-dasharray: var(--frame-len, 2000);
+.hand-frame path {
+  stroke-dasharray: 4000;
   stroke-dashoffset: 0;
 }
-.draw-in svg.hand-frame path {
-  animation: gs-draw 400ms ease-out both;
+.draw-in .hand-frame path {
+  animation: gs-draw 450ms ease-out both;
 }
 @keyframes gs-draw {
-  from { stroke-dashoffset: var(--frame-len, 2000); }
+  from { stroke-dashoffset: 4000; }
   to { stroke-dashoffset: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .draw-in svg.hand-frame path { animation: none; }
+  .draw-in .hand-frame path { animation: none; }
   .btn, .game-card .cover-wrap { transition: none; }
 }
 

@@ -32,6 +32,7 @@ if (!prompt) {
 // ---------- db trace ----------
 const db = new Database(path.join(APP, 'data', 'gamesight.db'));
 db.pragma('journal_mode = WAL');
+db.pragma('busy_timeout = 5000'); // shares the WAL db with the running app server
 db.prepare(
   `INSERT INTO generations (id, prompt, status, created_at, updated_at) VALUES (?, ?, 'running', ?, ?)
    ON CONFLICT(id) DO UPDATE SET status='running', updated_at=excluded.updated_at`
@@ -50,14 +51,16 @@ function setGen(fields) {
 }
 
 // ---------- claude helper ----------
-function claude(rolePrompt, { tools, timeoutMin = 15 } = {}) {
+// `cwd` scopes tool-enabled agents (the judge's Read) to a directory so a
+// prompt-injected game brief can't steer them to read app secrets.
+function claude(rolePrompt, { tools, timeoutMin = 15, cwd = APP } = {}) {
   const cliArgs = ['-p', rolePrompt, '--output-format', 'text'];
   if (tools) cliArgs.push('--allowedTools', tools, '--permission-mode', 'acceptEdits');
   return execFileSync('claude', cliArgs, {
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
     timeout: timeoutMin * 60 * 1000,
-    cwd: APP,
+    cwd,
   });
 }
 
@@ -101,9 +104,17 @@ Output format: the brief inside a \`\`\`markdown fence, then the meta inside a \
   if (!meta.slug || !/^[a-z0-9-]{3,40}$/.test(meta.slug)) throw new Error('designer produced invalid slug');
   if (!Array.isArray(meta.dials) || meta.dials.length === 0) meta.dials = ['mastery'];
   meta.title = meta.title ?? meta.slug;
-  if (fs.existsSync(path.join(APP, 'games', meta.slug))) meta.slug = `${meta.slug}-${genId.slice(0, 4)}`;
-  const gameDir = path.join(APP, 'games', meta.slug);
-  fs.mkdirSync(gameDir, { recursive: true });
+  // Atomically claim the game dir: mkdir (non-recursive) fails with EEXIST if a
+  // concurrent run already took the slug, so we never clobber another game.
+  let gameDir = path.join(APP, 'games', meta.slug);
+  try {
+    fs.mkdirSync(gameDir);
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    meta.slug = `${meta.slug}-${genId.slice(0, 4)}`;
+    gameDir = path.join(APP, 'games', meta.slug);
+    fs.mkdirSync(gameDir, { recursive: true });
+  }
   fs.writeFileSync(path.join(gameDir, 'DESIGN_BRIEF.md'), brief);
   setGen({ slug: meta.slug, brief });
   trace('designer', `Brief ready: "${meta.title}" (${meta.slug}) — dials: ${JSON.stringify(meta.dials)}`);
@@ -175,10 +186,10 @@ PLAY-TEST HARNESS OUTPUT (console errors, bridge messages):
 ${verifyOut || '(harness produced no output)'}
 Harness hard-fail: ${verifyFailed}
 
-The game's code is at games/${meta.slug}/index.html and screenshots from the play-test are in games/${meta.slug}/_shots/ — READ the code and LOOK at every screenshot with the Read tool before scoring. Judge art direction from the screenshots like an art director.
+Your working directory IS this game's folder. The game's code is at ./index.html and screenshots from the play-test are in ./_shots/ — READ the code and LOOK at every screenshot with the Read tool before scoring. Judge art direction from the screenshots like an art director. Read ONLY files within this folder.
 
 Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "critique": "specific, actionable, ordered by importance", "verdict": "publish" | "fix"}`,
-      { tools: 'Read' }
+      { tools: 'Read', cwd: gameDir }
     );
     const verdict = extractJson(judgeOut);
     trace('judge', `score ${verdict.score}/100, critical fails: ${verdict.criticalFails?.length ?? 0} — ${verdict.verdict}`);

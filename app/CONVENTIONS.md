@@ -31,8 +31,8 @@ games/<slug>/
 
 ## Allowed libraries (vendored, exact paths — nothing else, no CDNs)
 
-- `/vendor/phaser.min.js` (Phaser 3.90, pinned)
-- `/vendor/three.min.js` (three.js, pinned)
+- `/vendor/phaser.min.js` (Phaser 3.90, pinned) — classic script: `<script src="/vendor/phaser.min.js"></script>`
+- `/vendor/three.module.min.js` (three.js, pinned) — ES module: `<script type="module">import * as THREE from '/vendor/three.module.min.js'</script>`
 - Pure Canvas2D + WebAudio needs no library and is preferred for small games.
 
 ## Platform bridge (postMessage — games NEVER touch the network)

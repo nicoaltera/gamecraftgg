@@ -10,6 +10,10 @@ type Props = {
   scoreOrder: 'asc' | 'desc';
 };
 
+// Set NEXT_PUBLIC_GAME_ORIGIN to a distinct host in production so untrusted
+// game bundles are isolated from the app origin by the same-origin policy.
+const GAME_ORIGIN = process.env.NEXT_PUBLIC_GAME_ORIGIN?.replace(/\/$/, '') ?? '';
+
 function playerRef(): string {
   let r = localStorage.getItem('gs_ref_id');
   if (!r) {
@@ -55,7 +59,11 @@ export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props
       body: JSON.stringify({ slug, ref, isMobile: matchMedia('(pointer: coarse)').matches }),
     })
       .then((r) => r.json())
-      .then((d) => (sessionRef.current = d.sessionId ?? null))
+      .then((d) => {
+        sessionRef.current = d.sessionId ?? null;
+        // expose to the sibling ReportButton (report requires a real session)
+        (window as { __gsSession?: string }).__gsSession = d.sessionId ?? undefined;
+      })
       .catch(() => {});
 
     const beat = () => {
@@ -79,8 +87,12 @@ export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props
 
   // bridge messages from the game iframe
   useEffect(() => {
+    const expectedOrigin = GAME_ORIGIN || window.location.origin;
     function onMsg(e: MessageEvent) {
+      // source check is the primary guard (browser sets e.source unforgeably);
+      // origin check adds defense-in-depth when games run on a separate origin.
       if (e.source !== frameRef.current?.contentWindow) return;
+      if (e.origin !== expectedOrigin) return;
       const d = e.data;
       if (!d || typeof d.gs !== 'string') return;
       if (d.gs === 'gameover' && Number.isFinite(d.score)) {
@@ -151,12 +163,15 @@ export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props
         <p className="challenge-banner">
           {challengeBeaten ? (
             <>
-              Dare <span className="swipe mono">{challenge.toLocaleString()}</span> beaten. Send one back.
+              Dare <span style={{ whiteSpace: 'nowrap' }}><span className="swipe mono">{challenge.toLocaleString()}</span>{scoreLabel ? ` ${scoreLabel}` : ''}</span> beaten. Send one back.
             </>
           ) : (
             <>
-              Someone dares you to beat <span className="swipe mono">{challenge.toLocaleString()}</span>
-              {scoreLabel ? ` ${scoreLabel}` : ''}.
+              Someone dares you to beat{' '}
+              <span style={{ whiteSpace: 'nowrap' }}>
+                <span className="swipe mono">{challenge.toLocaleString()}</span>
+                {scoreLabel ? ` ${scoreLabel}` : ''}.
+              </span>
             </>
           )}
         </p>
@@ -166,7 +181,7 @@ export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props
         <iframe
           ref={frameRef}
           className="game-stage"
-          src={`/play/${slug}/${challengeSrc}`}
+          src={`${GAME_ORIGIN}/play/${slug}/${challengeSrc}`}
           sandbox="allow-scripts allow-same-origin"
           allow="autoplay"
           title={title}

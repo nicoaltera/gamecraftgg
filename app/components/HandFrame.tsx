@@ -1,6 +1,12 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+
 // The signature element (04-site-design-language.md): a slightly wobbly
-// single-stroke ink frame, like a rectangle drawn confidently by hand.
-// Seeded so each frame's wobble is unique but stable across renders.
+// single-stroke ink frame, "drawn confidently by hand — NOT shaky."
+// The wobble amplitude is a FIXED number of pixels regardless of the frame's
+// size, so it reads the same on a 240px card and an 800px game stage. Drawn in
+// measured pixel space (not a stretched viewBox) so it never distorts or clips.
 
 function mulberry32(seed: number) {
   let a = seed >>> 0;
@@ -22,33 +28,69 @@ function hashSeed(s: string): number {
   return h >>> 0;
 }
 
-export function wobblePath(seed: string, w = 100, h = 62.5, amp = 0.9): string {
+const AMP = 1.5; // px of hand-wobble, constant at every size
+const INSET = 4; // keep the stroke (and its wobble) safely inside the box
+const SPACING = 22; // px between wobble points along each edge
+
+function framePath(seed: string, w: number, h: number): string {
   const rand = mulberry32(hashSeed(seed));
-  const jitter = () => (rand() - 0.5) * 2 * amp;
+  const j = () => (rand() - 0.5) * 2 * AMP;
+  const x0 = INSET, y0 = INSET, x1 = w - INSET, y1 = h - INSET;
+  if (x1 <= x0 || y1 <= y0) return '';
   const pts: [number, number][] = [];
-  const step = 8;
-  for (let x = 0; x <= w; x += step) pts.push([x + (x > 0 && x < w ? jitter() * 0.4 : 0), jitter()]);
-  for (let y = step; y <= h; y += step) pts.push([w + jitter(), y + (y < h ? jitter() * 0.4 : 0)]);
-  for (let x = w - step; x >= 0; x -= step) pts.push([x + (x > 0 ? jitter() * 0.4 : 0), h + jitter()]);
-  for (let y = h - step; y >= step; y -= step) pts.push([jitter(), y + jitter() * 0.4]);
-  const d = pts
-    .map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(2)} ${p[1].toFixed(2)}`)
-    .join(' ');
-  return `${d} Z`;
+  const edge = (ax: number, ay: number, bx: number, by: number) => {
+    const len = Math.hypot(bx - ax, by - ay);
+    const n = Math.max(2, Math.round(len / SPACING));
+    for (let i = 0; i < n; i++) {
+      const t = i / n;
+      pts.push([ax + (bx - ax) * t + j(), ay + (by - ay) * t + j()]);
+    }
+  };
+  edge(x0, y0, x1, y0);
+  edge(x1, y0, x1, y1);
+  edge(x1, y1, x0, y1);
+  edge(x0, y1, x0, y0);
+  // Catmull-Rom → smooth closed stroke so corners read as confident, not kinked
+  const n = pts.length;
+  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[(i - 1 + n) % n], p1 = pts[i], p2 = pts[(i + 1) % n], p3 = pts[(i + 2) % n];
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+  return d + ' Z';
 }
 
 export default function HandFrame({ seed, strokeWidth = 1.6 }: { seed: string; strokeWidth?: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) setSize({ w: Math.round(width), h: Math.round(height) });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   return (
-    <svg className="hand-frame" viewBox="0 0 100 62.5" preserveAspectRatio="none" aria-hidden="true">
-      <path
-        d={wobblePath(seed)}
-        fill="none"
-        stroke="var(--ink)"
-        strokeWidth={strokeWidth}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        vectorEffect="non-scaling-stroke"
-      />
-    </svg>
+    <div ref={ref} className="hand-frame" aria-hidden="true">
+      {size && (
+        <svg width={size.w} height={size.h} viewBox={`0 0 ${size.w} ${size.h}`}>
+          <path
+            d={framePath(seed, size.w, size.h)}
+            fill="none"
+            stroke="var(--ink)"
+            strokeWidth={strokeWidth}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        </svg>
+      )}
+    </div>
   );
 }

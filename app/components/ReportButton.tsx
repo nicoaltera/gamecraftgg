@@ -8,10 +8,11 @@ export default function ReportButton({ slug }: { slug: string }) {
     if (state === 'sent') return;
     const reason = window.prompt('What is wrong with this game?') ?? '';
     if (reason === '') return;
+    const sessionId = (window as { __gsSession?: string }).__gsSession;
     await fetch('/api/report', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ slug, reason }),
+      body: JSON.stringify({ slug, sessionId, reason }),
     }).catch(() => {});
     setState('sent');
   }
