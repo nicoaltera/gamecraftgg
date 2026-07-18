@@ -27,7 +27,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ slug
           border: '6px solid #1A1815',
         }}
       >
-        <div style={{ fontSize: 34, color: '#6F6A61', display: 'flex' }}>gamesight ✎</div>
+        <div style={{ fontSize: 34, color: '#6F6A61', display: 'flex' }}>gamesight</div>
         <div style={{ fontSize: 84, fontWeight: 700, marginTop: 20, display: 'flex', textAlign: 'center', maxWidth: 1000 }}>
           {game.title}
         </div>

@@ -8,8 +8,9 @@ The platform's job is hosting, identity, scores, links, rooms, and the agent pip
 - **DB:** Postgres. Core tables: `users`, `games` (slug, versions, design brief, rubric scores, status), `scores` (game, name, score, ts, session meta), `plays` (game, session, duration, retries, referrer edge), `referral_edges` (sharer → clicker → outcomes — the K-factor graph), `generations` (prompt, cycles, cost, verdicts).
 - **Game storage/serving:** each published version is one `index.html` on object storage behind a CDN, served from a sandboxed subdomain (e.g. `play.gamesight.xyz/g/<slug>/`) so game code never runs on the app origin. Strict CSP: allow only the pinned CDN whitelist + platform API. Previous version stays live until a new version passes verification.
 - **Build workers:** containerized agent sessions (builder/designer/judges + a real browser for the play-tester). One container per generation; hard wall-clock and token budgets. Streams progress events to the build page over SSE/WebSocket.
+- **Game↔platform bridge (implemented):** games make NO network calls at all — the game-serving CSP sets `connect-src 'none'`. A game `postMessage`s (`gs:'ready' | 'gameover' | 'score' | 'challenge_beaten'`) to its parent page, which owns play sessions, heartbeats, score submission, and share UI. This supersedes the earlier games-POST-scores design; it is strictly better isolation.
 - **APIs:**
-  - `POST /api/score` — per-game public key, session-signed; returns rank
+  - `POST /api/score` — called by the parent page, session-validated; returns rank
   - `GET /api/leaderboard/<slug>` — daily + all-time
   - `POST /api/challenge` — mints challenge URL + OG card
   - `POST /api/report` — abuse reporting

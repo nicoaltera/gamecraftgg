@@ -50,13 +50,13 @@ function setGen(fields) {
 }
 
 // ---------- claude helper ----------
-function claude(rolePrompt, { tools } = {}) {
+function claude(rolePrompt, { tools, timeoutMin = 15 } = {}) {
   const cliArgs = ['-p', rolePrompt, '--output-format', 'text'];
   if (tools) cliArgs.push('--allowedTools', tools, '--permission-mode', 'acceptEdits');
   return execFileSync('claude', cliArgs, {
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
-    timeout: 15 * 60 * 1000,
+    timeout: timeoutMin * 60 * 1000,
     cwd: APP,
   });
 }
@@ -99,6 +99,8 @@ Output format: the brief inside a \`\`\`markdown fence, then the meta inside a \
   const brief = extractBlock(designerOut, 'markdown') ?? designerOut;
   const meta = extractJson(designerOut);
   if (!meta.slug || !/^[a-z0-9-]{3,40}$/.test(meta.slug)) throw new Error('designer produced invalid slug');
+  if (!Array.isArray(meta.dials) || meta.dials.length === 0) meta.dials = ['mastery'];
+  meta.title = meta.title ?? meta.slug;
   if (fs.existsSync(path.join(APP, 'games', meta.slug))) meta.slug = `${meta.slug}-${genId.slice(0, 4)}`;
   const gameDir = path.join(APP, 'games', meta.slug);
   fs.mkdirSync(gameDir, { recursive: true });
@@ -124,7 +126,8 @@ ${brief}
 ${cycle > 1 ? `PREVIOUS ATTEMPT FAILED VERIFICATION. The current index.html is at games/${meta.slug}/index.html. Judge critique to fix (fix ALL of it, change nothing that already works):\n${critique}\n` : ''}
 Also produce cover.svg: a 640x400 SVG cover in the game's own art language.
 
-Output format: complete index.html inside a \`\`\`html fence, then cover.svg inside a \`\`\`xml fence. No commentary.`
+Output format: complete index.html inside a \`\`\`html fence, then cover.svg inside a \`\`\`xml fence. No commentary.`,
+      { timeoutMin: 40 }
     );
     const html = extractBlock(builderOut, 'html');
     const cover = extractBlock(builderOut, 'xml') ?? extractBlock(builderOut, 'svg');

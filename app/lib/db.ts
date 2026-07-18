@@ -9,14 +9,25 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const GAMES_DIR = path.join(process.cwd(), 'games');
 
 let _db: Database.Database | null = null;
+let _lastSync = 0;
+const SYNC_INTERVAL_MS = 30_000;
 
 export function db(): Database.Database {
-  if (_db) return _db;
+  if (_db) {
+    // The pipeline publishes new game folders while the server runs — pick
+    // them up without a restart, cheaply.
+    if (Date.now() - _lastSync > SYNC_INTERVAL_MS) {
+      _lastSync = Date.now();
+      syncGamesFromDisk(_db);
+    }
+    return _db;
+  }
   fs.mkdirSync(DATA_DIR, { recursive: true });
   _db = new Database(path.join(DATA_DIR, 'gamesight.db'));
   _db.pragma('journal_mode = WAL');
   migrate(_db);
   syncGamesFromDisk(_db);
+  _lastSync = Date.now();
   return _db;
 }
 

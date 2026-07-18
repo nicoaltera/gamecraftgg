@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Paper Pilot</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#16255C;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+  canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+/* ============================================================
+   PAPER PILOT — throw a paper airplane across a doodled town
+   until it reaches your pen pal's mailbox at 2000m.
+   Pure Canvas2D + WebAudio. No assets. One file.
+   ============================================================ */
+
+// ---------- TUNING CONSTANTS (physics) ----------
+// World scale: 5 px = 1 meter. Ground is a notebook-paper street.
+const SLUG   = 'paper-pilot';
+const W = 960, H = 540;          // fixed virtual resolution (landscape)
+const PXM    = 5;                // pixels per meter
+const GROUND = 460;              // ground line y (world coords)
+const LAUNCH = { x: 70, y: 208 };// classroom window ledge
+const GRAV   = 285;              // gravity px/s^2 (low = floaty paper)
+const GLIDE  = 6;                // how fast fall speed relaxes to terminal (per s)
+const DRAG_BASE = 0.16, DRAG_STEP = 0.024; // air drag /s; Sharper Folds tier5 -> 0.04
+const TERM_BASE = 132,  TERM_STEP = 12;    // terminal fall px/s; folds tier5 -> 72 (glides way longer)
+const POW_BASE  = 375,  POW_STEP  = 112;   // launch speed px/s; Rubber Band tier5 -> 935
+const REST_BASE = 0.5,  REST_STEP = 0.08;  // ground bounce restitution; Gum tier5 -> 0.88 (capped)
+const SLIDE  = 1.15;             // ground slide friction /s (skid after last bounce)
+const BOUNCE_KEEP = 0.985;       // vx kept per ground bounce
+const FAN_BOOST = 210, FAN_STEP = 65;      // Pocket Fan: one mid-air boost per run
+// sim+playtest verified: naive 1st throw ~146m/26 stickers; first buys land runs 2/4/5;
+// maxed full-power throw ~2100-2300m — mailbox delivery guaranteed by persistence.
+const DEFAULT_POW = 0.8, DEFAULT_ANG = -0.66; // quick-throw (space/tap): 80% power, ~38 deg up
+
+// ---------- TUNING CONSTANTS (economy) ----------
+// Stickers = dist_m*PAY_DIST + airtime_s*PAY_AIR + trick bonuses. Never < 1.
+// First throw pays ~45; tier-1 prices below = 3 buys within ~4 runs.
+const PAY_DIST = 0.14, PAY_AIR = 2.0;
+const SHOP = [
+  { key:'folds', name:'Sharper Folds',  blurb:'less drag, longer glide', prices:[35, 80,160,300,550] },
+  { key:'band',  name:'Rubber Band',    blurb:'launch power',            prices:[45,100,200,380,700] },
+  { key:'clip',  name:'Paperclip Nose', blurb:'smash leaves & pigeons',  prices:[70,150,300,560,990] },
+  { key:'gum',   name:'Gum Coating',    blurb:'bouncier landings',       prices:[50,115,230,430,780] },
+  { key:'fan',   name:'Pocket Fan',     blurb:'1 boost per run (tap!)',  prices:[90,190,380,680,1200] },
+];
+const TRICK = { bus:3, awning:3, closeCall:2, smash:4, leafPunch:2, pageTurn:5 };
+
+// ---------- world layout ----------
+const MAILBOX_X = LAUNCH.x + 2000*PXM;   // pen pal's mailbox: 2000 m
+const PAGE_LEN  = 4800;                  // a red margin line every 960 m ("next page")
+const CHUNK = 420;
+
+// ---------- palette ----------
+const PAPER='#FCF9F0', PAPER_DK='#F5EEDC', INK='#2447D6', INK_SOFT='rgba(36,71,214,0.45)',
+      RED='#D9482B', WHITE='#FFFFFF', PENCIL='#8A93A8', GUM_PINK='#E8849E',
+      LETTERBOX='#16255C', RULE='rgba(36,71,214,0.10)';
+const FONT='"Comic Neue","Chalkboard SE","Comic Sans MS","Segoe Print",cursive';
+
+// ---------- boilerplate: canvas, letterbox, dpr ----------
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let dpr=1, scl=1, offX=0, offY=0;
+function resize(){
+  dpr = Math.min(window.devicePixelRatio||1, 2.5);
+  const iw = window.innerWidth, ih = window.innerHeight;
+  cv.width = Math.round(iw*dpr); cv.height = Math.round(ih*dpr);
+  scl = Math.min(iw/W, ih/H);
+  offX = (iw - W*scl)/2; offY = (ih - H*scl)/2;
+}
+window.addEventListener('resize', resize); resize();
+
+// ---------- deterministic RNG ----------
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const worldRng = mulberry32(120726);           // fixed world: same town every run (skill is honest)
+function hash1(n){const s=Math.sin(n*127.1)*43758.5453;return s-Math.floor(s);}    // static hash
+let boil=0;                                     // hand-drawn "boil" phase (updates ~8/s)
+function jit(n){const s=Math.sin(n*127.1+boil*311.7)*43758.5453;return (s-Math.floor(s))-0.5;}
+
+// ---------- save / best ----------
+let save = { st:0, up:{folds:0,band:0,clip:0,gum:0,fan:0}, throws:0, delivered:false, delThrows:0 };
+let best = 0;
+try{
+  const s = localStorage.getItem('gs_save:'+SLUG);
+  if(s){ const j = JSON.parse(s); if(j && j.up){ save = Object.assign(save,j); save.up=Object.assign({folds:0,band:0,clip:0,gum:0,fan:0}, j.up);} }
+  best = Math.max(0, parseInt(localStorage.getItem('gs_best:'+SLUG)||'0',10)||0);
+}catch(e){}
+function persist(){ try{ localStorage.setItem('gs_save:'+SLUG, JSON.stringify(save)); localStorage.setItem('gs_best:'+SLUG, String(best)); }catch(e){} }
+
+// ---------- challenge param ----------
+let challenge = 0, challengeBeaten = false;
+try{ const c = parseInt(new URLSearchParams(location.search).get('c')||'0',10); if(c>0) challenge=c; }catch(e){}
+
+// ---------- bridge ----------
+function post(m){ try{ parent.postMessage(m, '*'); }catch(e){} }
+
+// ---------- audio ----------
+let AC=null, master=null, whooshGain=null, whooshFilt=null, flutGain=null;
+function audioInit(){
+  if(AC) { if(AC.state==='suspended') AC.resume(); return; }
+  try{
+    AC = new (window.AudioContext||window.webkitAudioContext)();
+    master = AC.createGain(); master.gain.value=0.5; master.connect(AC.destination);
+    // looping noise bed for whoosh + flutter
+    const len = AC.sampleRate*1.2, buf = AC.createBuffer(1,len,AC.sampleRate), d = buf.getChannelData(0);
+    for(let i=0;i<len;i++) d[i]=Math.random()*2-1;
+    const src = AC.createBufferSource(); src.buffer=buf; src.loop=true;
+    whooshFilt = AC.createBiquadFilter(); whooshFilt.type='bandpass'; whooshFilt.frequency.value=500; whooshFilt.Q.value=0.8;
+    whooshGain = AC.createGain(); whooshGain.gain.value=0;
+    src.connect(whooshFilt); whooshFilt.connect(whooshGain); whooshGain.connect(master);
+    const src2 = AC.createBufferSource(); src2.buffer=buf; src2.loop=true;
+    const hp = AC.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=2600;
+    flutGain = AC.createGain(); flutGain.gain.value=0;
+    src2.connect(hp); hp.connect(flutGain); flutGain.connect(master);
+    src.start(); src2.start();
+  }catch(e){ AC=null; }
+}
+function vary(f){ return f*(0.9+Math.random()*0.2); }  // ±10% pitch (cosmetic — ok to be unseeded)
+function tone(freq,dur,type,gain,slideTo){
+  if(!AC) return;
+  const o=AC.createOscillator(), g=AC.createGain(), t=AC.currentTime;
+  o.type=type||'triangle'; o.frequency.setValueAtTime(vary(freq),t);
+  if(slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(30,vary(slideTo)), t+dur);
+  g.gain.setValueAtTime(gain,t); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t+dur+0.02);
+}
+function noiseBurst(dur,gain,freq){
+  if(!AC) return;
+  const len=Math.max(64, AC.sampleRate*dur|0), b=AC.createBuffer(1,len,AC.sampleRate), d=b.getChannelData(0);
+  for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*(1-i/len);
+  const s=AC.createBufferSource(); s.buffer=b;
+  const f=AC.createBiquadFilter(); f.type='bandpass'; f.frequency.value=freq||900; f.Q.value=0.7;
+  const g=AC.createGain(); g.gain.value=gain;
+  s.connect(f); f.connect(g); g.connect(master); s.start();
+}
+const sfx = {
+  throwWhoosh(p){ noiseBurst(0.32, 0.20+0.18*p, 700+500*p); },
+  boing(i){ tone(150+90*i, 0.22, 'triangle', 0.16+0.1*i, 340+160*i); },
+  bonk(){ tone(95,0.12,'square',0.2,60); noiseBurst(0.08,0.14,500); },
+  thud(){ tone(70,0.16,'sine',0.24,45); noiseBurst(0.1,0.12,300); },
+  sticky(){ noiseBurst(0.22,0.14,320); tone(220,0.2,'sine',0.08,110); },
+  smash(){ noiseBurst(0.14,0.2,1400); tone(500,0.1,'square',0.1,700); },
+  ching(i){ tone(760+i*36, 0.07, 'square', 0.07, 900+i*40); },
+  chaChing(){ tone(880,0.09,'square',0.12); setTimeout(()=>tone(1320,0.16,'square',0.12),70); },
+  fan(){ noiseBurst(0.4,0.16,1000); tone(130,0.4,'sawtooth',0.07,240); },
+  fanfare(){ [523,659,784,1046].forEach((f,i)=>setTimeout(()=>tone(f,0.22,'triangle',0.14),i*110)); },
+  bigFanfare(){ [523,659,784,1046,784,1046,1318].forEach((f,i)=>setTimeout(()=>tone(f,0.26,'triangle',0.15),i*130)); },
+  deny(){ tone(160,0.12,'square',0.08,120); },
+  buy(){ tone(660,0.08,'square',0.1); setTimeout(()=>tone(990,0.12,'square',0.1),60); },
+  nearMiss(){ tone(1200,0.08,'sine',0.08,1500); },
+  pop(){ tone(vary(300),0.06,'square',0.08,500); },
+};
+
+// ---------- game state ----------
+let state='aim';            // aim | fly | settle | result
+let plane={x:LAUNCH.x,y:LAUNCH.y,vx:0,vy:0,rot:-0.5};
+let cam={x:-170,y:0,zoom:1,shake:0};
+let run={dist:0,air:0,tricks:0,trickN:0,fanUsed:false,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
+let settleT=0, tallyT=0, sel=-1, lastScorePost=0, cardShake=0, cardShakeI=-1;
+let dragging=false, dragStart={x:0,y:0}, dragCur={x:0,y:0};
+let banner=null, bannerT=0;             // {text, sub, col}
+let timeScale=1, slowT=0;
+let penpalWave=0;                        // >0: pen pal waving
+let hudStickerPulse=0, fanChipPulse=0, distShown=0;
+let T=0;                                 // global clock (s)
+let trail=[]; for(let i=0;i<26;i++) trail.push({x:0,y:0,on:false});
+let trailI=0, trailAcc=0;
+
+// ---------- upgrade-derived physics ----------
+function drag(){ return DRAG_BASE - DRAG_STEP*save.up.folds; }
+function term(){ return TERM_BASE - TERM_STEP*save.up.folds; }
+function power(){ return POW_BASE + POW_STEP*save.up.band; }
+function rest(){ return Math.min(0.88, REST_BASE + REST_STEP*save.up.gum); }
+function speedKeepHit(){ return save.up.clip>=4 ? 0.97 : 1; } // T4+: keep speed through hits
+
+// ---------- world generation (fixed seed; lazy chunks) ----------
+// types: bus (trampoline roof), awn (awning bounce), tree (sticky), pigeon (bonk)
+const obs=[]; let genX=0;
+function genTo(x){
+  while(genX < x){
+    const i = Math.floor(genX/CHUNK); genX += CHUNK;
+    const cx = i*CHUNK;
+    if(cx < 800) continue;                              // clear runway out the window
+    if(Math.abs(cx - MAILBOX_X) < 420) continue;        // keep the mailbox photo-clean
+    const r = mulberry32(120726 + i*7919);
+    // hand-placed openers so the first throw always meets the town
+    if(i===2){ obs.push({t:'awn', x:1000, hit:0}); continue; }
+    if(i===3){ obs.push({t:'bus', x:1480, hit:0}); continue; }
+    if(i===5){ obs.push({t:'tree',x:2240, hit:0, inT:0}); obs.push({t:'pigeon',x:2050,y:250,ph:r()*7,done:false,dead:false,minD:1e9,dr:0,dvx:0,dvy:0}); continue; }
+    const far = Math.min(1, cx/9000);
+    const roll = r();
+    if(roll < 0.16)      obs.push({t:'bus', x:cx+60+r()*200, hit:0});
+    else if(roll < 0.32) obs.push({t:'awn', x:cx+60+r()*200, hit:0});
+    else if(roll < 0.50) obs.push({t:'tree',x:cx+60+r()*200, hit:0, inT:0});
+    // pigeons get denser further out (escalation you can see)
+    const pn = (r() < 0.25+0.45*far) ? 1 + (r()<0.3*far?1:0) : 0;
+    for(let p=0;p<pn;p++) obs.push({t:'pigeon', x:cx+40+r()*340, y:110+r()*250 - far*r()*300, ph:r()*7, done:false, dead:false, minD:1e9, dr:0, dvx:0, dvy:0});
+  }
+}
+genTo(6000);
+function resetObs(){
+  for(const o of obs){ o.hit=0; if(o.t==='pigeon'){o.done=false;o.dead=false;o.minD=1e9;o.dr=0;} if(o.t==='tree')o.inT=0; }
+}
+
+// ---------- particles / floating text ----------
+const parts=[]; for(let i=0;i<260;i++) parts.push({on:false,x:0,y:0,vx:0,vy:0,life:0,dur:1,t:'',s:1,rot:0,vr:0});
+function spawn(t,x,y,vx,vy,dur,s){
+  for(const p of parts) if(!p.on){ p.on=true;p.t=t;p.x=x;p.y=y;p.vx=vx;p.vy=vy;p.life=0;p.dur=dur;p.s=s||1;p.rot=Math.random()*6.3;p.vr=(Math.random()-0.5)*8; return p; }
+}
+function puff(x,y,n,sp){ for(let i=0;i<n;i++){ const a=Math.random()*6.3; spawn('puff',x,y,Math.cos(a)*sp*(0.4+Math.random()*0.6),Math.sin(a)*sp*(0.4+Math.random()*0.6)-30,0.5+Math.random()*0.3,2+Math.random()*3);} }
+function leaves(x,y,n){ for(let i=0;i<n;i++) spawn('leaf',x,y,(Math.random()-0.3)*160,-Math.random()*120,0.9+Math.random()*0.6,1); }
+function feathers(x,y,n){ for(let i=0;i<n;i++) spawn('feather',x,y,(Math.random()-0.5)*200,-Math.random()*160,0.9+Math.random()*0.7,1); }
+function confetti(x,y,n){ for(let i=0;i<n;i++) spawn(Math.random()<0.5?'heart':'star',x,y,(Math.random()-0.5)*260,-60-Math.random()*220,1.2+Math.random()*0.8,1); }
+const floats=[]; for(let i=0;i<24;i++) floats.push({on:false,x:0,y:0,life:0,str:'',col:INK,size:18});
+function floatTxt(str,x,y,col,size){
+  for(const f of floats) if(!f.on){ f.on=true;f.x=x;f.y=y;f.life=0;f.str=str;f.col=col||INK;f.size=size||18; return; }
+}
+
+// ---------- run flow ----------
+function beginThrow(pow, ang){
+  state='fly';
+  plane.x=LAUNCH.x; plane.y=LAUNCH.y;
+  plane.vx=Math.cos(ang)*pow; plane.vy=Math.sin(ang)*pow;
+  plane.rot=ang;
+  run={dist:0,air:0,tricks:0,trickN:0,fanUsed:false,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
+  save.throws++; persist();
+  resetObs(); for(const f of floats) f.on=false;
+  for(const tr of trail) tr.on=false; trailAcc=0;
+  distShown=0; challengeShownBeaten=false;
+  sfx.throwWhoosh(pow/700);
+  puff(LAUNCH.x+6, LAUNCH.y+4, 6, 60);
+}
+function defaultThrow(){ beginThrow(power()*DEFAULT_POW, DEFAULT_ANG); }
+function toAim(){ state='aim'; plane.x=LAUNCH.x; plane.y=LAUNCH.y; plane.vx=0; plane.vy=0; plane.rot=-0.5; }
+let challengeShownBeaten=false;
+
+function settleNow(){ state='settle'; settleT=0; puff(plane.x, GROUND-6, 10, 90); sfx.thud(); }
+
+function finishRun(){
+  const dm = Math.max(0, Math.round((plane.x - LAUNCH.x)/PXM));
+  run.dist = dm;
+  run.dPts = Math.round(dm*PAY_DIST);
+  run.aPts = Math.round(run.air*PAY_AIR);
+  run.tPts = run.tricks;
+  run.stickers = Math.max(1, run.dPts + run.aPts + run.tPts);  // bank EVERY attempt
+  save.st += run.stickers;
+  if(dm > best){ best = dm; run.newBest = true; }
+  persist();
+  post({gs:'gameover', score:dm});
+  state='result'; tallyT=0; sel=-1; chingCount=0;
+  if(run.newBest && dm > 60) sfx.fanfare();
+}
+let chingCount=0;
+
+function tryFan(){
+  if(state!=='fly' || save.up.fan<1 || run.fanUsed) return false;
+  run.fanUsed=true;
+  const b = FAN_BOOST + FAN_STEP*(save.up.fan-1);
+  plane.vx += b; plane.vy = Math.min(plane.vy, plane.vy*0.4 - 50);
+  sfx.fan(); puff(plane.x-14, plane.y+4, 8, 70);
+  floatTxt('WHIRRR!', plane.x, plane.y-28, INK, 20);
+  fanChipPulse=1;
+  return true;
+}
+
+function buy(i){
+  const it = SHOP[i], tier = save.up[it.key];
+  if(tier>=5){ sfx.deny(); return; }
+  const price = it.prices[tier];
+  if(save.st < price){ sfx.deny(); cardShake=1; cardShakeI=i; return; }
+  save.st -= price; save.up[it.key]++; persist();
+  sfx.buy(); hudStickerPulse=1;
+  floatTxt(it.name+' T'+save.up[it.key]+'!', plane.x, plane.y-40, RED, 20);
+}
+
+// ---------- physics ----------
+function stepFly(dt){
+  const p=plane;
+  p.vy += GRAV*dt;
+  const dr=drag();
+  p.vx -= p.vx*dr*dt;
+  p.vy -= p.vy*dr*dt*0.5;
+  const tv=term();
+  if(p.vy > tv) p.vy += (tv-p.vy)*Math.min(1, GLIDE*dt);
+  p.x += p.vx*dt; p.y += p.vy*dt;
+  const spd = Math.hypot(p.vx,p.vy);
+  // attitude follows velocity (banked, damped)
+  const target = Math.atan2(p.vy, Math.max(60,p.vx*1.15));
+  p.rot += (target-p.rot)*Math.min(1, 8*dt);
+  if(p.y < GROUND-10) run.air += dt;
+
+  // ink-dot trail
+  trailAcc += spd*dt;
+  if(trailAcc > 46){ trailAcc=0; const tr=trail[trailI]; tr.x=p.x; tr.y=p.y; tr.on=true; trailI=(trailI+1)%trail.length; }
+  if(spd>650 && Math.random()<0.3) spawn('speed',p.x-18,p.y+(Math.random()-0.5)*16,-120,0,0.25,1);
+
+  // ---- ground ----
+  if(p.y > GROUND-6){
+    p.y = GROUND-6;
+    if(p.vy > 34){
+      const R = rest();
+      const impact = p.vy;
+      p.vy = -p.vy*R;
+      p.vx *= BOUNCE_KEEP;
+      if(p.vy > -42) p.vy = 0;
+      puff(p.x, GROUND-4, Math.min(10, 3+impact/60), 40+impact*0.25);
+      sfx.boing(Math.min(1, impact/400));
+      if(impact>260) cam.shake = Math.min(7, impact/70);
+      if(save.up.gum>0 && p.vy<0) floatTxt('boing', p.x, GROUND-40, GUM_PINK, 15);
+    }else{
+      p.vy = 0;
+      p.vx -= p.vx*SLIDE*dt;
+      if(Math.random()<0.25 && Math.abs(p.vx)>60) spawn('puff',p.x-8,GROUND-6,-30,-20,0.3,2);
+      if(Math.abs(p.vx) < 16){ p.vx=0; settleNow(); return; }
+    }
+  }
+  // ---- obstacles ----
+  genTo(p.x + 2400);
+  for(const o of obs){
+    if(o.x < p.x-260 || o.x > p.x+260) continue;
+    if(o.t==='bus'){
+      const bx=o.x, bw=176, top=GROUND-66;
+      if(p.x>bx-10 && p.x<bx+bw+10 && p.y>top-8){
+        if(p.y < top+18 && p.vy > 0){                        // roof = trampoline
+          p.y=top-8; p.vy = -Math.max(Math.abs(p.vy)*1.22, 300); p.vx*= (0.98*(speedKeepHit()));
+          if(o.hit===0){ run.tricks+=TRICK.bus; run.trickN++; floatTxt('+'+TRICK.bus+' BUS BOING!', p.x, top-34, RED, 20); }
+          o.hit++; sfx.boing(1); puff(p.x,top,8,90); cam.shake=Math.max(cam.shake,4);
+        } else if(p.y > top+18 && !o.hit){
+          o.hit++;
+          if(p.vx > 420){                                     // fast = smash straight through the windows
+            p.vx *= (save.up.clip>=3 ? 0.92 : 0.8);
+            run.tricks+=TRICK.bus; run.trickN++;
+            floatTxt('+'+TRICK.bus+' THROUGH THE BUS!', p.x, top-20, RED, 20);
+            sfx.smash(); cam.shake=6; puff(p.x,p.y,10,110);
+            for(let s=0;s<6;s++) spawn('star',p.x+10,p.y,(Math.random()-0.2)*220,-Math.random()*180,0.8,1);
+          } else {                                            // slow = comedy thud
+            p.vx*=0.3; p.vy=-140; sfx.bonk(); cam.shake=4; floatTxt('THUD', p.x, p.y-24, PENCIL, 17); puff(p.x,p.y,6,60);
+          }
+        }
+      }
+    } else if(o.t==='awn'){
+      const ax=o.x, aw=112, top=GROUND-96;
+      if(p.x>ax-6 && p.x<ax+aw+6 && p.y>top-10 && p.y<top+16 && p.vy>0){
+        p.y=top-10; p.vy = -(Math.abs(p.vy)*1.12 + 130); p.vx *= 0.96*speedKeepHit();
+        if(o.hit===0){ run.tricks+=TRICK.awning; run.trickN++; floatTxt('+'+TRICK.awning+' AWNING POP!', p.x, top-30, RED, 20); }
+        o.hit++; sfx.boing(0.7); puff(p.x,top,7,80);
+      }
+    } else if(o.t==='tree'){
+      const cxr=o.x, cy=GROUND-118, r=58;
+      const d=Math.hypot(p.x-cxr, p.y-cy);
+      if(d < r+6){
+        o.inT += dt;
+        const clip = save.up.clip>=1;
+        const k = clip ? 1.4 : 6.5;                           // sticky vs punch-through
+        p.vx -= p.vx*k*dt; p.vy -= p.vy*k*dt*0.8;
+        if(Math.random()<0.4) leaves(p.x,p.y,1);
+        if(o.hit===0){
+          o.hit++;
+          if(clip){ run.tricks+=TRICK.leafPunch; run.trickN++; floatTxt('+'+TRICK.leafPunch+' LEAF PUNCH!', p.x, cy-r-14, RED, 19); sfx.smash(); leaves(p.x,p.y,8); }
+          else { floatTxt('sticky...', p.x, cy-r-14, INK, 17); sfx.sticky(); leaves(p.x,p.y,5); }
+        }
+        if(!clip && Math.hypot(p.vx,p.vy)<50){ p.vy=Math.max(p.vy,70); }  // drop out of the canopy
+      }
+    } else if(o.t==='pigeon' && !o.done){
+      const py = o.y + Math.sin(o.ph + T*2.2)*9;
+      const d = Math.hypot(p.x-o.x, p.y-py);
+      if(d < o.minD) o.minD = d;
+      if(d < 24){
+        o.done=true; o.dead=true;
+        const rr = mulberry32((save.throws*131+Math.round(o.x))|0);
+        if(save.up.clip>=2){                                   // punch through!
+          p.vx *= 0.95*speedKeepHit(); run.tricks+=TRICK.smash; run.trickN++;
+          if(save.up.clip>=5) run.tricks+=2;
+          floatTxt('+'+TRICK.smash+' SMASH!', p.x, py-26, RED, 21);
+          sfx.smash(); feathers(o.x,py,9);
+          o.dvx = 120+rr()*120; o.dvy = -180-rr()*120; o.dr = 9;
+        } else {                                               // BONK — knocked sideways
+          p.vx *= 0.55; p.vy = p.vy*0.4 + (rr()-0.35)*220;
+          floatTxt('BONK!', p.x, py-26, RED, 23);
+          sfx.bonk(); feathers(o.x,py,6); cam.shake=Math.max(cam.shake,5);
+          o.dvx = -60-rr()*80; o.dvy = -120-rr()*140; o.dr = (rr()<0.5?-1:1)*11;
+        }
+      } else if(p.x > o.x + 64){
+        o.done=true;
+        if(o.minD < 48){ run.tricks+=TRICK.closeCall; run.trickN++; floatTxt('+'+TRICK.closeCall+' close call!', o.x, py-24, INK, 17); sfx.nearMiss(); }
+      }
+    }
+  }
+  // ---- page-turn bonus (red margin line every 960 m) ----
+  const page = Math.floor((p.x - LAUNCH.x)/PAGE_LEN);
+  if(page > run.pageAt){ run.pageAt=page; if(page>0){ run.tricks+=TRICK.pageTurn; run.trickN++; floatTxt('+'+TRICK.pageTurn+' PAGE '+(page+1)+'!', p.x, p.y-40, RED, 21); sfx.pop(); } }
+
+  // ---- mailbox / delivery ----
+  if(p.x >= MAILBOX_X-40 && p.x < MAILBOX_X+400) penpalWave = 1.6;
+  if(p.x >= MAILBOX_X && !save.delivered){
+    save.delivered=true; save.delThrows=save.throws; persist();
+    run.justDelivered=true;
+    timeScale=0.32; slowT=1.5;
+    banner={text:'DELIVERED!', sub:'the letter reached your pen pal!', col:RED}; bannerT=3.2;
+    sfx.bigFanfare(); confetti(MAILBOX_X, GROUND-120, 40); penpalWave=4;
+    cam.shake=5;
+  }
+  // ---- challenge ----
+  const dm = Math.round((p.x-LAUNCH.x)/PXM);
+  if(challenge>0 && !challengeBeaten && dm>=challenge){
+    challengeBeaten=true; challengeShownBeaten=true;
+    post({gs:'challenge_beaten', score:dm});
+    banner={text:'TARGET BEATEN!', sub:challenge+'m — take that!', col:INK}; bannerT=2.4;
+    sfx.fanfare(); confetti(p.x,p.y,20);
+  }
+  // live score (throttled)
+  if(T-lastScorePost > 0.25){ lastScorePost=T; post({gs:'score', score:dm}); }
+}
+
+// ---------- camera ----------
+function stepCam(dt){
+  let tx, ty, tz;
+  if(state==='aim'){ tx=-170; ty=0; tz=1; }
+  else{
+    const spd=Math.hypot(plane.vx,plane.vy);
+    tx = plane.x - 300 + Math.min(180, plane.vx*0.14);
+    ty = Math.min(0, plane.y - 265);
+    tz = Math.max(0.76, Math.min(1, 1-(spd-350)/1500*0.3));
+    if(state==='result'||state==='settle'){ tz=1; ty=Math.min(0,plane.y-300); }
+  }
+  const k=Math.min(1, 5*dt);
+  cam.x += (tx-cam.x)*k; cam.y += (ty-cam.y)*k; cam.zoom += (tz-cam.zoom)*Math.min(1,3*dt);
+  cam.shake = Math.max(0, cam.shake - 18*dt);
+}
+
+// ---------- particles update ----------
+function stepFx(dt){
+  for(const p of parts){
+    if(!p.on) continue;
+    p.life+=dt; if(p.life>p.dur){p.on=false;continue;}
+    if(p.t==='leaf'||p.t==='feather'||p.t==='heart'||p.t==='star'){ p.vy+=260*dt; p.vx-=p.vx*1.2*dt; }
+    else if(p.t==='puff'){ p.vx-=p.vx*3*dt; p.vy-=p.vy*3*dt; }
+    p.x+=p.vx*dt; p.y+=p.vy*dt; p.rot+=p.vr*dt;
+  }
+  for(const f of floats){ if(f.on){ f.life+=dt; f.y-=28*dt; if(f.life>1.2) f.on=false; } }
+  for(const o of obs){ if(o.t==='pigeon'&&o.dead){ o.dvy+=300*dt; o.x+=o.dvx*dt; o.y+=o.dvy*dt; o.ph+=o.dr*dt; } }
+  if(hudStickerPulse>0) hudStickerPulse-=dt*2.4;
+  if(fanChipPulse>0) fanChipPulse-=dt*2;
+  if(cardShake>0) cardShake-=dt*4;
+  if(penpalWave>0) penpalWave-=dt;
+  if(bannerT>0) bannerT-=dt;
+  if(slowT>0){ slowT-=dt; if(slowT<=0) timeScale=1; }
+}
+
+// ---------- main loop (fixed timestep) ----------
+let last=performance.now(), acc=0;
+const STEP=1/120;
+function frame(now){
+  requestAnimationFrame(frame);
+  let dt=(now-last)/1000; last=now;
+  if(dt>0.1) dt=0.1;
+  acc+=dt;
+  while(acc>=STEP){
+    acc-=STEP;
+    T+=STEP;
+    boil=Math.floor(T*8);
+    const sdt=STEP*timeScale;
+    if(state==='fly') stepFly(sdt);
+    else if(state==='settle'){ settleT+=STEP; if(settleT>0.65) finishRun(); }
+    else if(state==='result'){ const pv=tallyT; tallyT+=STEP; if(pv<1.35&&tallyT>=1.35&&run.stickers>2) sfx.chaChing(); }
+    stepCam(STEP); stepFx(STEP);
+  }
+  // engine hum tied to speed
+  if(AC && whooshGain){
+    const flying = state==='fly';
+    const spd = flying?Math.hypot(plane.vx,plane.vy):0;
+    whooshGain.gain.value = flying?Math.min(0.22, spd/2600):0;
+    whooshFilt.frequency.value = 300+spd*0.9;
+    flutGain.gain.value = (flying && plane.y<GROUND-14) ? Math.min(0.05, spd/9000)*(0.7+0.3*Math.sin(T*34)) : 0;
+  }
+  render();
+}
+requestAnimationFrame(frame);
+post({gs:'ready'});
+
+// ---------- input ----------
+function toGame(e){ return { x:(e.clientX-offX)/scl, y:(e.clientY-offY)/scl }; }
+window.addEventListener('pointerdown', (e)=>{
+  e.preventDefault(); audioInit();
+  const g=toGame(e);
+  if(state==='aim'){ dragging=true; dragStart=g; dragCur=g; }
+  else if(state==='fly'){ tryFan(); }
+  else if(state==='settle'){ /* let it land */ }
+  else if(state==='result'){
+    const hit = resultHit(g);
+    if(hit>=0){ buy(hit); }
+    else { toAim(); dragging=true; dragStart=g; dragCur=g; }   // one gesture: tap-drag straight into next throw
+  }
+},{passive:false});
+window.addEventListener('pointermove',(e)=>{ if(dragging) dragCur=toGame(e); },{passive:false});
+window.addEventListener('pointerup',(e)=>{
+  if(!dragging) return;
+  dragging=false;
+  const dx=dragStart.x-dragCur.x, dy=dragStart.y-dragCur.y;
+  const len=Math.hypot(dx,dy);
+  if(len<14){ if(state==='aim') defaultThrow(); return; }
+  let ang=Math.atan2(dy,dx);
+  ang=Math.max(-1.45, Math.min(0.5, ang));                  // must go rightish
+  const pw=Math.min(1, len/190)*power();
+  if(state==='aim') beginThrow(Math.max(pw, power()*0.2), ang);
+},{passive:false});
+window.addEventListener('keydown',(e)=>{
+  if(e.repeat) return;
+  audioInit();
+  const k=e.key;
+  if(k===' '||k==='Spacebar'){ e.preventDefault();
+    if(state==='aim') defaultThrow();
+    else if(state==='fly') tryFan();
+    else if(state==='result') defaultThrow();
+  } else if(k==='Enter'){
+    if(state==='result'){ if(sel>=0) buy(sel); else defaultThrow(); }
+    else if(state==='aim') defaultThrow();
+  } else if(k==='ArrowRight'||k==='d'){ if(state==='result'){ sel=(sel+1)%SHOP.length; sfx.pop(); } }
+  else if(k==='ArrowLeft'||k==='a'){ if(state==='result'){ sel=sel<=0?SHOP.length-1:sel-1; sfx.pop(); } }
+  else if(k>='1'&&k<='5'){ if(state==='result') buy(+k-1); }
+});
+
+// ============================================================
+//  RENDERING — everything is wobbly biro ink on notebook paper
+// ============================================================
+function wline(x1,y1,x2,y2,amp,id){
+  amp=amp==null?1.6:amp; id=id||0;
+  const d=Math.hypot(x2-x1,y2-y1), n=Math.max(1,Math.min(8,Math.ceil(d/26)));
+  ctx.moveTo(x1+jit(id)*amp, y1+jit(id+31)*amp);
+  for(let i=1;i<=n;i++){
+    const t=i/n;
+    ctx.lineTo(x1+(x2-x1)*t + jit(id+i)*amp*2, y1+(y2-y1)*t + jit(id+i+53)*amp*2);
+  }
+}
+function wrect(x,y,w,h,amp,id){
+  wline(x,y,x+w,y,amp,id); wline(x+w,y,x+w,y+h,amp,id+7); wline(x+w,y+h,x,y+h,amp,id+13); wline(x,y+h,x,y,amp,id+19);
+}
+function wcircle(x,y,r,id){
+  const n=14;
+  ctx.moveTo(x+r+jit(id)*2, y);
+  for(let i=1;i<=n;i++){
+    const a=i/n*6.2832;
+    const rr=r+jit(id+i)*r*0.09;
+    ctx.lineTo(x+Math.cos(a)*rr, y+Math.sin(a)*rr);
+  }
+}
+function txt(s,x,y,size,col,align,alpha,rot,weight){
+  ctx.save();
+  ctx.globalAlpha=alpha==null?1:alpha;
+  ctx.fillStyle=col; ctx.textAlign=align||'left'; ctx.textBaseline='middle';
+  ctx.font=(weight||'700')+' '+size+'px '+FONT;
+  if(rot){ ctx.translate(x,y); ctx.rotate(rot); ctx.fillText(s,0,0); }
+  else ctx.fillText(s,x,y);
+  ctx.restore();
+}
+
+function render(){
+  // letterbox
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle=LETTERBOX;
+  ctx.fillRect(0,0,cv.width/dpr,cv.height/dpr);
+  ctx.save();
+  ctx.translate(offX,offY); ctx.scale(scl,scl);
+  ctx.beginPath(); ctx.rect(0,0,W,H); ctx.clip();
+  // paper
+  ctx.fillStyle=PAPER; ctx.fillRect(0,0,W,H);
+
+  const shx = cam.shake? jit(boil*3+1)*cam.shake : 0;
+  const shy = cam.shake? jit(boil*3+9)*cam.shake : 0;
+
+  drawRuledLines();
+  drawSun();
+
+  // world transform (zoom around view center)
+  ctx.save();
+  ctx.translate(W/2, H/2); ctx.scale(cam.zoom,cam.zoom); ctx.translate(-(cam.x+W/2)+shx, -(cam.y+H/2)+shy);
+
+  drawParallax();
+  drawGround();
+  drawSchool();
+  drawObstacles();
+  drawMailbox();
+  drawTrail();
+  if(dragging && state==='aim') drawAimPreview();
+  drawPlane();
+  drawParts();
+  drawFloats();
+  ctx.restore();
+
+  drawHUD();
+  if(state==='result') drawResult();
+  if(bannerT>0) drawBanner();
+  ctx.restore();
+}
+
+// --- sky furniture ---
+function drawRuledLines(){
+  ctx.strokeStyle=RULE; ctx.lineWidth=1;
+  ctx.beginPath();
+  const off = (cam.y*0.15)%44;
+  for(let y=-off; y<H; y+=44){ ctx.moveTo(0,y); ctx.lineTo(W,y); }
+  ctx.stroke();
+}
+function drawSun(){
+  ctx.save(); ctx.translate(300,88); ctx.rotate(T*0.05);
+  ctx.strokeStyle=RED; ctx.lineWidth=2.4; ctx.globalAlpha=0.75;
+  ctx.beginPath();
+  for(let a=0;a<24;a+=0.35){ const r=2+a*1.55; const px=Math.cos(a)*r, py=Math.sin(a)*r; a===0?ctx.moveTo(px,py):ctx.lineTo(px,py); }
+  ctx.stroke();
+  ctx.beginPath();
+  for(let i=0;i<8;i++){ const a=i/8*6.283+0.3; wline(Math.cos(a)*46,Math.sin(a)*46,Math.cos(a)*60,Math.sin(a)*60,1.5,i*3+700); }
+  ctx.stroke();
+  ctx.restore();
+}
+function drawParallax(){
+  // clouds (0.35 parallax) — draw in world space with adjusted x
+  ctx.save();
+  ctx.strokeStyle=INK; ctx.lineWidth=2;
+  const cx0=cam.x*0.65;   // world pos minus parallax offset
+  ctx.globalAlpha=0.3;
+  ctx.globalAlpha=0.24;
+  const ci0=Math.floor((cam.x*0.35-200)/430);
+  const CR=[12,17,20,16,11], CY=[2,-6,-10,-5,3];
+  for(let i=ci0;i<ci0+6;i++){
+    const px=i*430 + hash1(i*3.7)*200 + cx0, py=118+hash1(i*9.1)*110 + cam.y*0.75;
+    ctx.beginPath();
+    for(let s=0;s<5;s++){ wcircle(px+s*24-48, py+CY[s], CR[s]+hash1(i+s)*4, i*31+s); }
+    ctx.stroke();
+  }
+  // far skyline (0.45)
+  ctx.globalAlpha=0.22; ctx.lineWidth=2;
+  const fx0=cam.x*0.55;
+  const fi0=Math.floor((cam.x*0.45-100)/230);
+  ctx.beginPath();
+  for(let i=fi0;i<fi0+7;i++){
+    const bw=150+hash1(i*1.3)*80, bh=90+hash1(i*2.9)*140;
+    const bx=i*230+fx0, by=428-bh;
+    wrect(bx,by,bw,bh,1.4,i*17);
+    if(hash1(i*5.2)>0.5) wline(bx+bw*0.2,by,bx+bw*0.5,by-24,1.4,i*23), wline(bx+bw*0.5,by-24,bx+bw*0.8,by,1.4,i*29);
+  }
+  ctx.stroke();
+  // mid buildings (0.78) with windows
+  ctx.globalAlpha=0.5; ctx.lineWidth=2.2;
+  const mx0=cam.x*0.22;
+  const mi0=Math.floor((cam.x*0.78-150)/300);
+  for(let i=mi0;i<mi0+6;i++){
+    const bw=170+hash1(i*4.1)*90, bh=120+hash1(i*6.3)*160;
+    const bx=i*300+mx0+hash1(i*8.8)*60, by=452-bh;
+    ctx.beginPath();
+    wrect(bx,by,bw,bh,1.8,i*37);
+    // roofline doodads
+    if(hash1(i*2.2)>0.6) wrect(bx+bw*0.35,by-18,26,18,1.5,i*41);
+    // windows
+    const rows=Math.floor(bh/52), cols=Math.floor(bw/56);
+    for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+      if(hash1(i*100+r*10+c)>0.25) wrect(bx+16+c*56, by+16+r*52, 24,24,1.2, i*100+r*10+c);
+    }
+    ctx.stroke();
+    if(hash1(i*7.7)>0.72){ ctx.save(); ctx.strokeStyle=RED; ctx.beginPath(); wline(bx+bw+2,by+10,bx+bw+2,by+bh-10,1.5,i*61); ctx.stroke(); ctx.restore(); }
+  }
+  ctx.restore();
+}
+function drawGround(){
+  const x0=cam.x+W/2-(W/2)/cam.zoom-80, x1=cam.x+W/2+(W/2)/cam.zoom+80;
+  ctx.fillStyle=PAPER_DK; ctx.fillRect(x0,GROUND,x1-x0,400);
+  ctx.strokeStyle=INK; ctx.lineWidth=3;
+  ctx.beginPath();
+  const gi0=Math.floor(x0/120);
+  for(let i=gi0;i*120<x1;i++) wline(i*120,GROUND,(i+1)*120,GROUND,1.8,i*13);
+  ctx.stroke();
+  // hatch marks
+  ctx.beginPath(); ctx.lineWidth=1.6; ctx.globalAlpha=0.35;
+  for(let i=gi0;i*120<x1;i++){ for(let s=0;s<3;s++){ const hx=i*120+20+s*38; wline(hx,GROUND+8,hx-12,GROUND+22,1.2,i*7+s);} }
+  ctx.stroke(); ctx.globalAlpha=1;
+  // ruler ticks every 100 m, big red every 500 m
+  const m0=Math.max(0,Math.floor((x0-LAUNCH.x)/(100*PXM)));
+  for(let m=m0; LAUNCH.x+m*100*PXM<x1; m++){
+    const tx=LAUNCH.x+m*100*PXM;
+    if(m===0) continue;
+    const big=m%5===0;
+    ctx.strokeStyle=big?RED:INK; ctx.lineWidth=big?3:2;
+    ctx.beginPath(); wline(tx,GROUND,tx,GROUND+(big?26:14),1.2,m*3); ctx.stroke();
+    txt(m*100+'m', tx, GROUND+(big?42:30), big?17:13, big?RED:INK_SOFT,'center');
+  }
+  // page margins every PAGE_LEN
+  const p0=Math.max(1,Math.floor((x0-LAUNCH.x)/PAGE_LEN));
+  for(let p=p0; LAUNCH.x+p*PAGE_LEN<x1; p++){
+    const px=LAUNCH.x+p*PAGE_LEN;
+    ctx.strokeStyle=RED; ctx.lineWidth=2.5; ctx.globalAlpha=0.55;
+    ctx.beginPath(); wline(px,-600,px,GROUND+80,2.5,p*99); ctx.stroke(); ctx.globalAlpha=1;
+    txt('pg. '+(p+1), px+10, 30+cam.y, 15, RED,'left',0.8,0,'400');
+  }
+}
+function drawSchool(){
+  // classroom wall + window at launch
+  ctx.save();
+  ctx.strokeStyle=INK; ctx.lineWidth=3;
+  ctx.fillStyle='rgba(36,71,214,0.05)';
+  ctx.fillRect(-400,110,420,GROUND-110);
+  ctx.beginPath();
+  wline(20,110,20,GROUND,2,901); wline(-400,110,20,110,2,902);
+  ctx.stroke();
+  // bricks
+  ctx.beginPath(); ctx.lineWidth=1.6; ctx.globalAlpha=0.3;
+  for(let r=0;r<8;r++) for(let c=0;c<4;c++) wline(-380+c*100+(r%2)*40, 140+r*42, -330+c*100+(r%2)*40, 140+r*42, 1.4, r*10+c+910);
+  ctx.stroke(); ctx.globalAlpha=1;
+  // window
+  ctx.fillStyle=PAPER; ctx.fillRect(-90,150,110,110);
+  ctx.beginPath(); ctx.lineWidth=3; wrect(-90,150,110,110,2,950); ctx.stroke();
+  ctx.beginPath(); ctx.lineWidth=2; wline(-90,205,20,205,1.6,955); ctx.stroke();
+  // the kid (you!) leaning out
+  ctx.beginPath(); ctx.lineWidth=2.5;
+  wcircle(-14,192,13,960); ctx.stroke();
+  ctx.beginPath();
+  wline(-8,203,8,216,1.6,961);   // leaning body
+  const armA = (state==='aim') ? (dragging? Math.atan2(dragCur.y-208, dragCur.x-40) : -0.5+Math.sin(T*2)*0.1) : -1.2+Math.sin(T*8)*(state==='fly'?0.5:0.05);
+  wline(2,210, 2+Math.cos(armA)*26, 210+Math.sin(armA)*26, 1.6, 962);
+  ctx.stroke();
+  // face
+  ctx.beginPath(); ctx.lineWidth=1.8;
+  ctx.arc(-16,190,1.6,0,7); ctx.moveTo(-9,190); ctx.arc(-10,190,1.6,0,7);
+  ctx.stroke();
+  ctx.beginPath(); ctx.arc(-13,196,4,0.2,2.9); ctx.stroke();
+  txt('ROOM 4B', -35, 140, 15, INK, 'center', 0.9, -0.03);
+  ctx.save(); ctx.strokeStyle=RED; ctx.beginPath(); wcircle(-64,172,7,970); ctx.stroke();
+  ctx.beginPath(); ctx.lineWidth=2; wline(-68,170,-64,176,1,971); wline(-64,176,-58,166,1,972); ctx.stroke(); ctx.restore();
+  ctx.restore();
+  // rubber band launcher visual (if owned): two pegs on the sill
+  if(save.up.band>0 && state==='aim'){
+    ctx.strokeStyle=RED; ctx.lineWidth=2;
+    ctx.beginPath();
+    wline(24,236, plane.x-6, plane.y+3, 1.5, 980);
+    wline(24,196, plane.x-6, plane.y-3, 1.5, 981);
+    ctx.stroke();
+  }
+}
+function drawObstacles(){
+  const vx0=cam.x+W/2-(W/2)/cam.zoom-200, vx1=cam.x+W/2+(W/2)/cam.zoom+200;
+  for(const o of obs){
+    if(o.x<vx0||o.x>vx1) continue;
+    const id=Math.round(o.x);
+    if(o.t==='bus'){
+      const bx=o.x, top=GROUND-66;
+      ctx.strokeStyle=INK; ctx.lineWidth=2.6; ctx.fillStyle='rgba(36,71,214,0.06)';
+      ctx.fillRect(bx,top,176,60);
+      ctx.beginPath();
+      wrect(bx,top,176,60,2,id);
+      wline(bx+10,top, bx+18,top-8,1.5,id+3); wline(bx+18,top-8,bx+158,top-8,1.5,id+4); wline(bx+158,top-8,bx+166,top,1.5,id+5);
+      for(let wI=0;wI<4;wI++) wrect(bx+14+wI*42, top+10, 30,22, 1.4, id+7+wI);
+      ctx.stroke();
+      ctx.beginPath(); wcircle(bx+38,GROUND-2,13,id+20); wcircle(bx+138,GROUND-2,13,id+21); ctx.stroke();
+      ctx.save(); ctx.strokeStyle=RED; ctx.beginPath(); wline(bx+4,top+42,bx+172,top+42,1.6,id+30); ctx.stroke(); ctx.restore();
+      txt('BUS 23', bx+88, top+52, 14, RED, 'center', 0.9);
+    } else if(o.t==='awn'){
+      const ax=o.x, top=GROUND-96;
+      ctx.strokeStyle=INK; ctx.lineWidth=2.4;
+      ctx.fillStyle='rgba(36,71,214,0.05)'; ctx.fillRect(ax+8,top+14,96,GROUND-top-14);
+      ctx.beginPath();
+      wrect(ax+8,top+14,96,GROUND-top-14,1.8,id);      // shop front
+      wrect(ax+30,GROUND-52,34,52,1.5,id+9);            // door
+      ctx.stroke();
+      // awning canopy (red/white scalloped)
+      for(let s=0;s<5;s++){
+        ctx.fillStyle = s%2? PAPER : 'rgba(217,72,43,0.75)';
+        ctx.strokeStyle=RED; ctx.lineWidth=2;
+        ctx.beginPath();
+        const sx=ax+s*22.4, sy=top;
+        ctx.moveTo(sx,sy); ctx.lineTo(sx+22.4,sy); ctx.quadraticCurveTo(sx+11.2, sy+16+jit(id+s)*2, sx, sy);
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+      }
+      ctx.strokeStyle=RED; ctx.beginPath(); wline(ax,top,ax+112,top,1.6,id+15); ctx.stroke();
+      txt('SNACKS', ax+56, top+34, 13, INK, 'center', 0.8, -0.02);
+    } else if(o.t==='tree'){
+      const cy=GROUND-118;
+      ctx.strokeStyle=INK; ctx.lineWidth=2.4;
+      ctx.beginPath(); wline(o.x-5,GROUND,o.x-3,cy+40,1.8,id); wline(o.x+5,GROUND,o.x+3,cy+40,1.8,id+1); ctx.stroke();
+      // scribble canopy
+      ctx.beginPath(); ctx.lineWidth=2;
+      for(let s=0;s<3;s++) wcircle(o.x+jit(id+s)*16, cy+jit(id+s+40)*14, 44+s*7, id+s*5);
+      ctx.stroke();
+      ctx.save(); ctx.globalAlpha=0.12; ctx.fillStyle=INK; ctx.beginPath(); ctx.arc(o.x,cy,52,0,7); ctx.fill(); ctx.restore();
+    } else if(o.t==='pigeon'){
+      if(o.dead && (o.y>GROUND+60)) continue;
+      const py = o.dead? o.y : o.y + Math.sin(o.ph+T*2.2)*9;
+      ctx.save();
+      ctx.translate(o.x,py); if(o.dead) ctx.rotate(o.ph);
+      ctx.strokeStyle=INK; ctx.lineWidth=2.2; ctx.fillStyle=PAPER;
+      ctx.beginPath(); ctx.ellipse(0,0,13,9,0.2,0,7); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); wcircle(11,-6,5,id); ctx.stroke();
+      ctx.beginPath(); ctx.lineWidth=1.8;
+      const flap = Math.sin(o.ph*3+T*14)>0 && !o.dead;
+      wline(-2,-2, -10, flap?-14:6, 1.4, id+3);          // wing
+      wline(-12,2,-19,4,1.2,id+4); wline(-12,4,-19,8,1.2,id+5);  // tail
+      ctx.stroke();
+      ctx.beginPath(); ctx.fillStyle=INK; ctx.arc(12,-7,1.2,0,7); ctx.fill();
+      ctx.strokeStyle=RED; ctx.beginPath(); wline(14,-4,18,-3,1,id+6); ctx.stroke(); // beak
+      if(o.dead){ txt('@?!', 0,-18, 13, RED, 'center'); }
+      ctx.restore();
+    }
+  }
+}
+function drawMailbox(){
+  const mx=MAILBOX_X;
+  if(mx < cam.x-300 || mx > cam.x+W/cam.zoom+400) return;
+  ctx.save();
+  ctx.strokeStyle=RED; ctx.lineWidth=3;
+  ctx.beginPath();
+  wline(mx,GROUND,mx,GROUND-52,1.8,3001);               // post
+  ctx.stroke();
+  ctx.fillStyle=PAPER;
+  ctx.beginPath(); wrect(mx-22,GROUND-86,44,34,1.8,3002); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.lineWidth=2; wline(mx-22,GROUND-86,mx+22,GROUND-86,1.4,3003); ctx.stroke();
+  // flag
+  ctx.beginPath(); wline(mx+22,GROUND-84,mx+22,GROUND-102,1.4,3004); wline(mx+22,GROUND-102,mx+34,GROUND-96,1.4,3005); wline(mx+34,GROUND-96,mx+22,GROUND-92,1.4,3006); ctx.stroke();
+  txt('2000m', mx, GROUND-116, 16, RED, 'center', 0.95, -0.03);
+  // pen pal
+  const wv = penpalWave>0 ? Math.sin(T*10)*0.9 : 0;
+  ctx.strokeStyle=INK; ctx.lineWidth=2.5;
+  ctx.beginPath();
+  wcircle(mx+62,GROUND-58,11,3010);                     // head
+  wline(mx+62,GROUND-47,mx+62,GROUND-18,1.6,3011);      // body
+  wline(mx+62,GROUND-18,mx+54,GROUND,1.6,3012); wline(mx+62,GROUND-18,mx+70,GROUND,1.6,3013);
+  wline(mx+62,GROUND-40,mx+50,GROUND-30,1.6,3014);      // left arm
+  wline(mx+62,GROUND-40, mx+74+wv*4, GROUND-52-Math.abs(wv)*10, 1.6, 3015); // waving arm
+  ctx.stroke();
+  ctx.beginPath(); ctx.lineWidth=1.8; ctx.arc(mx+60,GROUND-56,1.3,0,7); ctx.moveTo(mx+66,GROUND-56); ctx.arc(mx+65,GROUND-56,1.3,0,7); ctx.stroke();
+  ctx.beginPath(); ctx.arc(mx+62,GROUND-53,4.5,0.3,2.8); ctx.stroke();
+  if(penpalWave>0) txt('over here!!', mx+62, GROUND-84, 15, INK, 'center', Math.min(1,penpalWave), 0.03);
+  if(save.delivered){
+    ctx.save(); ctx.strokeStyle=RED; ctx.beginPath(); wcircle(mx+45,GROUND-95,6,3020); ctx.stroke(); ctx.restore();
+  }
+  ctx.restore();
+}
+function drawTrail(){
+  ctx.fillStyle=INK;
+  for(let i=0;i<trail.length;i++){
+    const tr=trail[i]; if(!tr.on) continue;
+    const age=((trailI-i)%trail.length+trail.length)%trail.length;
+    ctx.globalAlpha=0.25*(1-age/trail.length);
+    ctx.beginPath(); ctx.arc(tr.x,tr.y,2.2,0,7); ctx.fill();
+  }
+  ctx.globalAlpha=1;
+}
+function drawAimPreview(){
+  // dotted hand-drawn trajectory hint
+  const dx=dragStart.x-dragCur.x, dy=dragStart.y-dragCur.y;
+  const len=Math.hypot(dx,dy); if(len<8) return;
+  let ang=Math.atan2(dy,dx); ang=Math.max(-1.45,Math.min(0.5,ang));
+  const pw=Math.min(1,len/190)*power();
+  let sx=LAUNCH.x, sy=LAUNCH.y, svx=Math.cos(ang)*pw, svy=Math.sin(ang)*pw;
+  ctx.fillStyle=INK;
+  const dr=drag(), tv=term(), sim=1/30;
+  for(let i=0;i<52;i++){
+    svy+=GRAV*sim; svx-=svx*dr*sim; svy-=svy*dr*sim*0.5;
+    if(svy>tv) svy+=(tv-svy)*Math.min(1,GLIDE*sim);
+    sx+=svx*sim; sy+=svy*sim;
+    if(sy>GROUND-6) break;
+    if(i%3===0){ ctx.globalAlpha=Math.max(0,0.7-i*0.012); ctx.beginPath(); ctx.arc(sx+jit(i)*2,sy+jit(i+9)*2, 3,0,7); ctx.fill(); }
+  }
+  ctx.globalAlpha=1;
+  // power meter near hand
+  const pct=Math.min(1,len/190);
+  ctx.strokeStyle=pct>0.9?RED:INK; ctx.lineWidth=4;
+  ctx.beginPath(); ctx.arc(LAUNCH.x, LAUNCH.y, 30, -Math.PI/2, -Math.PI/2+pct*5.5); ctx.stroke();
+  txt(Math.round(pct*100)+'%', LAUNCH.x, LAUNCH.y-44, 15, pct>0.9?RED:INK,'center');
+}
+function drawPlane(){
+  const p=plane;
+  ctx.save();
+  ctx.translate(p.x,p.y); ctx.rotate(p.rot);
+  const foldT=save.up.folds;
+  const noseLen = 20+foldT*1.2;
+  // shadow on ground
+  ctx.restore();
+  if(p.y<GROUND-12){
+    ctx.save(); ctx.globalAlpha=Math.max(0.04, 0.22-(GROUND-p.y)/1600);
+    ctx.fillStyle=INK; ctx.beginPath(); ctx.ellipse(p.x,GROUND-2, 16,3.5,0,0,7); ctx.fill(); ctx.restore();
+  }
+  ctx.save();
+  ctx.translate(p.x,p.y); ctx.rotate(p.rot); ctx.scale(1.4,1.4);
+  // lower fin (shaded)
+  ctx.fillStyle='#EFE9DA'; ctx.strokeStyle=INK; ctx.lineWidth=1.8;
+  ctx.beginPath(); ctx.moveTo(noseLen,0); ctx.lineTo(-14,10); ctx.lineTo(-9,1); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // upper wing (white)
+  ctx.fillStyle=WHITE;
+  ctx.beginPath(); ctx.moveTo(noseLen,0); ctx.lineTo(-16,-9); ctx.lineTo(-9,1); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // fold lines (more with Sharper Folds)
+  ctx.strokeStyle='rgba(36,71,214,0.35)'; ctx.lineWidth=0.9;
+  ctx.beginPath();
+  ctx.moveTo(noseLen,0); ctx.lineTo(-9,1);
+  for(let f=0;f<foldT;f++){ ctx.moveTo(noseLen-6-f*5,-1.2); ctx.lineTo(-11+f*2,-5.5+f*0.8); }
+  ctx.stroke();
+  // rubber band wrapped on fuselage (kept minimal so the dart stays readable)
+  if(save.up.band>0){
+    ctx.strokeStyle=RED; ctx.lineWidth=1.3;
+    ctx.beginPath();
+    ctx.ellipse(-1,-0.5, 1.8,4.6, 0.12,0,7);
+    if(save.up.band>=3) ctx.ellipse(3.5,-1, 1.8,4.0, 0.12,0,7);
+    ctx.stroke();
+  }
+  // paperclip nose
+  if(save.up.clip>0){
+    ctx.strokeStyle=PENCIL; ctx.lineWidth=1.7;
+    ctx.beginPath();
+    ctx.moveTo(noseLen-9,-2.4); ctx.lineTo(noseLen+1,-2.4); ctx.arc(noseLen+1,0,2.4,-Math.PI/2,Math.PI/2);
+    ctx.lineTo(noseLen-7,2.4); ctx.arc(noseLen-7,0.6,1.8,Math.PI/2,-Math.PI/2,true);
+    ctx.lineTo(noseLen-1,-1.2);
+    ctx.stroke();
+  }
+  // gum blob underside
+  if(save.up.gum>0){
+    ctx.fillStyle=GUM_PINK; ctx.strokeStyle='rgba(180,60,90,0.7)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.ellipse(-4,6, 3.4+save.up.gum*0.4,2.4,0,0,7); ctx.fill(); ctx.stroke();
+  }
+  // pocket fan strapped on top
+  if(save.up.fan>0){
+    ctx.strokeStyle=INK; ctx.lineWidth=1.2;
+    ctx.beginPath(); ctx.moveTo(-8,-4); ctx.lineTo(-8,-9); ctx.stroke();
+    ctx.save(); ctx.translate(-8,-12);
+    ctx.beginPath(); ctx.arc(0,0,4,0,7); ctx.stroke();
+    const spin = run.fanUsed||state!=='fly' ? T*3 : T*26;
+    for(let b=0;b<3;b++){ const a=spin+b*2.09; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(Math.cos(a)*3.4, Math.sin(a)*3.4); ctx.stroke(); }
+    ctx.restore();
+  }
+  ctx.restore();
+}
+function drawParts(){
+  for(const p of parts){
+    if(!p.on) continue;
+    const k=1-p.life/p.dur;
+    ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.rot); ctx.globalAlpha=Math.min(1,k*1.6);
+    if(p.t==='puff'){ ctx.strokeStyle=PENCIL; ctx.lineWidth=1.6; ctx.beginPath(); ctx.arc(0,0,p.s*(1+p.life*2.4),0,7); ctx.stroke(); }
+    else if(p.t==='leaf'){ ctx.fillStyle='rgba(36,71,214,0.5)'; ctx.beginPath(); ctx.ellipse(0,0,4,2,0,0,7); ctx.fill(); }
+    else if(p.t==='feather'){ ctx.strokeStyle=INK; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(-3,0); ctx.quadraticCurveTo(0,-4,4,0); ctx.stroke(); }
+    else if(p.t==='heart'){ ctx.fillStyle=RED; ctx.font='12px sans-serif'; ctx.beginPath(); ctx.arc(-1.6,0,2.2,0,7); ctx.arc(1.6,0,2.2,0,7); ctx.moveTo(-3.6,1); ctx.lineTo(0,5.4); ctx.lineTo(3.6,1); ctx.fill(); }
+    else if(p.t==='star'){ ctx.strokeStyle=INK; ctx.lineWidth=1.5; ctx.beginPath(); for(let i=0;i<5;i++){const a=i*2.513-1.57; ctx.lineTo(Math.cos(a)*4.5,Math.sin(a)*4.5); ctx.lineTo(Math.cos(a+1.256)*2,Math.sin(a+1.256)*2);} ctx.closePath(); ctx.stroke(); }
+    else if(p.t==='speed'){ ctx.strokeStyle=INK_SOFT; ctx.lineWidth=1.6; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-14,0); ctx.stroke(); }
+    ctx.restore();
+  }
+}
+function drawFloats(){
+  for(const f of floats){
+    if(!f.on) continue;
+    const a=f.life<0.15? f.life/0.15 : Math.max(0,1-(f.life-0.6)/0.6);
+    txt(f.str, f.x, f.y, f.size, f.col, 'center', a, jit(f.x)*0.05);
+  }
+}
+
+// ---------- HUD ----------
+function nextUpgradeInfo(){
+  let bi=-1, bp=1e9;
+  for(let i=0;i<SHOP.length;i++){ const tr=save.up[SHOP[i].key]; if(tr<5 && SHOP[i].prices[tr]<bp){ bp=SHOP[i].prices[tr]; bi=i; } }
+  return bi<0?null:{i:bi, price:bp, name:SHOP[bi].name};
+}
+function drawHUD(){
+  // distance (brag metric) — big, top-left, counts up
+  const dm = state==='fly'||state==='settle'||state==='result' ? Math.max(0,Math.round((plane.x-LAUNCH.x)/PXM)) : 0;
+  distShown += (dm-distShown)*0.3; if(Math.abs(dm-distShown)<1) distShown=dm;
+  const pop = 1+Math.min(0.12, Math.abs(dm-distShown)*0.004);
+  ctx.save(); ctx.translate(26,40); ctx.scale(pop,pop);
+  txt(Math.round(distShown)+'', 0, 0, 42, INK, 'left', 1, -0.02);
+  txt('m', 14+String(Math.round(distShown)).length*23, 6, 20, INK_SOFT, 'left');
+  ctx.restore();
+  txt('best '+best+'m', 28, 74, 16, RED, 'left', 0.9, -0.01);
+  // stickers top-right
+  const sp=1+Math.max(0,hudStickerPulse)*0.25;
+  ctx.save(); ctx.translate(W-30,40); ctx.scale(sp,sp);
+  txt(save.st+'', -26, 0, 30, RED, 'right', 1, 0.02);
+  drawSticker(-8,0,13);
+  ctx.restore();
+  // challenge chip
+  if(challenge>0){
+    const beat=challengeBeaten;
+    ctx.save();
+    ctx.strokeStyle=beat?RED:INK; ctx.lineWidth=2; ctx.fillStyle='rgba(252,249,240,0.9)';
+    ctx.beginPath(); wrect(W/2-92,14,184,34,1.6,4001); ctx.fill(); ctx.stroke();
+    txt(beat?'TARGET SMASHED!':'TARGET: '+challenge+'m', W/2, 31, 17, beat?RED:INK, 'center');
+    ctx.restore();
+  }
+  // pen pal goal chip (until delivered)
+  if(!save.delivered){
+    txt('pen pal’s mailbox: 2000m →', W-28, 74, 15, INK_SOFT, 'right', 0.9);
+  } else if(state==='aim'){
+    txt('delivered in '+save.delThrows+' throws!', W-28, 74, 14, RED, 'right', 0.8);
+  }
+  // fan chip during flight
+  if(state==='fly' && save.up.fan>0){
+    const used=run.fanUsed;
+    const fp=1+Math.max(0,fanChipPulse)*0.3;
+    ctx.save(); ctx.translate(W-96, H-44); ctx.scale(fp,fp);
+    ctx.strokeStyle=used?PENCIL:RED; ctx.lineWidth=2.4; ctx.fillStyle=used?'rgba(245,238,220,0.85)':'rgba(252,249,240,0.95)';
+    ctx.beginPath(); wrect(-66,-20,150,40,1.8,4011); ctx.fill(); ctx.stroke();
+    txt(used?'fan used':'FAN! tap/space', 8, 0, 16, used?PENCIL:RED, 'center');
+    ctx.restore();
+  }
+  // aim-state coaching + next-goal
+  if(state==='aim'){
+    const first = save.throws===0;
+    txt(first?'drag back anywhere — release to throw!':'drag to aim  •  tap / space = quick throw', W/2, H-26, first?20:16, INK, 'center', 0.75+0.25*Math.sin(T*3), -0.01);
+    const nu=nextUpgradeInfo();
+    if(nu && !first){
+      const afford = save.st>=nu.price;
+      txt(afford? 'you can afford: '+nu.name+'!' : 'next: '+nu.name+' — '+(nu.price-save.st)+' more stickers', 28, H-52, 15, afford?RED:INK_SOFT, 'left', 0.9);
+    }
+  }
+}
+function drawSticker(x,y,r){
+  // a little red star sticker (the currency)
+  ctx.save(); ctx.translate(x,y); ctx.rotate(0.1);
+  ctx.fillStyle=RED; ctx.beginPath();
+  for(let i=0;i<5;i++){ const a=i*2.513-1.57; ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r); ctx.lineTo(Math.cos(a+1.256)*r*0.45, Math.sin(a+1.256)*r*0.45); }
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function drawBanner(){
+  const a=Math.min(1,bannerT*2)*Math.min(1,(3.2-bannerT)*3+0.2);
+  ctx.save();
+  ctx.translate(W/2, 150); ctx.rotate(-0.03+Math.sin(T*2)*0.01);
+  ctx.scale(Math.min(1,(3.2-bannerT)*6+0.4),Math.min(1,(3.2-bannerT)*6+0.4));
+  txt(banner.text, 0, 0, 54, banner.col, 'center', a);
+  if(banner.sub) txt(banner.sub, 0, 42, 20, INK, 'center', a);
+  ctx.restore();
+}
+
+// ---------- result screen (tally + shop; the whole loop lives here) ----------
+const CARD={x:40,y:64,w:880,h:440};
+function cardRects(){
+  const r=[]; for(let i=0;i<5;i++) r.push({x:CARD.x+18+i*171, y:CARD.y+206, w:160, h:132});
+  return r;
+}
+function resultHit(g){
+  const rs=cardRects();
+  for(let i=0;i<rs.length;i++){ const r=rs[i]; if(g.x>=r.x&&g.x<=r.x+r.w&&g.y>=r.y&&g.y<=r.y+r.h) return i; }
+  return -1;
+}
+function drawResult(){
+  const t=tallyT;
+  const ease=Math.min(1,t/0.28), ei=1-(1-ease)*(1-ease);   // card eases in, never pops
+  ctx.save();
+  ctx.globalAlpha=ei;
+  ctx.fillStyle='rgba(252,249,240,0.72)'; ctx.fillRect(0,0,W,H);
+  ctx.translate(0,(1-ei)*36);
+  // card
+  ctx.translate(W/2,H/2); ctx.rotate(-0.006); ctx.translate(-W/2,-H/2);
+  ctx.fillStyle='rgba(255,255,255,0.92)'; ctx.strokeStyle=INK; ctx.lineWidth=3;
+  ctx.beginPath(); wrect(CARD.x,CARD.y,CARD.w,CARD.h,2.4,5001); ctx.fill(); ctx.stroke();
+  // header
+  txt('THROW #'+save.throws, CARD.x+28, CARD.y+34, 20, INK_SOFT, 'left');
+  const dm=run.dist;
+  txt(dm+'m', CARD.x+28, CARD.y+74, 46, INK, 'left', 1, -0.015);
+  if(run.newBest){
+    ctx.save(); ctx.translate(CARD.x+96+String(dm).length*26, CARD.y+62); ctx.rotate(-0.12+Math.sin(T*6)*0.04);
+    txt('NEW BEST!', 0,0, 22, RED, 'left'); ctx.restore();
+    txt('old best beaten — best is now '+best+'m', CARD.x+28, CARD.y+100, 14, INK_SOFT, 'left');
+  } else {
+    txt('best '+best+'m', CARD.x+40+String(dm).length*26, CARD.y+80, 17, RED, 'left', 0.9);
+  }
+  if(challenge>0) txt(challengeBeaten?'target '+challenge+'m: BEATEN!':'target: '+challenge+'m', CARD.x+28, CARD.y+126, 15, challengeBeaten?RED:INK_SOFT, 'left');
+  // tally (counts up with chings)
+  const rows=[
+    ['distance '+dm+'m', run.dPts],
+    ['airtime '+run.air.toFixed(1)+'s', run.aPts],
+    ['tricks ×'+run.trickN, run.tPts],
+  ];
+  let total=0;
+  const tallyDur=0.9;
+  for(let i=0;i<rows.length;i++){
+    const start=0.25+i*0.28;
+    const k=Math.max(0,Math.min(1,(t-start)/tallyDur*3));
+    const v=Math.round(rows[i][1]*k);
+    total+=v;
+    txt(rows[i][0], CARD.x+CARD.w-330, CARD.y+38+i*30, 17, INK, 'left', Math.min(1,Math.max(0,(t-start)*4)));
+    txt('+'+v, CARD.x+CARD.w-88, CARD.y+38+i*30, 18, INK, 'right', Math.min(1,Math.max(0,(t-start)*4)));
+  }
+  const doneK=Math.max(0,Math.min(1,(t-1.15)*3));
+  const totalShow=Math.round(Math.max(1,run.stickers)*Math.min(1,Math.max(0,(t-0.25)/1.1)));
+  // ching ticks while counting
+  if(state==='result' && t<1.5){ const c=Math.floor(t*10); if(c>chingCount){ chingCount=c; if(t>0.25) sfx.ching(c); } }
+  ctx.save();
+  const tp=1+(doneK<1?0:Math.max(0,0.25-Math.abs(t-1.5)*1.2));
+  ctx.translate(CARD.x+CARD.w-88, CARD.y+140); ctx.scale(tp,tp);
+  txt('+'+totalShow, 0, 0, 40, RED, 'right');
+  drawSticker(22,0,14);
+  ctx.restore();
+  txt('stickers earned', CARD.x+CARD.w-88, CARD.y+170, 15, INK_SOFT, 'right');
+  // delivered banner
+  if(save.delivered && run.justDelivered){
+    ctx.save(); ctx.translate(W/2, CARD.y+192); ctx.rotate(-0.015);
+    ctx.strokeStyle=RED; ctx.lineWidth=2.5; ctx.fillStyle='rgba(217,72,43,0.08)';
+    ctx.beginPath(); wrect(-330,-16,660,32,2,5099); ctx.fill(); ctx.stroke();
+    txt('LETTER DELIVERED in '+save.delThrows+' throws — think you can do it in fewer?', 0, 0, 17, RED, 'center');
+    ctx.restore();
+  } else {
+    txt(save.delivered? 'keep going — how far can one plane fly?' : 'the mailbox is at 2000m. upgrade & keep throwing!', W/2, CARD.y+186, 15, INK_SOFT, 'center');
+  }
+  // ---- shop cards ----
+  const rs=cardRects();
+  for(let i=0;i<rs.length;i++){
+    const r=rs[i], it=SHOP[i], tier=save.up[it.key];
+    const maxed=tier>=5, price=maxed?0:it.prices[tier];
+    const afford=!maxed && save.st>=price;
+    const shk = (cardShake>0&&cardShakeI===i)? jit(boil*7+i)*5 : 0;
+    ctx.save(); ctx.translate(r.x+shk, r.y);
+    ctx.fillStyle= afford? 'rgba(217,72,43,0.06)' : 'rgba(36,71,214,0.03)';
+    ctx.strokeStyle= sel===i? RED : INK; ctx.lineWidth= sel===i?3.4:2;
+    ctx.beginPath(); wrect(0,0,r.w,r.h,1.8,5200+i*17); ctx.fill(); ctx.stroke();
+    txt(it.name, r.w/2, 20, 16.5, INK, 'center');
+    drawShopIcon(i, r.w/2, 56);
+    txt(it.blurb, r.w/2, 88, 11.5, INK_SOFT, 'center');
+    // tier pips
+    for(let p=0;p<5;p++){
+      ctx.beginPath();
+      if(p<tier){ ctx.fillStyle=INK; ctx.arc(r.w/2-28+p*14, 104, 4,0,7); ctx.fill(); }
+      else { ctx.strokeStyle=INK_SOFT; ctx.lineWidth=1.5; ctx.arc(r.w/2-28+p*14, 104, 4,0,7); ctx.stroke(); }
+    }
+    // price
+    if(maxed) txt('MAXED!', r.w/2, 122, 15, RED, 'center');
+    else{
+      txt(price+'', r.w/2-6, 122, 17, afford?RED:PENCIL, 'center');
+      ctx.save(); ctx.globalAlpha=afford?1:0.45; drawSticker(r.w/2+16,122,8); ctx.restore();
+    }
+    if(afford && !maxed){
+      ctx.save(); ctx.strokeStyle=RED; ctx.lineWidth=2; ctx.setLineDash([5,4]); ctx.lineDashOffset=-T*14;
+      ctx.beginPath(); wrect(-4,-4,r.w+8,r.h+8,1.5,5300+i); ctx.stroke(); ctx.restore();
+    }
+    ctx.restore();
+  }
+  // throw button
+  const bp=1+Math.sin(T*3.2)*0.02;
+  ctx.save(); ctx.translate(W/2, CARD.y+CARD.h-33); ctx.scale(bp,bp);
+  ctx.fillStyle=INK; ctx.strokeStyle=INK; ctx.lineWidth=2.6;
+  ctx.beginPath(); wrect(-110,-25,220,50,2,5400); ctx.fillStyle='rgba(36,71,214,0.1)'; ctx.fill(); ctx.stroke();
+  txt('THROW AGAIN ✈', 0, 1, 21, INK, 'center');
+  ctx.restore();
+  txt('tap/drag or SPACE to throw  •  tap card / ←→ + enter or 1-5 to buy', W/2, CARD.y+CARD.h+18, 13.5, 'rgba(36,71,214,0.6)', 'center');
+  ctx.restore();
+}
+function drawShopIcon(i,x,y){
+  ctx.save(); ctx.translate(x,y); ctx.strokeStyle=INK; ctx.lineWidth=2.2;
+  if(i===0){ // sharper folds — crisp dart
+    ctx.fillStyle=WHITE; ctx.beginPath(); ctx.moveTo(18,0); ctx.lineTo(-14,-9); ctx.lineTo(-8,0); ctx.lineTo(-14,9); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(18,0); ctx.lineTo(-8,0); ctx.stroke();
+  } else if(i===1){ // rubber band
+    ctx.strokeStyle=RED; ctx.beginPath(); ctx.ellipse(0,0,16,9,0.5,0,7); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(2,1,14,7,0.9,0,7); ctx.stroke();
+  } else if(i===2){ // paperclip
+    ctx.strokeStyle=PENCIL; ctx.lineWidth=2.6;
+    ctx.beginPath(); ctx.moveTo(-8,-8); ctx.lineTo(8,-8); ctx.arc(8,-2,6,-Math.PI/2,Math.PI/2);
+    ctx.lineTo(-6,4); ctx.arc(-6,0,4,Math.PI/2,-Math.PI/2,true); ctx.lineTo(4,-4); ctx.stroke();
+  } else if(i===3){ // gum
+    ctx.fillStyle=GUM_PINK; ctx.beginPath(); ctx.arc(0,0,11,0,7); ctx.fill();
+    ctx.strokeStyle='rgba(180,60,90,0.8)'; ctx.beginPath(); ctx.arc(0,0,11,0,7); ctx.stroke();
+    ctx.beginPath(); ctx.arc(-6,-2,4,0,7); ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.fill();
+  } else { // fan
+    ctx.beginPath(); ctx.arc(0,0,12,0,7); ctx.stroke();
+    for(let b=0;b<3;b++){ const a=T*8+b*2.09; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(Math.cos(a)*10,Math.sin(a)*10); ctx.stroke(); }
+  }
+  ctx.restore();
+}
+</script>
+</body>
+</html>

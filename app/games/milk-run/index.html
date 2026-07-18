@@ -200,7 +200,7 @@ const CUT = 0.45;               // release cut factor on upward vy
 const COYOTE = 0.10;            // s (~6 frames)
 const BUFFER = 0.12;            // s (~7 frames)
 const EDGE = 9;                 // px landing edge forgiveness
-const CORNER = 22;              // px corner-correction pop-up
+const CORNER = 26;              // px corner-correction pop-up
 const SOFT_VY = 640;            // landing impact below this keeps milk
 const CAT_HW = 15, CAT_HH = 15; // collision half extents (feet at y+CAT_HH)
 const AWNING_VY = -700;         // awning bounce
@@ -319,7 +319,8 @@ function genAhead() {
 function resetRun() {
   rng = mulberry32(20260718 + runIndex * 7919);
   buildings = []; birds = []; lastGenX = 0;
-  pushBuilding(-260, 1350, 380);
+  const b0 = pushBuilding(-260, 1350, 380);
+  b0.deco = b0.deco.filter((d) => d.t !== 'tower').slice(0, 3); // calm splash backdrop
   cat = { x: 60, y: 380 - CAT_HH, vy: 0, px: 60, py: 380 - CAT_HH };
   camX = cat.x - 210; camY = 380 - 350; camPX = 210;
   score = 0; displayScore = 0; fishCount = 0; milk = 1; mult = 3;
@@ -375,14 +376,17 @@ function milkSplash(amt) {
 function land(roofY, impact, b) {
   cat.y = roofY - CAT_HH; cat.vy = 0;
   grounded = true; groundB = b; coyote = 0;
-  const hard = impact > SOFT_VY;
+  // soft roll: releasing jump before touchdown raises the slam threshold —
+  // holding through impact is a slam; a released, rolled landing forgives more
+  const thresh = held ? SOFT_VY : SOFT_VY * 1.5;
+  const hard = impact > thresh;
   squashV -= Math.min(7, impact / 160);
   sloshV += Math.min(14, impact / 90);
   if (hard && milk > 0.005) {
-    let amt = Math.min(0.5, 0.12 + (impact - SOFT_VY) / 1400);
+    let amt = Math.min(0.5, 0.12 + (impact - thresh) / 1400);
     milk = Math.max(0, milk - amt);
     milkSplash(amt);
-    shake = Math.min(7, 2 + (impact - SOFT_VY) / 130);
+    shake = Math.min(7, 2 + (impact - thresh) / 130);
     hitstop = 0.03;
     AU.landHard(impact);
     floatTxt(milk <= 0.005 ? 'empty!' : 'splash!', cat.x, cat.y - 52, '#FFF6E8');
@@ -444,8 +448,8 @@ function update(dt) {
   if (state === 'dying') {
     dieT += dt;
     umbA = Math.min(1, umbA + dt * 5);
-    if (dieMode === 'wall') { cat.vy = Math.min(cat.vy + G_BASE * 0.35 * dt, 260); }
-    else { cat.vy = Math.min(cat.vy + G_BASE * 0.28 * dt, 230); }
+    if (dieMode === 'wall') { cat.vy = Math.min(cat.vy + G_BASE * 0.3 * dt, 210); }
+    else { cat.vy = Math.min(cat.vy + G_BASE * 0.22 * dt, 150); }
     cat.y += cat.vy * dt; cat.x += (dieMode === 'wall' ? -26 : 34) * dt;
     slosh = Math.sin(dieT * 5) * 0.5;
     if (dieT > 0.85) endRun();
@@ -1027,14 +1031,17 @@ function drawHUD() {
     ctx.globalAlpha = 1;
   }
 
-  // fading in-world hint
+  // fading in-world hint — cream with a soft ink halo so it reads over towers
   if (!hintDone && hintT < 7) {
     const a = hintT < 0.6 ? hintT / 0.6 : hintT > 5.6 ? Math.max(0, (7 - hintT) / 1.4) : 1;
-    ctx.globalAlpha = a * 0.85;
+    ctx.globalAlpha = a * 0.9;
     ctx.textAlign = 'center';
-    ctx.font = 'italic 21px Georgia, serif';
-    ctx.fillStyle = '#241E38';
-    const hx = 560 - camX + 400, hy = 380 - camY - 62;
+    ctx.font = 'italic 700 22px Georgia, serif';
+    const hx = 960 - camX, hy = 380 - camY - 128;
+    ctx.strokeStyle = 'rgba(28,23,48,0.55)';
+    ctx.lineWidth = 4; ctx.lineJoin = 'round';
+    ctx.strokeText('hold to jump higher', hx, hy);
+    ctx.fillStyle = '#FFF6E8';
     ctx.fillText('hold to jump higher', hx, hy);
     ctx.globalAlpha = 1;
   }
@@ -1069,22 +1076,23 @@ function drawSplash() {
   ctx.restore();
   ctx.font = 'italic 21px Georgia, serif';
   ctx.fillStyle = 'rgba(36,30,56,0.75)';
-  ctx.fillText('soft landings keep your milk', W / 2, 226 + bob * 0.5);
+  ctx.fillText('soft landings keep your milk', W / 2, 232 + bob * 0.5);
+  // CTA on the dark rooftop face, cream for contrast
   const blink = 0.55 + 0.45 * Math.sin(splashT * 3.2);
   ctx.globalAlpha = blink;
   ctx.font = 'italic 700 24px Georgia, serif';
-  ctx.fillStyle = '#241E38';
-  ctx.fillText('tap or press space to run', W / 2, 300);
+  ctx.fillStyle = '#FFF6E8';
+  ctx.fillText('tap or press space to run', W / 2, 452);
   ctx.globalAlpha = 1;
   if (best > 0) {
     ctx.font = 'italic 16px Georgia, serif';
-    ctx.fillStyle = 'rgba(36,30,56,0.6)';
-    ctx.fillText('best ' + best, W / 2, 330);
+    ctx.fillStyle = 'rgba(255,246,232,0.65)';
+    ctx.fillText('best ' + best, W / 2, 482);
   }
   if (challenge) {
     ctx.font = 'italic 700 19px Georgia, serif';
-    ctx.fillStyle = 'rgba(200,90,60,0.95)';
-    ctx.fillText('TARGET ' + challenge, W / 2, 356);
+    ctx.fillStyle = '#FFB37E';
+    ctx.fillText('TARGET ' + challenge, W / 2, best > 0 ? 508 : 482);
   }
 }
 

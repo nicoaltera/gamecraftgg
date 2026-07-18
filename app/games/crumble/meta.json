@@ -1,0 +1,13 @@
+{
+  "title": "Crumble",
+  "slug": "crumble",
+  "description": "Swing a wrecking ball into wobbling jelly towers and boing the gummy bears off the roof.",
+  "verb": "swing the wrecking ball",
+  "dials": ["comedy"],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "pts",
+  "scoreOrder": "desc",
+  "palette": ["#FFF7EC", "#FF7A9E", "#7ED957", "#6FA8FF", "#2A2430"],
+  "author": "gamesight"
+}

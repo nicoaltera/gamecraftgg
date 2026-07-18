@@ -1,36 +1,33 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# GameSight — app
 
-## Getting Started
+The implementation of the planning docs one directory up. Next.js (webpack build) + SQLite + self-contained game bundles + an agentic generation pipeline.
 
-First, run the development server:
+## Run
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd app
+npm install
+npx playwright install chromium   # for the play-test harness
+npm run build && PORT=3311 npm run start   # or: npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3311. The DB auto-creates at `data/gamesight.db` and seed games in `games/` auto-register on first request.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## What's here
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `app/` — routes: home (prompt hero + retention-ranked feed), `/g/[slug]` game pages (challenge banner, leaderboard, dare-a-friend), `/build/[id]` build theater, `/k` the K-factor dashboard, `/play/[slug]` sandboxed game serving (strict CSP: no network, inline+vendored scripts only).
+- `games/<slug>/` — one folder per game: `index.html` (self-contained), `meta.json`, `cover.svg`. The contract is `CONVENTIONS.md`.
+- `pipeline/run.mjs` — the generation pipeline: designer → builder → play-test harness → judge panel, up to 3 cycles, publishes only on pass. Requires the `claude` CLI. Also runnable directly: `node pipeline/run.mjs --prompt "..."`.
+- `scripts/` — `game-server.mjs` (production-identical static server for game dev), `verify-game.mjs` (Playwright play-evidence harness: console errors, bridge messages, desktop+mobile screenshots).
+- `lib/db.ts` — SQLite layer (portable schema; Postgres swap documented in ../05-architecture.md).
 
-## Learn More
+## Bridge contract (deviation from the planning docs, deliberate)
 
-To learn more about Next.js, take a look at the following resources:
+Games do NOT `POST /api/score` themselves — the CSP forbids all game network access. Instead games `postMessage` (`gs:'ready' | 'gameover' | 'score' | 'challenge_beaten'`) to the parent page, which owns sessions, heartbeats, submits, and share UI. Strictly better isolation than the original spec; `../05-architecture.md` reflects this.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Honest status / known gaps
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **Auth/quota**: creation is capped (20 generations/day globally) but login is NOT implemented — Google/Apple OAuth needs founder credentials (07-open-questions.md). Player identity is localStorage-based.
+- **Generation from the web UI** spawns `pipeline/run.mjs` on this machine using the local `claude` CLI — real hosting needs the build-worker container from 05-architecture.md.
+- Party rooms (Playroom) are Phase 2 per the roadmap; not in this build.
+- The `/k` dashboard counts a "share" when a dare link is created; share→player attribution flows through the `r=` param into sessions.

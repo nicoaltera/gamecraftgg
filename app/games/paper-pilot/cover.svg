@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400" font-family="'Comic Neue','Chalkboard SE','Comic Sans MS','Segoe Print',cursive">
+  <!-- notebook paper -->
+  <rect width="640" height="400" fill="#FCF9F0"/>
+  <g stroke="#2447D6" stroke-opacity="0.10" stroke-width="1">
+    <path d="M0 44h640M0 88h640M0 132h640M0 176h640M0 220h640M0 264h640M0 308h640M0 352h640"/>
+  </g>
+  <!-- doodled sun spiral -->
+  <g stroke="#D9482B" stroke-width="2.4" fill="none" stroke-linecap="round" opacity="0.8">
+    <path d="M74 62c2-1 4 2 2 4s-6 1-6-3 5-7 9-5 6 8 3 12-10 6-15 2-6-12-2-17 13-8 19-3 8 14 3 20"/>
+    <path d="M46 40l-8-8M74 30l0-11M102 40l8-8M110 66l11 0M40 66l-11 0"/>
+  </g>
+  <!-- far skyline -->
+  <g stroke="#2447D6" stroke-width="2" fill="none" opacity="0.25">
+    <path d="M18 306l2-84 62 1 1 83M46 250l0-26 24 0 1 27M112 305l1-56 48 -2 2 58M136 249l11-20 12 21"/>
+    <path d="M462 306l2-70 55 -1 2 70M540 305l1-95 60 2 1 93M556 210l14-18 15 19"/>
+  </g>
+  <!-- mid town: shop with awning, bus, tree -->
+  <g stroke="#2447D6" stroke-width="3" fill="none" stroke-linecap="round">
+    <path d="M190 306l2-72 88 -2 2 74" opacity="0.85"/>
+    <path d="M206 306l1-38 26 1 0 37" opacity="0.85"/>
+    <path d="M246 252l1-24 20 0 1 23" opacity="0.6"/>
+  </g>
+  <g stroke="#D9482B" stroke-width="2.5" fill="none" stroke-linecap="round">
+    <path d="M184 234l100-2"/>
+    <path d="M184 234q10 16 20 0q10 15 20 0q10 15 20 0q10 15 20 0q10 15 20 1" fill="rgba(217,72,43,0.25)"/>
+  </g>
+  <!-- bus -->
+  <g stroke="#2447D6" stroke-width="3" fill="rgba(36,71,214,0.06)" stroke-linecap="round">
+    <path d="M330 306l1-52 3-8 118 -1 4 9 1 51z"/>
+    <path d="M344 258l1 18 22 0 -1-18zM380 257l1 18 22 0 -1-18zM416 257l1 18 22 0 -1-18z" fill="#FCF9F0" stroke-width="2.2"/>
+    <circle cx="362" cy="306" r="12" fill="#FCF9F0"/><circle cx="428" cy="306" r="12" fill="#FCF9F0"/>
+  </g>
+  <path d="M334 290l118-1" stroke="#D9482B" stroke-width="2.4"/>
+  <text x="394" y="303" font-size="13" fill="#D9482B" text-anchor="middle">BUS 23</text>
+  <!-- pigeon, startled -->
+  <g stroke="#2447D6" stroke-width="2.2" fill="#FCF9F0" stroke-linecap="round">
+    <ellipse cx="474" cy="130" rx="14" ry="9" transform="rotate(12 474 130)"/>
+    <circle cx="486" cy="122" r="5.5"/>
+    <path d="M470 128l-10-13M462 132l-8 4M462 136l-8 8" fill="none"/>
+    <circle cx="488" cy="120" r="1.3" fill="#2447D6"/>
+    <path d="M491 123l6 1" stroke="#D9482B" fill="none"/>
+  </g>
+  <text x="474" y="103" font-size="14" fill="#D9482B" text-anchor="middle" transform="rotate(-6 474 103)">!?</text>
+  <!-- dotted flight arc -->
+  <g fill="#2447D6" opacity="0.75">
+    <circle cx="60" cy="292" r="3.4"/><circle cx="92" cy="258" r="3.4"/><circle cx="128" cy="228" r="3.4"/>
+    <circle cx="168" cy="203" r="3.4"/><circle cx="212" cy="182" r="3.4"/><circle cx="258" cy="166" r="3.4"/>
+    <circle cx="306" cy="155" r="3.4"/><circle cx="354" cy="149" r="3.4"/><circle cx="402" cy="148" r="3.4"/>
+  </g>
+  <!-- the paper plane -->
+  <g transform="translate(432 146) rotate(8)">
+    <path d="M46 0L-34 -20L-19 1L-34 22z" fill="#FFFFFF" stroke="#2447D6" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M46 0L-19 1" stroke="#2447D6" stroke-width="1.6" opacity="0.5"/>
+    <path d="M-34 22L46 0" fill="rgba(36,71,214,0.06)" stroke="none"/>
+  </g>
+  <!-- ground + ruler ticks -->
+  <path d="M0 307q80 3 160 0t160 1t160 -1t160 1" stroke="#2447D6" stroke-width="3.4" fill="none"/>
+  <g stroke="#2447D6" stroke-width="2" opacity="0.7">
+    <path d="M80 307v13M240 307v13M560 307v13"/>
+    <path d="M400 307v20" stroke="#D9482B" stroke-width="3"/>
+  </g>
+  <text x="400" y="342" font-size="15" fill="#D9482B" text-anchor="middle">500m</text>
+  <g stroke="#2447D6" stroke-width="1.6" opacity="0.35">
+    <path d="M40 316l-10 12M100 316l-10 12M300 316l-10 12M480 316l-10 12M610 316l-10 12"/>
+  </g>
+  <!-- hand-drawn title -->
+  <g transform="translate(320 66) rotate(-2)">
+    <text x="3" y="3" font-size="56" font-weight="700" fill="rgba(217,72,43,0.35)" text-anchor="middle">PAPER PILOT</text>
+    <text x="0" y="0" font-size="56" font-weight="700" fill="#2447D6" text-anchor="middle">PAPER PILOT</text>
+  </g>
+  <text x="320" y="380" font-size="17" fill="#2447D6" text-anchor="middle" opacity="0.75">throw it to the mailbox — 2000m, no pressure</text>
+</svg>

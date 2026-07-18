@@ -1,0 +1,13 @@
+{
+  "title": "Paper Pilot",
+  "slug": "paper-pilot",
+  "description": "Your pen pal moved across town — throw a paper airplane from the classroom window until it reaches their mailbox.",
+  "verb": "throw the plane",
+  "dials": ["progression", "comedy"],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "m",
+  "scoreOrder": "desc",
+  "palette": ["#FCF9F0", "#2447D6", "#D9482B", "#FFFFFF"],
+  "author": "gamesight"
+}

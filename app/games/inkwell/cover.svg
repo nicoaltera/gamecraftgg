@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" result="n"/>
+      <feColorMatrix in="n" type="matrix" values="0 0 0 0 0.55  0 0 0 0 0.5  0 0 0 0 0.38  0 0 0 0.06 0"/>
+      <feComposite operator="over" in2="SourceGraphic"/>
+    </filter>
+    <filter id="rough">
+      <feTurbulence type="fractalNoise" baseFrequency="0.06" numOctaves="3" result="t"/>
+      <feDisplacementMap in="SourceGraphic" in2="t" scale="5"/>
+    </filter>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.4"/>
+    </filter>
+  </defs>
+
+  <!-- cream paper -->
+  <rect width="640" height="400" fill="#FCF9F0"/>
+  <rect width="640" height="400" fill="#F3ECD8" opacity="0.35" filter="url(#grain)"/>
+  <!-- hand-ruled frame -->
+  <rect x="12" y="12" width="616" height="376" fill="none" stroke="#2A2622" stroke-width="2.5" opacity="0.18" filter="url(#rough)"/>
+
+  <g filter="url(#rough)">
+    <!-- sand dune -->
+    <path d="M40 356 Q120 268 208 316 Q292 356 372 350 L372 364 L40 364 Z" fill="#D9A441" opacity="0.9"/>
+    <path d="M70 350 Q140 296 206 326 Q262 350 330 350 L330 358 L70 358 Z" fill="#B8842E" opacity="0.5"/>
+    <!-- water wash pooling against the dune -->
+    <path d="M300 342 Q380 322 460 334 Q560 348 606 336 L606 364 L300 364 Z" fill="#3E7CB8" opacity="0.45"/>
+    <path d="M330 344 Q420 330 520 340 L520 352 Q430 344 330 352 Z" fill="#2E5F92" opacity="0.35"/>
+    <!-- oil slick riding the water -->
+    <ellipse cx="470" cy="336" rx="58" ry="8" fill="#6E3A5E" opacity="0.75"/>
+    <!-- flames on the oil -->
+    <g filter="url(#soft)">
+      <path d="M448 332 Q444 316 452 306 Q456 316 462 310 Q462 326 454 332 Z" fill="#E06A1F" opacity="0.95"/>
+      <path d="M472 330 Q470 312 480 300 Q482 314 490 308 Q488 326 478 332 Z" fill="#F5A623" opacity="0.95"/>
+      <path d="M498 332 Q496 320 502 312 Q506 320 510 316 Q509 328 502 333 Z" fill="#E04A12" opacity="0.9"/>
+    </g>
+    <!-- smoke curl -->
+    <path d="M480 296 Q466 278 482 262 Q496 248 484 230 Q476 216 488 202" fill="none"
+      stroke="#857D6F" stroke-width="10" stroke-linecap="round" opacity="0.28" filter="url(#soft)"/>
+    <!-- embers on the sand -->
+    <circle cx="196" cy="312" r="6" fill="#E06A1F" filter="url(#soft)"/>
+    <circle cx="212" cy="320" r="4" fill="#F5A623" filter="url(#soft)"/>
+    <!-- little glass patch where ember met sand -->
+    <path d="M176 324 Q196 314 224 326 Q206 334 176 330 Z" fill="#9FC9BF" opacity="0.6"/>
+    <!-- vine climbing the left edge -->
+    <path d="M84 356 Q76 312 92 284 Q108 258 94 226 Q84 198 102 170"
+      fill="none" stroke="#3F7D45" stroke-width="9" stroke-linecap="round" opacity="0.92"/>
+    <path d="M92 284 Q116 276 128 288 M94 226 Q70 218 62 230 M102 170 Q122 160 134 170"
+      fill="none" stroke="#3F7D45" stroke-width="6" stroke-linecap="round" opacity="0.8"/>
+    <!-- blooms at the tips -->
+    <g fill="#D66A8E">
+      <circle cx="104" cy="164" r="9"/><circle cx="138" cy="168" r="7"/>
+      <circle cx="132" cy="290" r="7"/><circle cx="58" cy="228" r="7"/>
+    </g>
+    <g fill="#EFB4C8">
+      <circle cx="104" cy="164" r="4"/><circle cx="138" cy="168" r="3"/>
+      <circle cx="132" cy="290" r="3"/><circle cx="58" cy="228" r="3"/>
+    </g>
+    <!-- stone ledge -->
+    <path d="M540 250 L612 250 Q618 258 612 264 L540 264 Q534 256 540 250 Z" fill="#2A2622" opacity="0.9"/>
+    <!-- steam beading under the stone -->
+    <circle cx="556" cy="274" r="5" fill="#3E7CB8" opacity="0.6"/>
+    <circle cx="580" cy="272" r="4" fill="#3E7CB8" opacity="0.5"/>
+    <path d="M560 302 Q552 288 562 278 M586 300 Q580 290 588 280" fill="none"
+      stroke="#9EB2BA" stroke-width="7" stroke-linecap="round" opacity="0.4" filter="url(#soft)"/>
+  </g>
+
+  <!-- hand-drawn title -->
+  <g transform="translate(320 96) rotate(-2)" text-anchor="middle">
+    <text font-family="Chalkboard SE, Comic Sans MS, Segoe Print, cursive" font-size="64"
+      font-weight="bold" fill="#2A2622" filter="url(#rough)">Inkwell</text>
+    <path d="M-128 18 Q-40 30 128 20" fill="none" stroke="#3E7CB8" stroke-width="7"
+      stroke-linecap="round" opacity="0.55" filter="url(#rough)"/>
+    <text y="46" font-family="Chalkboard SE, Comic Sans MS, Segoe Print, cursive" font-size="19"
+      fill="#2A2622" opacity="0.62">paint living ink</text>
+  </g>
+
+  <!-- ink splatter accents -->
+  <g fill="#3E7CB8" opacity="0.5">
+    <circle cx="452" cy="84" r="5"/><circle cx="468" cy="74" r="2.6"/><circle cx="443" cy="70" r="2"/>
+  </g>
+  <g fill="#D9A441" opacity="0.6">
+    <circle cx="182" cy="72" r="4.4"/><circle cx="196" cy="84" r="2.2"/>
+  </g>
+</svg>

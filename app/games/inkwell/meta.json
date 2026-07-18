@@ -1,0 +1,13 @@
+{
+  "title": "Inkwell",
+  "slug": "inkwell",
+  "description": "Paint magic inks that pile, flow, burn and bloom — and catch them keeping secrets.",
+  "verb": "paint living ink",
+  "dials": ["toy"],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "found",
+  "scoreOrder": "desc",
+  "palette": ["#FCF9F0", "#D9A441", "#3E7CB8", "#E06A1F", "#3F7D45", "#6E3A5E", "#2A2622", "#D66A8E"],
+  "author": "gamesight"
+}

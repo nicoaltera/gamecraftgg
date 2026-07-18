@@ -282,4 +282,7 @@ svg.hand-frame path {
   .site-header, main, .site-footer { padding-left: 20px; padding-right: 20px; }
   .prompt-row { flex-direction: column; }
   .game-grid { gap: 24px 20px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+  .hero { padding: 36px 0 20px; }
+  .feed-head { margin-top: 24px; }
+  .feed-head .feed-note { display: none; }
 }

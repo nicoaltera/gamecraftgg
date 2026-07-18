@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <linearGradient id="straw" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFD3DF"/><stop offset=".35" stop-color="#FF7A9E"/><stop offset="1" stop-color="#D94F78"/>
+    </linearGradient>
+    <linearGradient id="lime" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#DAF7C6"/><stop offset=".35" stop-color="#7ED957"/><stop offset="1" stop-color="#4FA82F"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#D2E4FF"/><stop offset=".35" stop-color="#6FA8FF"/><stop offset="1" stop-color="#3F76D6"/>
+    </linearGradient>
+    <radialGradient id="ballg" cx=".38" cy=".34" r=".9">
+      <stop offset="0" stop-color="#57465E"/><stop offset=".55" stop-color="#3A2D42"/><stop offset="1" stop-color="#221A29"/>
+    </radialGradient>
+  </defs>
+
+  <!-- warm cream sky -->
+  <rect width="640" height="400" fill="#FFF7EC"/>
+
+  <!-- lemon-drop sun -->
+  <g stroke="#F2C94C" stroke-width="4" opacity=".6">
+    <line x1="560" y1="18" x2="560" y2="4"/><line x1="598" y1="34" x2="608" y2="24"/>
+    <line x1="612" y1="72" x2="626" y2="72"/><line x1="598" y1="110" x2="608" y2="120"/>
+    <line x1="522" y1="34" x2="512" y2="24"/><line x1="508" y1="72" x2="494" y2="72"/>
+  </g>
+  <circle cx="560" cy="72" r="30" fill="#FFE08A" stroke="#F2C94C" stroke-width="3"/>
+
+  <!-- candy hills -->
+  <ellipse cx="120" cy="345" rx="230" ry="80" fill="#CFEFD8" opacity=".55"/>
+  <ellipse cx="560" cy="350" rx="260" ry="95" fill="#FBD8E0" opacity=".55"/>
+
+  <!-- cloud -->
+  <g fill="#FFFFFF" opacity=".9">
+    <circle cx="130" cy="70" r="18"/><circle cx="152" cy="62" r="14"/><circle cx="174" cy="70" r="16"/><circle cx="152" cy="78" r="15"/>
+  </g>
+
+  <!-- cookie ground -->
+  <rect y="330" width="640" height="70" fill="#EFC98F"/>
+  <rect y="372" width="640" height="28" fill="#E0B172"/>
+  <path d="M0 330 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 q13 12 26 0 L640 339 L0 339 Z" fill="#FFEBCB"/>
+  <g opacity=".75">
+    <rect x="60" y="352" width="8" height="3" rx="1.5" fill="#FF7A9E" transform="rotate(20 64 353)"/>
+    <rect x="150" y="362" width="8" height="3" rx="1.5" fill="#6FA8FF" transform="rotate(-30 154 363)"/>
+    <rect x="240" y="350" width="8" height="3" rx="1.5" fill="#FFD93D" transform="rotate(45 244 351)"/>
+    <rect x="330" y="366" width="8" height="3" rx="1.5" fill="#7ED957" transform="rotate(-15 334 367)"/>
+    <rect x="430" y="354" width="8" height="3" rx="1.5" fill="#B78BFF" transform="rotate(60 434 355)"/>
+    <rect x="530" y="364" width="8" height="3" rx="1.5" fill="#FF7A9E" transform="rotate(-45 534 365)"/>
+    <rect x="600" y="350" width="8" height="3" rx="1.5" fill="#7ED957" transform="rotate(10 604 351)"/>
+  </g>
+
+  <!-- rubble line -->
+  <line x1="360" y1="308" x2="640" y2="308" stroke="#E8486B" stroke-width="3" stroke-dasharray="12 8"/>
+
+  <!-- crane arm + rope + wrecking ball mid-swing -->
+  <rect x="10" y="18" width="330" height="16" rx="6" fill="#2A2430"/>
+  <g stroke="#FF7A9E" stroke-width="6" opacity=".8">
+    <line x1="40" y1="34" x2="54" y2="18"/><line x1="90" y1="34" x2="104" y2="18"/>
+    <line x1="140" y1="34" x2="154" y2="18"/><line x1="190" y1="34" x2="204" y2="18"/>
+    <line x1="240" y1="34" x2="254" y2="18"/><line x1="290" y1="34" x2="304" y2="18"/>
+  </g>
+  <circle cx="320" cy="36" r="6" fill="#181220"/>
+  <line x1="320" y1="36" x2="392" y2="196" stroke="#2A2430" stroke-width="5"/>
+  <!-- motion arcs -->
+  <g fill="none" stroke="#D94F78" stroke-width="4" stroke-linecap="round" opacity=".5">
+    <path d="M296 170 q-20 26 -14 58" stroke-dasharray="1 14"/>
+    <path d="M322 178 q-16 22 -12 48" stroke-dasharray="1 14"/>
+  </g>
+  <circle cx="396" cy="204" r="34" fill="url(#ballg)" stroke="#181220" stroke-width="3"/>
+  <path d="M376 190 a26 26 0 0 1 20 -12" fill="none" stroke="#FFFFFF" stroke-width="4" opacity=".35" stroke-linecap="round"/>
+  <path d="M404 212 l3.5 7 8 1 -5.8 5.6 1.4 8 -7.1 -3.7 -7.1 3.7 1.4 -8 -5.8 -5.6 8 -1 Z" fill="#FF7A9E" opacity=".95"/>
+
+  <!-- jelly tower mid-collapse -->
+  <g stroke-width="3">
+    <!-- intact base -->
+    <rect x="452" y="296" width="34" height="34" rx="8" fill="url(#lime)" stroke="#4FA82F"/>
+    <rect x="488" y="296" width="34" height="34" rx="8" fill="url(#straw)" stroke="#D94F78"/>
+    <rect x="524" y="296" width="34" height="34" rx="8" fill="url(#blue)" stroke="#3F76D6"/>
+    <!-- licorice beam tipping -->
+    <g transform="rotate(-9 505 288)">
+      <rect x="446" y="281" width="118" height="14" rx="6" fill="#2A2430" stroke="#160F1B"/>
+      <line x1="460" y1="284" x2="460" y2="292" stroke="#4E4058" stroke-width="2"/>
+      <line x1="478" y1="284" x2="478" y2="292" stroke="#4E4058" stroke-width="2"/>
+      <line x1="496" y1="284" x2="496" y2="292" stroke="#4E4058" stroke-width="2"/>
+      <line x1="514" y1="284" x2="514" y2="292" stroke="#4E4058" stroke-width="2"/>
+      <line x1="532" y1="284" x2="532" y2="292" stroke="#4E4058" stroke-width="2"/>
+    </g>
+    <!-- tumbling blocks -->
+    <rect x="446" y="230" width="34" height="34" rx="8" fill="url(#straw)" stroke="#D94F78" transform="rotate(-24 463 247)"/>
+    <rect x="500" y="222" width="34" height="34" rx="8" fill="url(#blue)" stroke="#3F76D6" transform="rotate(14 517 239)"/>
+    <rect x="548" y="238" width="34" height="34" rx="8" fill="url(#lime)" stroke="#4FA82F" transform="rotate(38 565 255)"/>
+    <rect x="584" y="184" width="32" height="32" rx="8" fill="url(#straw)" stroke="#D94F78" transform="rotate(58 600 200)"/>
+    <!-- squished face block -->
+    <g transform="rotate(-24 463 247)">
+      <circle cx="458" cy="246" r="2.2" fill="#2A2430"/><circle cx="469" cy="246" r="2.2" fill="#2A2430"/>
+      <path d="M459 252 q4.5 4 9 0" fill="none" stroke="#2A2430" stroke-width="2"/>
+    </g>
+  </g>
+
+  <!-- flying gummy bears with motion lines -->
+  <g>
+    <g stroke="#FFB13D" stroke-width="3" opacity=".6" fill="none" stroke-linecap="round">
+      <path d="M508 118 q22 -18 44 -22"/><path d="M512 136 q18 -12 36 -16"/>
+    </g>
+    <g transform="translate(468 92) rotate(-28)" fill="#FFB13D" stroke="#2A2430" stroke-opacity=".45" stroke-width="1.6">
+      <circle cx="7.5" cy="4.2" r="3.4"/><circle cx="18.5" cy="4.2" r="3.4"/><circle cx="13" cy="9" r="8.4"/>
+      <rect x="4.4" y="12" width="17.2" height="15" rx="6.5"/>
+      <circle cx="3.6" cy="17.4" r="3.9"/><circle cx="22.4" cy="17.4" r="3.9"/>
+      <circle cx="8.3" cy="27" r="4"/><circle cx="17.7" cy="27" r="4"/>
+      <circle cx="10.9" cy="8.7" r="1.5" fill="#2A2430" stroke="none"/><circle cx="15.1" cy="8.7" r="1.5" fill="#2A2430" stroke="none"/>
+      <path d="M10 12 q3 3.4 6 0" fill="none" stroke="#2A2430" stroke-width="1.4"/>
+    </g>
+    <g transform="translate(586 108) rotate(36) scale(.85)" fill="#63D471" stroke="#2A2430" stroke-opacity=".45" stroke-width="1.6">
+      <circle cx="7.5" cy="4.2" r="3.4"/><circle cx="18.5" cy="4.2" r="3.4"/><circle cx="13" cy="9" r="8.4"/>
+      <rect x="4.4" y="12" width="17.2" height="15" rx="6.5"/>
+      <circle cx="3.6" cy="17.4" r="3.9"/><circle cx="22.4" cy="17.4" r="3.9"/>
+      <circle cx="8.3" cy="27" r="4"/><circle cx="17.7" cy="27" r="4"/>
+      <circle cx="10.9" cy="8.7" r="1.5" fill="#2A2430" stroke="none"/><circle cx="15.1" cy="8.7" r="1.5" fill="#2A2430" stroke="none"/>
+      <path d="M10 12 q3 3.4 6 0" fill="none" stroke="#2A2430" stroke-width="1.4"/>
+    </g>
+    <!-- boing stars -->
+    <g fill="#FFD93D">
+      <path d="M540 84 l2.5 5 5.5 .7 -4 4 1 5.6 -5 -2.7 -5 2.7 1 -5.6 -4 -4 5.5 -.7 Z"/>
+      <path d="M620 150 l2 4 4.4 .6 -3.2 3.2 .8 4.4 -4 -2.1 -4 2.1 .8 -4.4 -3.2 -3.2 4.4 -.6 Z"/>
+    </g>
+  </g>
+
+  <!-- confetti -->
+  <g opacity=".9">
+    <rect x="430" y="150" width="9" height="4" rx="2" fill="#FF7A9E" transform="rotate(30 434 152)"/>
+    <rect x="470" y="176" width="9" height="4" rx="2" fill="#7ED957" transform="rotate(-40 474 178)"/>
+    <rect x="556" y="196" width="9" height="4" rx="2" fill="#6FA8FF" transform="rotate(70 560 198)"/>
+    <rect x="600" y="240" width="9" height="4" rx="2" fill="#FFD93D" transform="rotate(-20 604 242)"/>
+    <rect x="500" y="160" width="9" height="4" rx="2" fill="#B78BFF" transform="rotate(55 504 162)"/>
+  </g>
+
+  <!-- hand-drawn chunky title -->
+  <g font-family="Chalkboard SE, Comic Sans MS, Comic Neue, Segoe Print, cursive" font-weight="900" font-size="72"
+     stroke="#FFFFFF" stroke-width="10" paint-order="stroke" text-anchor="middle">
+    <text x="52"  y="392" fill="#FF7A9E" transform="rotate(-4 52 392)">C</text>
+    <text x="106" y="386" fill="#7ED957" transform="rotate(3 106 386)">R</text>
+    <text x="162" y="393" fill="#6FA8FF" transform="rotate(-3 162 393)">U</text>
+    <text x="222" y="385" fill="#FF7A9E" transform="rotate(4 222 385)">M</text>
+    <text x="282" y="392" fill="#FFD93D" transform="rotate(-4 282 392)">B</text>
+    <text x="334" y="386" fill="#7ED957" transform="rotate(3 334 386)">L</text>
+    <text x="386" y="393" fill="#6FA8FF" transform="rotate(-3 386 393)">E</text>
+  </g>
+  <text x="220" y="336" font-family="Chalkboard SE, Comic Sans MS, cursive" font-weight="bold" font-size="17"
+        fill="#6E5A78" stroke="#FFF7EC" stroke-width="5" paint-order="stroke" text-anchor="middle"
+        transform="rotate(-2 220 336)">swing the wrecking ball</text>
+</svg>
