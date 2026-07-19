@@ -129,6 +129,11 @@ function sfxWaveClear(){ if(!AC) return; [784,988,1319].forEach((f,i)=>tone(f,0.
 function sfxFaint(){ if(!AC) return; tone(520,0.6,'triangle',0.24,120); tone(260,0.7,'sawtooth',0.12,70,0.05); }
 function sfxStep(){ if(!AC) return; tone(rr(150,190),0.04,'sine',0.05,120); }
 function sfxExplode(){ if(!AC) return; noise(0.4,0.35,500,'lowpass'); tone(90,0.4,'sawtooth',0.2,40); }
+function sfxCoin(){ if(!AC) return; tone(940*pv(),0.05,'square',0.10,1400); tone(1400*pv(),0.07,'square',0.09,1900,0.035); }
+function sfxShop(){ if(!AC) return; [659,784,988,1319,1047].forEach((f,i)=>tone(f,0.2,'triangle',0.16,f,i*0.09)); }
+function sfxBuy(){ if(!AC) return; [784,1047,1319].forEach((f,i)=>tone(f,0.12,'square',0.17,f,i*0.05)); noise(0.05,0.06,3000); }
+function sfxNope(){ if(!AC) return; tone(210,0.1,'square',0.12,150); tone(150,0.12,'square',0.1,110,0.05); }
+function sfxRevive(){ if(!AC) return; [523,659,784,1047,1319,1568].forEach((f,i)=>tone(f,0.22,'triangle',0.2,f,i*0.06)); noise(0.3,0.12,1200); }
 
 // ============================================================
 //  WEAPON LADDER  (climb: survive a wave -> next weapon)
@@ -144,7 +149,18 @@ const WEAPONS = [
   { name:'RAY GUN',      key:'ray',      kind:'ray',    auto:true,  cd:65,  dmg:4,   speed:22,   count:1, spread:0.03, size:5,   pierce:3,  kb:6,  life:60,  shake:2 },
 ];
 const MAXW = WEAPONS.length - 1;
-const weaponForWave = (w)=> Math.min(w-1, MAXW);
+
+// ---- coin shop: a simple, legible ladder you BUY up with coins ----
+// rocks are free (owned from the start); each gun costs coins, escalating.
+const WPRICE = [0, 12, 30, 55, 85, 120, 170, 240];
+// short, readable upgrade list (level dots shown in shop)
+const UPGRADES = [
+  { key:'speed', name:'MOVE SPEED', max:3, prices:[20,45,80],  blurb:'+12% run speed' },
+  { key:'fire',  name:'FIRE RATE',  max:3, prices:[25,55,95],  blurb:'-14% cooldown' },
+  { key:'coin',  name:'COIN MAGNET',max:1, prices:[40],        blurb:'+50% coins' },
+  { key:'life',  name:'EXTRA LIFE', max:2, prices:[60,120],    blurb:'revive once' },
+];
+const upPrice = (u)=> (up[u.key] < u.max ? u.prices[up[u.key]] : null);
 
 // ============================================================
 //  ZOMBIE TYPES
@@ -179,10 +195,19 @@ let phase = 'intro';        // within live: 'intro' | 'fight' | 'clear'
 let wave = 1, wavesCleared = 0, kills = 0;
 let phaseT = 0;             // ms timer for intro/clear beats
 let spawnRemaining = 0, spawnTimer = 0;
-let curWeapon = 0, lastFire = 0, semiLatch = false;
+let curWeapon = 0, lastFire = 0;
 let shake = 0, flashUnlock = 0, weaponPulse = 0;
 let overT = 0, newBest = false;
 let waveComposition = [];
+// ---- coin economy + shop progression (persists across the run) ----
+let coins = 0;
+let owned = [];                          // owned[i]=true -> weapon i purchased
+let up = { speed:0, fire:0, coin:0, life:0 }; // upgrade levels; life = revives banked
+let invuln = 0;                          // ms of post-revive invulnerability
+let buyFlash = 0;                        // brief shop-card pop after a purchase
+let shopBuzz = '';                       // transient shopkeeper line
+// ---- control-hint (fades once the player clearly has it) ----
+let hasMoved = false, hasFired = false, hintLearnedT = 0, hintShownT = 0, hintAlpha = 1;
 
 // ---------- input ----------
 const keys = {};
@@ -200,8 +225,9 @@ window.addEventListener('keydown', (e)=>{
   if(k===' '||k==='enter'){
     if(state==='ready'){ startGame(); return; }
     if(state==='over'){ if(overT>28) startGame(); return; }
+    if(state==='live' && phase==='shop'){ nextWaveFromShop(); return; }
   }
-  if((k===' ') && state==='live'){ onFireStart(); }
+  if((k===' ') && state==='live' && phase!=='shop'){ onFireStart(); }
 }, {passive:false});
 window.addEventListener('keyup', (e)=>{
   const k = e.key.toLowerCase();
@@ -226,6 +252,7 @@ function pointerDown(e){
   if(state==='ready'){ e.preventDefault(); startGame(); return; }
   if(state==='over'){ e.preventDefault(); if(overT>28) startGame(); return; }
   if(state!=='live') return;
+  if(phase==='shop'){ e.preventDefault(); handleShopClick(v); return; }
   if(IS_TOUCH){
     e.preventDefault();
     if(v.x < W*0.5 && stickId===null){
@@ -264,7 +291,7 @@ canvas.addEventListener('pointermove', pointerMove, {passive:false});
 window.addEventListener('pointerup', pointerUp, {passive:false});
 window.addEventListener('pointercancel', pointerUp, {passive:false});
 
-function onFireStart(){ firing=true; if(state==='live'){ const w=WEAPONS[curWeapon]; if(!w.auto){ semiLatch=false; tryFire(); } } }
+function onFireStart(){ firing=true; if(state==='live') tryFire(); }
 function onFireEnd(){ let anyFire=false; for(const k in pointers) if(pointers[k].kind==='fire') anyFire=true; if(!anyFire && !keys[' ']) firing=false; }
 
 // ============================================================
@@ -277,19 +304,20 @@ function startGame(){
   resetPools();
   player.x=W/2; player.y=H/2; player.vx=0; player.vy=0; player.alive=true; player.hurtFlash=0; player.walk=0;
   wave=1; wavesCleared=0; kills=0; shake=0; challengePosted=false;
-  firing=false; semiLatch=false; lastFire=0;
+  firing=false; lastFire=0;
+  // fresh economy every run (roguelike): rocks free, buy the rest with coins
+  coins=0; owned=[true,false,false,false,false,false,false,false]; up={speed:0,fire:0,coin:0,life:0};
+  curWeapon=0; invuln=0; buyFlash=0; shopBuzz='';
+  // control hint resets so a first-time-feeling prompt shows again
+  hasMoved=false; hasFired=false; hintLearnedT=0; hintShownT=0; hintAlpha=1;
   state='live';
   startWave(1);
 }
 function startWave(n){
   wave = n;
-  const prev = curWeapon;
-  curWeapon = weaponForWave(n);
   phase='intro'; phaseT=1350;
   weaponPulse = 1;
-  if(n===1){ /* no fanfare on first */ }
-  else if(curWeapon!==prev){ sfxUnlock(); flashUnlock=1; }
-  else { sfxWaveClear(); }
+  firing=false;               // don't carry a held trigger out of the shop
   // build composition
   buildComposition(n);
   spawnRemaining = waveComposition.length;
@@ -332,11 +360,15 @@ function spawnZombie(type){
 function countActive(pl){ let n=0; for(const o of pl) if(o.active) n++; return n; }
 
 function tryFire(){
+  if(state!=='live' || phase==='shop' || !player.alive) return;
   const now = performance.now();
   const w = WEAPONS[curWeapon];
-  if(now - lastFire < w.cd) return;
-  if(!w.auto && semiLatch) return;
-  lastFire = now; semiLatch = true;
+  // HOLD-to-repeat for ALL weapons: the cooldown alone rate-limits the trigger,
+  // so a single click fires once and holding auto-repeats at the weapon's cadence.
+  const cd = w.cd * (1 - up.fire*0.14);
+  if(now - lastFire < cd) return;
+  lastFire = now;
+  hasFired = true;
   // aim
   const ang = getAim();
   const tipX = player.x + Math.cos(ang)*18, tipY = player.y + Math.sin(ang)*18 - 4;
@@ -387,15 +419,32 @@ function killZombie(z){
   z.active=false;
   const t = ZT[z.type];
   kills += 1;
+  // coins: score value x2, +50% with the COIN MAGNET upgrade. No run earns zero.
+  const drop = Math.max(1, Math.round(t.score*2 * (1 + up.coin*0.5)));
+  coins += drop;
   burst(z.x,z.y, z.type==='brute'?16:9, t.hi, z.type==='brute'?5:3.5, z.type==='brute'?6:4, 'star');
-  burst(z.x,z.y, 5, COL.gold, 3, 3, 'coin');
+  // coin sparkle that flings toward the hero (the "pickup" ching sells the earn)
+  for(let i=0;i<Math.min(6,drop+2);i++){ const a=rng()*6.28; addPart(z.x,z.y,Math.cos(a)*rr(1,3),Math.sin(a)*rr(1,3)-1.5,rr(3,5),ri(16,26),COL.gold,'coin'); }
+  addText(z.x, z.y - z.r - 14, '+'+drop, COL.gold, 14);
   addPart(z.x,z.y-2,0,-1.2, z.r*1.1, 14, t.body, 'pop');
-  sfxZDeath();
+  sfxZDeath(); sfxCoin();
   if(challengeKills && kills>challengeKills && !challengePosted){ challengePosted=true; post({gs:'challenge_beaten', score:kills}); burst(player.x,player.y,20,COL.gold,5,5,'star'); }
 }
 
+function reviveNova(){
+  up.life--;
+  invuln = 1700;
+  player.hurtFlash = 10;
+  // shove the whole horde outward and grant a breath of safety (a rescue, not a farm)
+  for(const z of zombies){ if(!z.active) continue; const dx=z.x-player.x, dy=z.y-player.y, d=Math.hypot(dx,dy)||1; z.vx += (dx/d)*22; z.vy += (dy/d)*22; z.flash=6; }
+  addPart(player.x,player.y,0,0,150,20,'#FFE08A','ring');
+  burst(player.x,player.y, 22, COL.star, 6, 6, 'star');
+  addText(player.x, player.y-30, 'REVIVE!', COL.gold, 22);
+  shake=Math.min(shake+8,14); sfxRevive();
+}
 function die(){
-  if(!player.alive) return;
+  if(!player.alive || invuln>0) return;
+  if(up.life>0){ reviveNova(); return; }
   player.alive=false; state='over'; overT=0;
   wavesCleared = Math.max(wavesCleared, wave-1);
   const finalWaves = wavesCleared;
@@ -411,23 +460,68 @@ function die(){
 }
 
 // ============================================================
+//  SHOP  (bright Pokémon-mart between waves — buy up the gun ladder + upgrades)
+// ============================================================
+const BUZZ = ['Welcome to the Mart!','Stock up, survivor!','Coins burning a hole?','Grab a bigger boom!','Stay frosty out there!'];
+function openShop(){ phase='shop'; firing=false; weaponPulse=1; shopBuzz=BUZZ[ri(0,BUZZ.length-1)]; sfxShop(); }
+function nextWeaponIndex(){ for(let i=0;i<WEAPONS.length;i++) if(!owned[i]) return i; return -1; }
+function nextWaveFromShop(){ if(phase!=='shop') return; sfxWaveClear(); startWave(wave+1); }
+function inRect(v,r){ return v.x>=r.x && v.x<=r.x+r.w && v.y>=r.y && v.y<=r.y+r.h; }
+function shopLayout(){
+  const n=WEAPONS.length, cw2=94, gap=6, totW=n*cw2+(n-1)*gap, sx=W/2-totW/2, cy=150, ch2=96;
+  const wc=[]; for(let i=0;i<n;i++) wc.push({i, x:sx+i*(cw2+gap), y:cy, w:cw2, h:ch2});
+  const un=UPGRADES.length, uw=190, ug=14, utot=un*uw+(un-1)*ug, usx=W/2-utot/2, uy=276, uh=92;
+  const uc=[]; for(let j=0;j<un;j++) uc.push({u:UPGRADES[j], x:usx+j*(uw+ug), y:uy, w:uw, h:uh});
+  return { wc, uc, go:{x:W/2-150,y:432,w:300,h:48} };
+}
+function clickWeaponCard(i){
+  if(owned[i]){ if(curWeapon!==i){ curWeapon=i; weaponPulse=1; buyFlash=1; sfxBuy(); shopBuzz='Equipped '+WEAPONS[i].name+'!'; } return; }
+  if(i!==nextWeaponIndex()){ sfxNope(); shopBuzz='Buy them in order!'; return; }
+  const price=WPRICE[i];
+  if(coins<price){ sfxNope(); shopBuzz='Not enough coins!'; return; }
+  coins-=price; owned[i]=true; curWeapon=i; weaponPulse=1; buyFlash=1; flashUnlock=1;
+  sfxBuy(); shopBuzz=WEAPONS[i].name+'! Nice choice.';
+}
+function buyUpgrade(u){
+  const price=upPrice(u);
+  if(price===null){ sfxNope(); shopBuzz=u.name+' maxed!'; return; }
+  if(coins<price){ sfxNope(); shopBuzz='Not enough coins!'; return; }
+  coins-=price; up[u.key]++; buyFlash=1; sfxBuy(); shopBuzz=u.name+' up!';
+}
+function handleShopClick(v){
+  const L=shopLayout();
+  for(const c of L.wc) if(inRect(v,c)){ clickWeaponCard(c.i); return; }
+  for(const c of L.uc) if(inRect(v,c)){ buyUpgrade(c.u); return; }
+  if(inRect(v,L.go)) nextWaveFromShop();
+}
+
+// ============================================================
 //  UPDATE
 // ============================================================
 let last = performance.now(), stepAcc=0;
 function update(dt){
   const fr = dt/16.667;
   if(state==='live'){
-    updatePlayer(fr, dt);
-    updatePhase(dt);
-    updateZombies(fr);
-    updateBullets(fr);
+    if(phase==='shop'){ updatePhase(dt); }   // paused arena; just idle
+    else { updatePlayer(fr, dt); updatePhase(dt); updateZombies(fr); updateBullets(fr); }
   }
   updateParts(fr);
   updateTexts(fr);
+  updateHint(dt, fr);
   if(shake>0) shake=Math.max(0, shake-fr*0.8);
   if(flashUnlock>0) flashUnlock=Math.max(0,flashUnlock-fr*0.03);
   if(weaponPulse>0) weaponPulse=Math.max(0,weaponPulse-fr*0.03);
+  if(buyFlash>0) buyFlash=Math.max(0,buyFlash-fr*0.045);
   if(state==='over') overT+=fr;
+}
+function updateHint(dt, fr){
+  let want=0;
+  if(state==='live' && wave===1 && phase!=='shop'){
+    if(hasMoved && hasFired){ hintLearnedT+=dt; want = hintLearnedT>1400 ? 0 : 1; }
+    else { hintShownT+=dt; want = hintShownT>10000 ? 0 : 1; }
+  } else if(state==='live' && wave===1 && phase==='shop'){ want = hintAlpha; }
+  hintAlpha += (want-hintAlpha)*0.09*fr;
+  if(hintAlpha<0.01) hintAlpha=0;
 }
 
 let stepBlip=0;
@@ -441,7 +535,8 @@ function updatePlayer(fr, dt){
   ix += moveVX; iy += moveVY;
   const m = Math.hypot(ix,iy);
   if(m>1){ ix/=m; iy/=m; }
-  const SPD = 3.05;
+  if(m>0.05) hasMoved = true;
+  const SPD = 3.05 * (1 + up.speed*0.12);
   player.vx += (ix*SPD - player.vx)*0.28*fr;
   player.vy += (iy*SPD - player.vy)*0.28*fr;
   player.x += player.vx*fr; player.y += player.vy*fr;
@@ -451,8 +546,9 @@ function updatePlayer(fr, dt){
   player.walk += spd*0.12*fr;
   if(spd>0.6){ stepBlip += dt; if(stepBlip>230){ stepBlip=0; sfxStep(); } }
   player.aim = getAim();
-  // auto fire for auto weapons while held
-  if(firing && WEAPONS[curWeapon].auto) tryFire();
+  // HOLD to keep firing for EVERY weapon (auto or semi) — cooldown paces it
+  if(firing) tryFire();
+  if(invuln>0) invuln-=dt;
   if(player.hurtFlash>0) player.hurtFlash-=fr;
 }
 
@@ -477,8 +573,9 @@ function updatePhase(dt){
     }
   } else if(phase==='clear'){
     phaseT-=dt;
-    if(phaseT<=0){ startWave(wave+1); }
+    if(phaseT<=0){ openShop(); }
   }
+  // phase==='shop' waits for the player (GO button / SPACE) — no auto-advance
 }
 
 // scratch for separation
@@ -508,8 +605,8 @@ function updateZombies(fr){
     z.bob += (0.14 + z.speed*0.04)*fr;
     if(z.flash>0) z.flash-=fr;
     if(z.hurt>0) z.hurt-=fr;
-    // touch = death
-    if(player.alive && d < z.r + player.r - 2){ die(); }
+    // touch = death (unless briefly invulnerable after a revive)
+    if(player.alive && invuln<=0 && d < z.r + player.r - 2){ die(); }
   }
 }
 
@@ -593,7 +690,8 @@ function draw(){
   drawTexts();
 
   ctx.translate(-sx,-sy);
-  if(state==='live') drawHUD();
+  if(state==='live' && phase!=='shop') drawHUD();
+  if(state==='live' && phase==='shop') drawShop();
   if(state==='ready') drawReady();
   if(state==='over') drawOver();
   if(flashUnlock>0){ ctx.fillStyle='rgba(255,243,196,'+(flashUnlock*0.35)+')'; ctx.fillRect(0,0,W,H); }
@@ -728,6 +826,13 @@ function drawPlayer(){
   const bob = Math.sin(player.walk)*2.2;
   const x=player.x, y=player.y+bob;
   const ang=player.aim;
+  // post-revive invulnerability: shield ring + blink
+  if(invuln>0){
+    const p=1+Math.sin(performance.now()/90)*0.12;
+    ctx.save(); ctx.globalAlpha=0.35+Math.sin(performance.now()/110)*0.2; ctx.strokeStyle=COL.gold; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(x,y-2,player.r*1.9*p,0,6.28); ctx.stroke(); ctx.restore();
+    if(Math.floor(performance.now()/90)%2===0){ /* blink: skip a frame of body draw */ }
+  }
   ctx.save(); ctx.translate(x,y);
   // legs (little walk)
   const leg=Math.sin(player.walk)*3;
@@ -856,10 +961,52 @@ function drawHUD(){
     pill(W/2-92,12,184,30, beaten?COL.z_shamHi:COL.cream);
     textOutline(beaten?'✓ TARGET BEAT!':'TARGET: '+challengeKills+' kills', W/2, 34, 15, beaten?'#2f6b2f':COL.roofRed, 'center', '800');
   }
+  // coin balance pill (always visible, under the wave badge)
+  pill(14,52,116,30,COL.gold);
+  drawCoin(30,67,9);
+  textOutline(String(coins), 44, 74, 18, COL.ink, 'left', '800');
+  // banked lives (revives) as little hearts, if any
+  if(up.life>0){ for(let i=0;i<up.life;i++) drawHeart(112-i*16, 67, 6); }
   // weapon panel (bottom-center)
   drawWeaponPanel();
   // touch controls hint / visuals
   drawTouchControls();
+  // legible control prompt (fades once the player clearly has it)
+  drawControlHint();
+}
+function drawHeart(x,y,r){ ctx.fillStyle=COL.roofRed; ctx.strokeStyle=COL.ink; ctx.lineWidth=1.6; ctx.beginPath(); ctx.moveTo(x,y+r*0.9); ctx.bezierCurveTo(x-r*1.4,y-r*0.4,x-r*0.5,y-r*1.2,x,y-r*0.3); ctx.bezierCurveTo(x+r*0.5,y-r*1.2,x+r*1.4,y-r*0.4,x,y+r*0.9); ctx.fill(); ctx.stroke(); }
+function drawCoin(x,y,r){
+  ctx.strokeStyle=COL.ink; ctx.lineWidth=Math.max(1.4,r*0.16);
+  ctx.fillStyle='#E8B923'; ctx.beginPath(); ctx.arc(x,y,r,0,6.28); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=COL.gold; ctx.beginPath(); ctx.arc(x,y,r*0.66,0,6.28); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.6)'; ctx.beginPath(); ctx.arc(x-r*0.28,y-r*0.3,r*0.2,0,6.28); ctx.fill();
+}
+function drawControlHint(){
+  if(hintAlpha<=0.02) return;
+  ctx.save(); ctx.globalAlpha=Math.min(1,hintAlpha);
+  if(IS_TOUCH){
+    // label the two thumb zones so the scheme is never a guess
+    const ly=H-70;
+    ctx.globalAlpha=Math.min(0.85,hintAlpha*0.85);
+    ctx.fillStyle=COL.cream; ctx.strokeStyle=COL.ink; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(96,ly,44,0,6.28); ctx.fill(); ctx.stroke();
+    ctx.globalAlpha=Math.min(1,hintAlpha);
+    textOutline('MOVE', 96, ly+6, 17, COL.hero, 'center','800');
+    textOutline('drag anywhere', 96, ly+40, 12, COL.cream, 'center','800');
+    textOutline('HOLD to shoot', W-70, H-124, 14, COL.cream, 'center','800');
+    // arrow to fire button
+    textOutline('▼', W-70, H-108, 16, COL.roofRed, 'center','800');
+  } else {
+    const bob=Math.sin(performance.now()/300)*2;
+    const y=H-96+bob, bw=470;
+    ctx.globalAlpha=Math.min(0.92,hintAlpha);
+    pill(W/2-bw/2, y-26, bw, 40, COL.cream);
+    ctx.globalAlpha=Math.min(1,hintAlpha);
+    textOutline('WASD / arrows: MOVE', W/2-bw/2+92, y+1, 18, COL.hero, 'center','800');
+    textOutline('·', W/2, y+1, 20, COL.ink, 'center','800');
+    textOutline('HOLD to shoot', W/2+bw/2-96, y+1, 18, COL.roofRed, 'center','800');
+  }
+  ctx.restore();
 }
 function drawWeaponPanel(){
   const w=WEAPONS[curWeapon];
@@ -873,9 +1020,10 @@ function drawWeaponPanel(){
   drawWeaponIcon(0,0,w.key);
   ctx.restore();
   textOutline(w.name, px+46, py+23, 17, COL.roofRed, 'left', '800');
-  // next hint (same line, right side)
-  let hint = curWeapon<MAXW ? ('NEXT: '+WEAPONS[curWeapon+1].name+' @ W'+(wave+1)) : 'MAX ARSENAL!';
-  textOutline(hint, px+panelW-14, py+22, 13, curWeapon<MAXW?'#6a5a7a':COL.roofRed, 'right', '800');
+  // next hint (same line, right side) — new guns come from the SHOP now
+  const ni = nextWeaponIndex();
+  let hint = ni>=0 ? ('SHOP ▸ '+WEAPONS[ni].name+' '+WPRICE[ni]+'c') : 'MAX ARSENAL!';
+  textOutline(hint, px+panelW-14, py+22, 13, ni>=0?'#6a5a7a':COL.roofRed, 'right', '800');
   ctx.restore();
 }
 function drawWeaponIcon(x,y,key){
@@ -907,6 +1055,105 @@ function drawTouchControls(){
   ctx.globalAlpha=1; drawWeaponIcon(W-70,H-70,WEAPONS[curWeapon].key);
 }
 
+// ---------- shop overlay (bright Pokémon-mart) ----------
+const WSHORT=['ROCKS','PISTOL','SHOTGUN','MG','X-BOW','FLAME','ROCKET','RAY'];
+function drawUpgradeIcon(x,y,key){
+  ctx.save(); ctx.translate(x,y); ctx.strokeStyle=COL.ink; ctx.lineWidth=2; ctx.lineJoin='round';
+  if(key==='speed'){ // speedy boot
+    ctx.fillStyle=COL.hero; roundRect(-8,-9,10,13,3); ctx.fill(); ctx.stroke(); roundRect(-8,2,17,6,2); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle=COL.cream; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(5,-6); ctx.lineTo(11,-9); ctx.moveTo(5,-1); ctx.lineTo(12,-3); ctx.stroke();
+  } else if(key==='fire'){ // lightning
+    ctx.fillStyle=COL.gold; ctx.beginPath(); ctx.moveTo(3,-11); ctx.lineTo(-6,2); ctx.lineTo(0,2); ctx.lineTo(-3,11); ctx.lineTo(8,-3); ctx.lineTo(1,-3); ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else if(key==='coin'){ // horseshoe magnet
+    ctx.strokeStyle=COL.roofRed; ctx.lineWidth=5; ctx.beginPath(); ctx.arc(0,-1,8,Math.PI,2*Math.PI); ctx.stroke();
+    ctx.strokeStyle=COL.ink; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(0,-1,8,Math.PI,2*Math.PI); ctx.stroke();
+    ctx.fillStyle='#dfe6ee'; ctx.strokeStyle=COL.ink; ctx.lineWidth=1.5;
+    roundRect(-10.5,-1,5,8,1); ctx.fill(); ctx.stroke(); roundRect(5.5,-1,5,8,1); ctx.fill(); ctx.stroke();
+  } else if(key==='life'){ drawHeart(0,3,8); }
+  ctx.restore();
+}
+function drawShopkeeper(x,y){
+  const bob=Math.sin(performance.now()/500)*2;
+  ctx.save(); ctx.translate(x,y+bob); ctx.strokeStyle=COL.ink; ctx.lineWidth=3;
+  ctx.fillStyle=COL.z_sham; roundRect(-15,2,30,22,8); ctx.fill(); ctx.stroke();      // apron
+  ctx.fillStyle=COL.heroSkin; ctx.beginPath(); ctx.arc(0,-11,12,0,6.28); ctx.fill(); ctx.stroke(); // head
+  ctx.fillStyle=COL.roofRed; ctx.beginPath(); ctx.moveTo(-13,-13); ctx.quadraticCurveTo(0,-30,13,-13); ctx.closePath(); ctx.fill(); ctx.stroke(); // cap
+  ctx.beginPath(); ctx.moveTo(2,-13); ctx.lineTo(16,-10); ctx.quadraticCurveTo(8,-9,2,-11); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=COL.ink; ctx.beginPath(); ctx.arc(-4,-11,1.9,0,6.28); ctx.arc(4,-11,1.9,0,6.28); ctx.fill();
+  ctx.strokeStyle=COL.ink; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(0,-8,4,0.12*Math.PI,0.88*Math.PI); ctx.stroke();
+  const wv=Math.sin(performance.now()/170)*0.45;  // waving hand
+  ctx.save(); ctx.translate(15,6); ctx.rotate(-0.5+wv); ctx.fillStyle=COL.heroSkin; ctx.beginPath(); ctx.arc(0,-8,4.2,0,6.28); ctx.fill(); ctx.stroke(); ctx.restore();
+  ctx.restore();
+}
+function drawShop(){
+  const L=shopLayout();
+  ctx.fillStyle='rgba(123,208,238,0.42)'; ctx.fillRect(0,0,W,H); // sunny wash, keeps it bright
+  const PX=48,PY=32,PW=864,PH=482;
+  ctx.fillStyle='rgba(58,46,74,0.25)'; roundRect(PX+6,PY+9,PW,PH,20); ctx.fill();
+  ctx.fillStyle=COL.cream; ctx.strokeStyle=COL.ink; ctx.lineWidth=4; roundRect(PX,PY,PW,PH,20); ctx.fill(); ctx.stroke();
+  // striped mart awning
+  ctx.save(); roundRect(PX,PY,PW,56,20); ctx.clip();
+  const sw=44; for(let i=0;i*sw<PW+sw;i++){ ctx.fillStyle=(i&1)?COL.roofRed:'#F6837A'; ctx.fillRect(PX+i*sw,PY,sw,56); }
+  ctx.restore();
+  ctx.strokeStyle=COL.ink; ctx.lineWidth=4; roundRect(PX,PY,PW,56,20); ctx.stroke();
+  // scalloped awning edge
+  ctx.fillStyle=COL.cream; ctx.strokeStyle=COL.ink; ctx.lineWidth=2;
+  for(let i=0;i*30<PW-8;i++){ ctx.beginPath(); ctx.arc(PX+18+i*30,PY+56,13,0,Math.PI); ctx.fill(); ctx.stroke(); }
+  textOutline('SURVIVOR MART', W/2, PY+38, 30, COL.cream, 'center','800');
+  // coins (top-right)
+  drawCoin(PX+PW-128, PY+34, 15);
+  textOutline(String(coins), PX+PW-106, PY+42, 27, COL.gold, 'left','800');
+  textOutline('COINS', PX+PW-106, PY+56, 11, COL.cream, 'left','800');
+  // shopkeeper + speech bubble
+  drawShopkeeper(PX+48, PY+96);
+  if(shopBuzz){
+    const bw=Math.max(120, shopBuzz.length*8.2+22), bx=PX+86, by=PY+64;
+    ctx.fillStyle='#fff'; ctx.strokeStyle=COL.ink; ctx.lineWidth=2.5; roundRect(bx,by,bw,30,10); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(bx+4,by+24); ctx.lineTo(bx-10,by+36); ctx.lineTo(bx+18,by+29); ctx.closePath(); ctx.fill(); ctx.stroke();
+    textOutline(shopBuzz, bx+bw/2, by+20, 14, COL.ink, 'center','800');
+  }
+  // ---- weapons ladder ----
+  textOutline('WEAPONS  ▸  buy up the ladder', L.wc[0].x+128, L.wc[0].y-10, 14, COL.roofRed, 'left','800');
+  for(const c of L.wc){
+    const i=c.i, ownd=owned[i], eq=(curWeapon===i), isNext=(i===nextWeaponIndex()), price=WPRICE[i], aff=coins>=price;
+    const locked=!ownd&&!isNext;
+    ctx.save(); if(locked) ctx.globalAlpha=0.5;
+    let bg=COL.cream; if(eq) bg=COL.z_shamHi; else if(isNext&&aff) bg='#FFF7DA';
+    ctx.fillStyle=bg; ctx.strokeStyle=eq?'#2f8f3f':COL.ink; ctx.lineWidth=eq?4:2.5; roundRect(c.x,c.y,c.w,c.h,10); ctx.fill(); ctx.stroke();
+    if(isNext&&aff){ const g=0.55+Math.sin(performance.now()/220)*0.45; ctx.save(); ctx.globalAlpha=g*0.7; ctx.strokeStyle=COL.gold; ctx.lineWidth=3; roundRect(c.x-2,c.y-2,c.w+4,c.h+4,12); ctx.stroke(); ctx.restore(); }
+    const cx=c.x+c.w/2, iy=c.y+30;
+    ctx.fillStyle='#fff'; ctx.strokeStyle=COL.ink; ctx.lineWidth=2.5; ctx.beginPath(); ctx.arc(cx,iy,19,0,6.28); ctx.fill(); ctx.stroke();
+    ctx.save(); ctx.translate(cx,iy); ctx.scale(1.15,1.15); drawWeaponIcon(0,0,WEAPONS[i].key); ctx.restore();
+    textOutline(WSHORT[i], cx, c.y+62, 12, COL.ink, 'center','800');
+    if(eq) textOutline('EQUIPPED', cx, c.y+84, 12, '#2f8f3f','center','800');
+    else if(ownd) textOutline('TAP=EQUIP', cx, c.y+84, 10.5, '#6a5a7a','center','800');
+    else if(isNext){ drawCoin(cx-18, c.y+80, 7); textOutline(String(price), cx-6, c.y+85, 15, aff?'#C88A00':'#b08a8a','left','800'); }
+    else { ctx.fillStyle='#9a8aa8'; ctx.strokeStyle=COL.ink; ctx.lineWidth=2; roundRect(cx-7,c.y+79,14,10,2); ctx.fill(); ctx.stroke(); ctx.beginPath(); ctx.arc(cx,c.y+79,4.5,Math.PI,2*Math.PI); ctx.stroke(); }
+    ctx.restore();
+  }
+  // ---- upgrades ----
+  textOutline('UPGRADES', L.uc[0].x, L.uc[0].y-10, 14, COL.roofRed, 'left','800');
+  for(const c of L.uc){
+    const u=c.u, lvl=up[u.key], price=upPrice(u), maxed=(price===null), aff=!maxed&&coins>=price;
+    let bg=COL.cream; if(maxed) bg=COL.z_shamHi; else if(aff) bg='#FFF7DA';
+    ctx.fillStyle=bg; ctx.strokeStyle=COL.ink; ctx.lineWidth=2.5; roundRect(c.x,c.y,c.w,c.h,10); ctx.fill(); ctx.stroke();
+    if(aff){ const g=0.5+Math.sin(performance.now()/220)*0.5; ctx.save(); ctx.globalAlpha=g*0.55; ctx.strokeStyle=COL.gold; ctx.lineWidth=3; roundRect(c.x-2,c.y-2,c.w+4,c.h+4,12); ctx.stroke(); ctx.restore(); }
+    ctx.fillStyle='#fff'; ctx.strokeStyle=COL.ink; ctx.lineWidth=2.5; ctx.beginPath(); ctx.arc(c.x+26,c.y+30,17,0,6.28); ctx.fill(); ctx.stroke();
+    drawUpgradeIcon(c.x+26,c.y+30,u.key);
+    textOutline(u.name, c.x+50, c.y+26, 14, COL.ink, 'left','800');
+    textOutline(u.blurb, c.x+50, c.y+44, 11, '#6a5a7a', 'left','800');
+    for(let k=0;k<u.max;k++){ ctx.fillStyle=k<lvl?COL.z_sham:'#dcd2e6'; ctx.strokeStyle=COL.ink; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(c.x+56+k*16,c.y+64,5,0,6.28); ctx.fill(); ctx.stroke(); }
+    if(maxed) textOutline('MAX', c.x+c.w-14, c.y+70, 15, '#2f8f3f','right','800');
+    else { drawCoin(c.x+c.w-60, c.y+65, 8); textOutline(String(price), c.x+c.w-46, c.y+70, 16, aff?'#C88A00':'#b08a8a','left','800'); }
+  }
+  // ---- NEXT WAVE button ----
+  const g=L.go, pr=1+Math.sin(performance.now()/240)*0.05;
+  ctx.save(); ctx.translate(g.x+g.w/2,g.y+g.h/2); ctx.scale(pr,pr);
+  pill(-g.w/2,-g.h/2,g.w,g.h,COL.z_shamHi);
+  textOutline('NEXT WAVE  ▸  W'+(wave+1), 0, 7, 21, COL.ink,'center','800'); ctx.restore();
+  textOutline(IS_TOUCH?'tap a gun to buy · tap NEXT WAVE to fight':'click to buy · SPACE / ENTER = next wave', W/2, g.y+g.h+18, 12, '#4A3B5C','center','800');
+}
+
 // ---------- overlays ----------
 function drawReady(){
   ctx.fillStyle='rgba(74,59,90,0.28)'; ctx.fillRect(0,0,W,H);
@@ -924,8 +1171,8 @@ function drawReady(){
     ctx.scale(1.05,1.05); drawWeaponIcon(0,0,WEAPONS[i].key); ctx.restore();
     if(i<n-1){ ctx.fillStyle=COL.cream; ctx.strokeStyle=COL.ink; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(x+24,y); ctx.lineTo(x+gap-24,y); ctx.stroke(); }
   }
-  textOutline('every wave = a new weapon', W/2, 348, 16, COL.cream, 'center', '800');
-  const hint = IS_TOUCH ? 'left thumb: MOVE   ·   right: FIRE (auto-aim)' : 'WASD / arrows: MOVE   ·   mouse aim + click: FIRE';
+  textOutline('kill zombies → earn coins → buy the arsenal in the MART', W/2, 348, 16, COL.cream, 'center', '800');
+  const hint = IS_TOUCH ? 'left thumb: MOVE   ·   right: HOLD to shoot (auto-aim)' : 'WASD / arrows: MOVE   ·   HOLD mouse / Space to shoot';
   textOutline(hint, W/2, 402, 17, COL.cream, 'center', '800');
   const pr = 1+Math.sin(performance.now()/240)*0.06;
   ctx.save(); ctx.translate(W/2,452); ctx.scale(pr,pr);
@@ -969,7 +1216,9 @@ function frame(now){
   // opt-in read-only snapshot for scripted drive/verify (no cost unless requested)
   if(window.__paWant){
     const zs=[]; for(const z of zombies){ if(z.active) zs.push({x:z.x,y:z.y,hp:z.hp,maxhp:z.maxhp}); }
-    window.__pa = { state, phase, wave, wavesCleared, curWeapon, weapon:WEAPONS[curWeapon].name, kills, px:player.x, py:player.y, alive:player.alive, zombies:zs };
+    window.__pa = { state, phase, wave, wavesCleared, curWeapon, weapon:WEAPONS[curWeapon].name, kills, px:player.x, py:player.y, alive:player.alive, zombies:zs,
+      coins, owned:owned.slice(), up:{speed:up.speed,fire:up.fire,coin:up.coin,life:up.life}, nextWeapon:nextWeaponIndex(), invuln,
+      shop:(phase==='shop'?shopLayout():null), lastFire };
   }
   if(!postedReady){ postedReady=true; post({gs:'ready'}); }
   requestAnimationFrame(frame);
