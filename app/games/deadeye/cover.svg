@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#221A31"/>
+      <stop offset="0.42" stop-color="#3A2A4A"/>
+      <stop offset="0.68" stop-color="#8A5638"/>
+      <stop offset="0.86" stop-color="#C97B45"/>
+      <stop offset="1" stop-color="#D68E4E"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.62" cy="0.62" r="0.5">
+      <stop offset="0" stop-color="#FFE0A8" stop-opacity="0.95"/>
+      <stop offset="0.3" stop-color="#F0AA60" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#F0AA60" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="vig" cx="0.5" cy="0.5" r="0.72">
+      <stop offset="0.55" stop-color="#08060E" stop-opacity="0"/>
+      <stop offset="1" stop-color="#06040A" stop-opacity="0.9"/>
+    </radialGradient>
+    <font-face font-family="hand"/>
+  </defs>
+
+  <rect width="640" height="400" fill="url(#sky)"/>
+  <ellipse cx="400" cy="230" rx="260" ry="200" fill="url(#sun)"/>
+  <circle cx="400" cy="215" r="26" fill="#FFEBBE" opacity="0.9"/>
+
+  <!-- stars -->
+  <g fill="#ffffff" opacity="0.5">
+    <rect x="60" y="40" width="2" height="2"/><rect x="140" y="70" width="2" height="2"/>
+    <rect x="210" y="30" width="2" height="2"/><rect x="90" y="110" width="2" height="2"/>
+    <rect x="30" y="80" width="2" height="2"/><rect x="180" y="95" width="2" height="2"/>
+  </g>
+
+  <!-- hills -->
+  <path d="M0,210 Q120,175 240,200 T480,190 T640,205 L640,400 L0,400 Z" fill="#3E2E4C"/>
+  <path d="M0,250 Q160,225 320,248 T640,242 L640,400 L0,400 Z" fill="#33263F"/>
+
+  <!-- ground -->
+  <rect x="0" y="250" width="640" height="150" fill="#463322"/>
+  <rect x="0" y="330" width="640" height="70" fill="#2A1E16"/>
+
+  <!-- range flag -->
+  <line x1="560" y1="150" x2="560" y2="250" stroke="#2A2030" stroke-width="3"/>
+  <path d="M560,154 Q540,150 522,158 Q504,166 500,158 L500,178 Q520,186 540,178 Q552,174 560,178 Z" fill="#B23A2C"/>
+
+  <!-- paper target with bullseye, rising from a crate -->
+  <g transform="translate(230,250)">
+    <rect x="-5" y="30" width="10" height="120" fill="#4A3826"/>
+    <path d="M-38,50 Q-44,-10 -30,-34 Q-24,-46 -14,-52 Q-20,-76 0,-76 Q20,-76 14,-52 Q24,-46 30,-34 Q44,-10 38,50 Z" fill="#E9CB92" stroke="#6E5233" stroke-width="3"/>
+    <ellipse cx="9" cy="8" rx="20" ry="34" fill="#785A32" opacity="0.16"/>
+    <circle cx="0" cy="-4" r="20" fill="#B23A2C"/>
+    <circle cx="0" cy="-4" r="13" fill="#E9CB92"/>
+    <circle cx="0" cy="-4" r="7" fill="#B23A2C"/>
+  </g>
+  <!-- crate cover in front -->
+  <g transform="translate(230,300)">
+    <rect x="-56" y="0" width="112" height="92" fill="#5A4326" stroke="#33240F" stroke-width="3"/>
+    <line x1="-56" y1="0" x2="56" y2="92" stroke="#33240F" stroke-width="2"/>
+    <line x1="56" y1="0" x2="-56" y2="92" stroke="#33240F" stroke-width="2"/>
+  </g>
+
+  <!-- reticle -->
+  <g transform="translate(360,190)" stroke="#F4ECDD" fill="none" stroke-width="2.4" opacity="0.95">
+    <circle r="46"/><circle r="56" opacity="0.4"/>
+    <line x1="-72" y1="0" x2="-14" y2="0"/><line x1="14" y1="0" x2="72" y2="0"/>
+    <line x1="0" y1="-72" x2="0" y2="-14"/><line x1="0" y1="14" x2="0" y2="72"/>
+    <circle r="2.4" fill="#B23A2C" stroke="none"/>
+  </g>
+
+  <!-- scope vignette -->
+  <rect width="640" height="400" fill="url(#vig)"/>
+  <rect x="6" y="6" width="628" height="388" rx="34" ry="34" fill="none" stroke="#06040A" stroke-width="12" opacity="0.85"/>
+
+  <!-- hand-drawn title -->
+  <text x="320" y="330" text-anchor="middle" font-family="'Chalkboard SE','Comic Neue','Segoe Print',cursive" font-size="76" font-weight="800" fill="#E9CB92" stroke="#3A2A18" stroke-width="2" transform="rotate(-2 320 330)">DEADEYE</text>
+  <line x1="196" y1="346" x2="444" y2="346" stroke="#B23A2C" stroke-width="4" transform="rotate(-2 320 346)"/>
+</svg>

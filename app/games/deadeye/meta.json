@@ -1,0 +1,13 @@
+{
+  "title": "Deadeye",
+  "slug": "deadeye",
+  "description": "A dusk shooting range: snap your scope to pop-up targets and drop ten as fast as you can — but don't shoot the civilians.",
+  "verb": "snap to target and fire",
+  "dials": ["mastery"],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "cs",
+  "scoreOrder": "asc",
+  "palette": ["#221A31", "#4B3A5C", "#C97B45", "#E9CB92", "#B23A2C", "#6E9AA6"],
+  "author": "gamesight"
+}

@@ -1,0 +1,72 @@
+<svg width="640" height="400" viewBox="0 0 640 400" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12203f"/>
+      <stop offset="0.10" stop-color="#0d1730"/>
+      <stop offset="0.4" stop-color="#080d1c"/>
+      <stop offset="1" stop-color="#04050b"/>
+    </linearGradient>
+    <radialGradient id="cone" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffe49e" stop-opacity="0.95"/>
+      <stop offset="0.35" stop-color="#ffbe64" stop-opacity="0.55"/>
+      <stop offset="0.75" stop-color="#f09640" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#e68232" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lant" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#fff4d2"/>
+      <stop offset="0.45" stop-color="#ffce82"/>
+      <stop offset="1" stop-color="#ffaa50" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="moon" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#e2ecff"/>
+      <stop offset="0.4" stop-color="#96b2e8" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#7896d2" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="vig" cx="50%" cy="52%" r="62%">
+      <stop offset="0.55" stop-color="#04050b" stop-opacity="0"/>
+      <stop offset="1" stop-color="#03040a" stop-opacity="0.92"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="640" height="400" fill="url(#sky)"/>
+  <!-- moon -->
+  <circle cx="528" cy="52" r="80" fill="url(#moon)"/>
+  <circle cx="528" cy="50" r="15" fill="#e6eeff"/>
+  <!-- treeline horizon -->
+  <path d="M0 42 L20 30 L44 40 L70 22 L96 38 L128 26 L156 40 L188 24 L220 38 L252 28 L288 40 L320 24 L356 38 L392 28 L428 40 L462 26 L498 38 L534 30 L570 40 L604 28 L640 40 L640 56 L0 56 Z" fill="#060b18"/>
+
+  <!-- lantern cone of light -->
+  <g transform="translate(300 250)">
+    <path d="M0 0 L235 -150 A280 280 0 0 1 262 88 Z" fill="url(#cone)"/>
+    <ellipse cx="0" cy="0" rx="150" ry="150" fill="url(#lant)" opacity="0.5"/>
+  </g>
+
+  <!-- silhouette zombies at the edge of the light -->
+  <g fill="#03050b">
+    <!-- lit shambler (near cone edge) -->
+    <path d="M470 210 q-4 -20 6 -30 q10 -10 22 -6 q14 4 20 -4 l8 6 q-6 8 -16 8 q2 12 0 22 l-8 0 l-2 -14 l-4 14 l-8 0 q-4 -12 -18 -2 Z"/>
+    <path d="M486 176 a7 7 0 1 0 0.1 0" />
+    <!-- brute -->
+    <path d="M520 300 q-8 -30 10 -44 q18 -12 34 -4 q10 5 20 -2 l10 8 q-8 10 -20 8 q4 16 -2 34 l-12 0 l-2 -22 l-6 22 l-14 0 q-4 -14 -18 0 Z"/>
+    <!-- dark shamblers (in the void) -->
+    <path d="M120 300 q-4 -18 6 -26 q10 -8 20 -4 l8 -4 l4 8 l-8 4 q2 12 -2 22 l-8 0 l-2 -14 l-4 14 l-8 0 q-2 -12 -12 -4 Z" opacity="0.55"/>
+    <path d="M78 250 q-3 -14 6 -20 q8 -6 16 -2 l4 6 q2 10 -2 18 l-6 0 l-2 -12 l-3 12 l-6 0 q-2 -10 -9 -2 Z" opacity="0.35"/>
+  </g>
+  <!-- cool rim on lit zombies -->
+  <path d="M470 210 q-4 -20 6 -30 q10 -10 22 -6" fill="none" stroke="#8fb2e8" stroke-width="1.6" opacity="0.6"/>
+  <path d="M520 300 q-8 -30 10 -44 q18 -12 34 -4" fill="none" stroke="#8fb2e8" stroke-width="1.8" opacity="0.55"/>
+
+  <!-- the keeper + lantern -->
+  <g transform="translate(300 250)">
+    <path d="M0 -16 q13 -7 11 14 q0 6 -11 8 q-11 -2 -11 -8 q-2 -21 11 -14 Z" fill="#090b14" stroke="#8fb2e8" stroke-width="1.3" stroke-opacity="0.5"/>
+    <circle cx="14" cy="-6" r="18" fill="url(#lant)"/>
+    <rect x="10" y="-10" width="8" height="9" fill="none" stroke="#3c2814" stroke-width="1.4"/>
+    <rect x="11.5" y="-8.5" width="5" height="6" fill="#ffecb4"/>
+  </g>
+
+  <rect width="640" height="400" fill="url(#vig)"/>
+
+  <!-- hand-drawn title -->
+  <text x="320" y="352" text-anchor="middle" font-family="'Chalkboard SE','Comic Neue','Segoe Print',cursive" font-weight="bold" font-size="52" fill="#ffe0a0" transform="rotate(-1.5 320 352)" style="paint-order:stroke;stroke:#ff8a30;stroke-width:1px;filter:drop-shadow(0 0 14px rgba(255,150,50,0.7))">LAST LANTERN</text>
+  <text x="320" y="378" text-anchor="middle" font-family="'Chalkboard SE','Comic Neue',cursive" font-size="16" fill="#9fb6e0" font-style="italic">hold the horde back till the oil runs dry</text>
+</svg>
