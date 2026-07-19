@@ -33,6 +33,20 @@ async function newPage(browser, up, delivered) {
 }
 const msgs = (page) => page.evaluate(() => window.__gs.msgs);
 const lastGameover = (m) => [...m].reverse().find((x) => x.gs === 'gameover');
+// poll until a gameover arrives (planes can glide 40s+ when maxed), returning it + peak dist
+async function waitLanding(page, capMs = 52000, onTick) {
+  const t0 = Date.now();
+  let peak = 0;
+  while (Date.now() - t0 < capMs) {
+    if (onTick) await onTick();
+    await page.waitForTimeout(400);
+    const m = await msgs(page);
+    for (const x of m) if (x.gs === 'score' && x.score > peak) peak = x.score;
+    const go = lastGameover(m);
+    if (go) return { go, peak };
+  }
+  return { go: null, peak };
+}
 
 // a full-power pull-back throw: pull DOWN-LEFT to fling UP-RIGHT (slingshot).
 async function fullThrow(page) {
@@ -53,48 +67,46 @@ const browser = await chromium.launch();
   await page.screenshot({ path: path.join(shotDir, 'drive-1-maxed-aim.png') }); // Gauss Rail launcher + Aerogel plane
   await fullThrow(page);
   await page.waitForTimeout(300);
-  // hold boost (Space) + fire laser (F) + a little pitch, mid-flight
+  // hold boost (Space) + fire laser (F) mid-flight, capture the beam + flame + transformed craft
   await page.keyboard.down('Space');
   await page.keyboard.down('f');
-  await page.waitForTimeout(500);
-  await page.screenshot({ path: path.join(shotDir, 'drive-2-maxed-firing.png') }); // beam + flame + transformed craft
+  await page.waitForTimeout(700);
+  await page.screenshot({ path: path.join(shotDir, 'drive-2-maxed-firing.png') });
+  await page.waitForTimeout(2600); // ride the rest of the boost tank
   await page.keyboard.up('Space');
-  await page.waitForTimeout(200);
-  // dive then climb to exercise pitch/energy
-  await page.keyboard.down('ArrowDown'); await page.waitForTimeout(350); await page.keyboard.up('ArrowDown');
-  await page.keyboard.down('f'); // keep tapping laser
-  await page.waitForTimeout(400); await page.keyboard.up('f');
-  await page.keyboard.down('ArrowUp'); await page.waitForTimeout(300); await page.keyboard.up('ArrowUp');
-  // let it fly out and settle
-  await page.waitForTimeout(9000);
-  const m = await msgs(page);
-  const go = lastGameover(m);
+  await page.keyboard.up('f');
+  // now fly clean (shallow dives only) so it comfortably clears the 3000m mailbox; poll to landing
+  let i = 0;
+  const { go, peak } = await waitLanding(page, 52000, async () => {
+    if (++i % 4 === 0) { await page.keyboard.down('ArrowDown'); await page.waitForTimeout(160); await page.keyboard.up('ArrowDown'); }
+  });
   results.errors.push(...errors);
-  results.notes.push(`MAXED run: gameover=${JSON.stringify(go && go.scores)}`);
+  results.notes.push(`MAXED run: distance=${go ? go.scores.distance : '(aloft) peak=' + peak}  delivery=${go && go.scores.delivery}`);
   await page.screenshot({ path: path.join(shotDir, 'drive-3-maxed-result.png') });
   await page.context().close();
 }
 
-// ---- Scenario 2: measure several maxed throws for the distance trend ----
+// ---- Scenario 2: distance TREND across the tree (naive -> mid -> maxed) ----
 {
-  const dists = [];
-  for (let n = 0; n < 4; n++) {
-    const { page, errors } = await newPage(browser, T, true);
+  const rows = [];
+  for (const [label, up, boostMs] of [
+    ['T0 naive', { folds: 0, band: 0, clip: 0, thr: 0, fuel: 0 }, 0],
+    ['T3 mid', { folds: 3, band: 3, clip: 3, thr: 3, fuel: 3 }, 1500],
+    ['T7 maxed', T, 3600],
+  ]) {
+    const { page, errors } = await newPage(browser, up, true);
     await fullThrow(page);
     await page.waitForTimeout(250);
-    // ride the boost a touch after launch, then a shallow dive to carry speed
-    await page.keyboard.down('Space');
-    await page.waitForTimeout(1200);
-    await page.keyboard.up('Space');
-    await page.keyboard.down('ArrowDown'); await page.waitForTimeout(250); await page.keyboard.up('ArrowDown');
-    await page.waitForTimeout(12000);
-    const m = await msgs(page);
-    const go = lastGameover(m);
-    if (go) dists.push(go.scores.distance);
+    if (boostMs) { await page.keyboard.down('Space'); await page.waitForTimeout(boostMs); await page.keyboard.up('Space'); }
+    let i = 0;
+    const { go, peak } = await waitLanding(page, 52000, async () => {
+      if (++i % 5 === 0) { await page.keyboard.down('ArrowDown'); await page.waitForTimeout(150); await page.keyboard.up('ArrowDown'); }
+    });
+    rows.push(`${label}=${go ? go.scores.distance : '(aloft) ' + peak}`);
     results.errors.push(...errors);
     await page.context().close();
   }
-  results.notes.push(`MAXED distances (4 runs): ${dists.join(', ')}  max=${Math.max(...dists)}`);
+  results.notes.push(`distance trend: ${rows.join('  |  ')}`);
 }
 
 // ---- Scenario 3: transform gallery (aim screenshots across airframe + nose tiers) ----
@@ -121,19 +133,18 @@ for (const [name, up] of [
 // ---- Scenario 4: preserved behaviours — charge/release + retry-never-auto-throws ----
 {
   const { page, errors } = await newPage(browser, { folds: 2, band: 2, clip: 0, thr: 2, fuel: 2 }, true);
-  // charge & release (keyboard throw)
+  // charge & release (keyboard throw), then poll until it lands
   await page.keyboard.down('Space'); await page.waitForTimeout(600); await page.keyboard.up('Space');
-  await page.waitForTimeout(9000);
+  const { go: go1 } = await waitLanding(page, 30000);
   let m = await msgs(page);
-  const go1 = lastGameover(m);
-  results.notes.push(`CHARGE throw: gameover=${JSON.stringify(go1 && go1.scores)}`);
   const goCount1 = m.filter((x) => x.gs === 'gameover').length;
-  // back to aim (Space on result) then DO NOTHING — must NOT auto-throw
+  results.notes.push(`CHARGE throw: distance=${go1 && go1.scores.distance}  (gameovers=${goCount1})`);
+  // on the result screen press Space -> back to AIM, then DO NOTHING for 3s: must NOT auto-throw
   await page.keyboard.press('Space');
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(3000);
   m = await msgs(page);
   const goCount2 = m.filter((x) => x.gs === 'gameover').length;
-  results.notes.push(`retry auto-throw check: gameovers before=${goCount1} after-idle=${goCount2} (must be equal)`);
+  results.notes.push(`retry auto-throw check: gameovers before=${goCount1} after-idle=${goCount2} (EQUAL = retry did NOT auto-throw)`);
   results.errors.push(...errors);
   await page.context().close();
 }

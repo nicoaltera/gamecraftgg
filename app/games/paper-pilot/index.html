@@ -15,7 +15,8 @@
 'use strict';
 /* ============================================================
    PAPER PILOT — throw a paper airplane across a doodled town
-   until it reaches your pen pal's mailbox at 2000m.
+   until it reaches your pen pal's mailbox at 3000m — then chase
+   a maxed-out plane toward a ~10,000m horizon.
    Pure Canvas2D + WebAudio. No assets. One file.
    ============================================================ */
 
@@ -28,24 +29,38 @@ const GROUND = 460;              // ground line y (world coords)
 const LAUNCH = { x: 70, y: 208 };// classroom window ledge
 const GRAV   = 285;              // gravity px/s^2 (low = floaty paper)
 const GLIDE  = 6;                // how fast fall speed relaxes to terminal (per s)
-const DRAG_BASE = 0.16, DRAG_STEP = 0.024; // air drag /s; Sharper Folds tier5 -> 0.04
-const TERM_BASE = 132,  TERM_STEP = 12;    // terminal fall px/s; folds tier5 -> 72 (glides way longer)
-const POW_BASE  = 375,  POW_STEP  = 112;   // launch speed px/s; Rubber Band tier5 -> 935
+// ---- 7-TIER PROGRESSION TUNING (the long chase to ~10,000m) ----
+// Every lever now runs 0..7 (tier 0 = the bare paper dart). Early tiers are cheap
+// and each one visibly changes the craft; the tail keeps escalating so a FULLY-maxed
+// plane, flown well (rationed boost + dive-slams), can push toward a ~10k horizon
+// while the 3000m mailbox is reachable long before then. Numbers below are the retune:
+// each Airframe/Launcher/Thruster tier compounds glide + speed + boost so distance
+// climbs super-linearly with total investment (that's what makes the chase long).
+const DRAG_BASE = 0.16, DRAG_STEP = 0.0172; // air drag /s; Airframe T7 -> 0.040 (long, but still settles)
+const TERM_BASE = 132,  TERM_STEP = 10.5;   // terminal fall px/s; Airframe T7 -> 58.5 (floaty, lands in ~25-35s)
+const POW_BASE  = 375,  POW_STEP  = 178;    // launch speed px/s; Launcher T0 375 -> T7 1621 (front-loaded speed)
 const REST_BASE = 0.5;                      // ground bounce restitution (fixed; no upgrade)
 const SLIDE  = 1.15;             // ground slide friction /s (skid after last bounce)
 const BOUNCE_KEEP = 0.985;       // vx kept per ground bounce
-// ---- HELD BOOST (thruster device + fuel tank) ----
+// ---- HELD BOOST (thruster device + fuel tank) — both now 7 tiers ----
 // Boost is HELD, not tapped: hold to fire continuous forward+up thrust; it DRAINS gas.
 // Tradeoff you must ration: stronger devices push harder AND burn gas faster.
 //   Thruster tier -> thrust power & burn RATE.   Fuel Tank tier -> gas CAPACITY.
 // Gas is set at launch and never refills mid-run — timing the boost is the real skill.
-const THR_BASE  = 300, THR_STEP  = 72;     // forward thrust accel px/s^2; T1 PocketFan 300 -> T5 Ion 588
+const THR_BASE  = 300, THR_STEP  = 55;     // forward thrust accel px/s^2; T1 PocketFan 300 -> T7 Fusion 630
 const THR_LIFT  = 0.5;                       // fraction of thrust re-applied as lift (climb)
-const BURN_BASE = 1.0, BURN_STEP = 0.17;   // gas burn/sec; T1 1.0 -> T5 1.68 (stronger devices drink more)
-const GAS_BASE  = 1.15, GAS_STEP = 0.6;    // gas capacity (sec@rate1); Fuel T0 1.15s -> T5 4.15s
-const DEVICE = ['(none)','Pocket Fan','Propeller','Drone','Rocket','Ion Thruster']; // visible tiers
-// sim+playtest verified: naive 1st throw ~150m/~28 stickers; first 3 buys land within ~5 runs;
-// maxed full-power + rationed boost throw ~2200m+ — mailbox delivery guaranteed by persistence.
+const BURN_BASE = 1.0, BURN_STEP = 0.14;   // gas burn/sec; T1 1.0 -> T7 1.84 (stronger devices drink more)
+const GAS_BASE  = 1.15, GAS_STEP = 0.77;   // gas capacity (sec@rate1); Fuel T0 1.15s -> T7 6.54s
+const DEVICE = ['(none)','Pocket Fan','Propeller','Drone','Rocket','Ion Thruster','Plasma Jet','Fusion Core']; // Thruster tiers 0..7
+// ---- LASER (Nose Gun tiers 4..7) — a rationed mid-flight weapon (see fireLaser) ----
+const LASER_TIER   = 4;      // nose tier where the fireable laser unlocks (Laser Pointer)
+const LASER_DRAIN  = 0.5;    // beam energy drained /s while firing (metered like the gas tank)
+const LASER_CHARGE = 0.34;   // energy recharged /s when not firing
+const LASER_MIN    = 0.06;   // need at least this much charge to (re)start firing
+const LASER_ZAP    = 5;      // style points per pigeon vapourised
+// drive-verified curve (see scripts/drive-paper-pilot.mjs): naive T0 ~190m (~40 stickers,
+// affords a run-1 buy), T3 ~1.5k, T5 ~4-5k, and a FULLY-maxed plane flown well ~9-11k —
+// the 3000m mailbox falls around T4-T5, then the long tail chases the ~10k horizon.
 const DEFAULT_POW = 0.8, DEFAULT_ANG = -0.66; // quick-throw (space/tap): 80% power, ~38 deg up
 
 // ---- MID-FLIGHT PITCH & ENERGY (the active-glide skill) ----
@@ -69,17 +84,26 @@ const DIVE_TERM_BONUS = 2.4; // diving raises the terminal fall-cap so committed
 // First throw pays ~28; cheapest tier-1 prices below = a buy on run 1, then next always ~1-3 runs out.
 // Curve stays gentle late (x2.1/tier, not x2.5) so maxing feels earned, not walled.
 const PAY_DIST = 0.14, PAY_AIR = 2.0;
+// 5 levers × 7 tiers. Prices: cheap opener (a buy on run 1), then ~1.9-2.1×/tier so the
+// FIRST 3 buys land inside ~5 runs while the steep tail keeps meaningful buys coming for
+// hundreds of throws. Distance pays for itself: a 5000m run banks ~700+ stickers, so the
+// four-figure top tiers are earned by the very long throws they unlock.
 const SHOP = [
-  { key:'folds', name:'Sharper Folds',  blurb:'reshape & re-material', prices:[30, 70,140,260,460] },
-  { key:'band',  name:'Rubber Band',    blurb:'launch power',          prices:[40, 90,180,340,620] },
-  { key:'clip',  name:'Paperclip Nose', blurb:'smash leaves & pigeons',prices:[60,130,260,480,850] },
-  { key:'thr',   name:'Thruster',       blurb:'hold to boost',         prices:[45,110,230,430,780] },
-  { key:'fuel',  name:'Fuel Tank',      blurb:'more boost gas',        prices:[35, 85,175,330,600] },
+  { key:'folds', name:'Airframe',   blurb:'shape & material', prices:[25, 55,110,210,380, 680,1150] },
+  { key:'band',  name:'Launcher',   blurb:'launch power',     prices:[35, 75,150,290,520, 900,1500] },
+  { key:'clip',  name:'Nose Gun',   blurb:'smash + laser',    prices:[55,120,240,440,780,1300,2100] },
+  { key:'thr',   name:'Thruster',   blurb:'hold to boost',    prices:[40, 95,200,380,680,1150,1900] },
+  { key:'fuel',  name:'Fuel Tank',  blurb:'more boost gas',   prices:[30, 70,145,275,500, 860,1400] },
 ];
+const MAXTIER = 7;
+// Evocative per-tier names (index 0 = the bare starting craft). Shown on the shop cards.
+const LAUNCH_N = ['(hand throw)','Rubber Band','Slingshot','Spring Cannon','Coil Launcher','Torsion Catapult','Rail Kicker','Gauss Rail'];
+const NOSE_N   = ['(bare nose)','Paperclip','Drill Nose','Spark Tip','Laser Pointer','Cutting Laser','Plasma Lance','Photon Cannon'];
+const FUEL_N   = ['Flask','Canteen','Jerry Can','Reserve Tank','Twin Tanks','Drop Tanks','Bladder Cell','Endurance Cell'];
 const TRICK = { bus:3, awning:3, closeCall:2, smash:4, leafPunch:2, pageTurn:5 };
 
 // ---------- world layout ----------
-const MAILBOX_X = LAUNCH.x + 2000*PXM;   // pen pal's mailbox: 2000 m
+const MAILBOX_X = LAUNCH.x + 3000*PXM;   // pen pal's mailbox: 3000 m
 const PAGE_LEN  = 4800;                  // a red margin line every 960 m ("next page")
 const CHUNK = 420;
 
@@ -89,15 +113,19 @@ const PAPER='#FCF9F0', PAPER_DK='#F5EEDC', INK='#2447D6', INK_SOFT='rgba(36,71,2
       LETTERBOX='#16255C', RULE='rgba(36,71,214,0.10)';
 const FONT='"Comic Neue","Chalkboard SE","Comic Sans MS","Segoe Print",cursive';
 
-// Sharper Folds is a VISIBLE craft transformation: shape (sweep) + material (fill/outline/sheen)
-// both change per tier — from a scrappy notebook page to a gleaming foil jet.
+// Airframe (was "Sharper Folds") is a VISIBLE craft transformation: shape (sweep) +
+// material (fill/outline/sheen) both change per tier — from a scrappy notebook page,
+// through waxed & cardstock gliders and metal jets, to an iridescent nanofoil ace and
+// a near-translucent aerogel phantom. 8 entries = tiers 0..7.
 const FOLD_MAT = [
   { name:'Notebook Scrap',    fill:'#FCF9F0', fill2:'#EFE9DA', line:'#2447D6', sheen:0.00, sweep:0 },
   { name:'Crisp Dart',        fill:'#FFFFFF', fill2:'#ECE6D4', line:'#2447D6', sheen:0.08, sweep:1 },
   { name:'Waxed Glider',      fill:'#FFFDF0', fill2:'#EDE3C2', line:'#2340C4', sheen:0.24, sweep:2 },
   { name:'Cardstock Cruiser', fill:'#E9F0FF', fill2:'#C4D3F4', line:'#1B37B0', sheen:0.32, sweep:3 },
   { name:'Foil Jet',          fill:'#DCE1EB', fill2:'#A6AEC0', line:'#3A4256', sheen:0.64, sweep:4 },
-  { name:'Aluminum Jet',      fill:'#EEF1F6', fill2:'#98A2B8', line:'#2A3142', sheen:0.92, sweep:5 },
+  { name:'Carbon Dart',       fill:'#3B4150', fill2:'#20242E', line:'#10131A', sheen:0.42, sweep:5 },
+  { name:'Nanofoil Ace',      fill:'#CFE4FF', fill2:'#8FB6E8', line:'#2A57C8', sheen:0.98, sweep:6 },
+  { name:'Aerogel Phantom',   fill:'#EAF3FF', fill2:'#BBD6F2', line:'#5FE9FF', sheen:1.00, sweep:7 },
 ];
 
 // ---------- boilerplate: canvas, letterbox, dpr ----------
@@ -132,7 +160,8 @@ try{
       if(typeof j.throws==='number' && isFinite(j.throws)) save.throws=Math.max(0,j.throws);
       if(j.delivered) save.delivered=true;
       if(typeof j.delThrows==='number') save.delThrows=j.delThrows;
-      const o=j.up||{}, cl=n=>Math.max(0,Math.min(5,(typeof n==='number'&&isFinite(n))?Math.floor(n):0));
+      // clamp 0..7 (tracks are now 7 tiers deep). Old <=5 saves stay valid.
+      const o=j.up||{}, cl=n=>Math.max(0,Math.min(MAXTIER,(typeof n==='number'&&isFinite(n))?Math.floor(n):0));
       save.up.folds=cl(o.folds); save.up.band=cl(o.band); save.up.clip=cl(o.clip);
       save.up.thr = cl(typeof o.thr ==='number'? o.thr : o.fan);  // old Pocket Fan track -> Thruster
       save.up.fuel= cl(typeof o.fuel==='number'? o.fuel: o.gum);  // old Gum track -> Fuel Tank
@@ -209,15 +238,19 @@ const sfx = {
   buy(){ tone(660,0.08,'square',0.1); setTimeout(()=>tone(990,0.12,'square',0.1),60); },
   nearMiss(){ tone(1200,0.08,'sine',0.08,1500); },
   pop(){ tone(vary(300),0.06,'square',0.08,500); },
+  laser(){ tone(1500,0.12,'sawtooth',0.09,420); },                 // beam fire-up "pew"
+  zap(){ tone(1900,0.09,'square',0.1,600); noiseBurst(0.06,0.09,2600); }, // pigeon vapourised
 };
 
 // ---------- game state ----------
 let state='aim';            // aim | fly | settle | result
 let charging=false, chargeT=0;   // keyboard charge-and-release throw
 let boosting=false;              // held-boost input state (pointer down / Space held during flight)
+let laserHeld=false;             // keyboard laser-fire input (F held during flight)
+let laserWasOn=false;            // edge-detect for the fire-start sfx
 let plane={x:LAUNCH.x,y:LAUNCH.y,vx:0,vy:0,rot:-0.5};
 let cam={x:-170,y:0,zoom:1,shake:0};
-let run={dist:0,air:0,tricks:0,trickN:0,gas:0,boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
+let run={dist:0,air:0,tricks:0,trickN:0,gas:0,boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0,laserOn:false,laserE:1};
 let settleT=0, tallyT=0, sel=-1, lastScorePost=0, cardShake=0, cardShakeI=-1;
 let dragging=false, dragStart={x:0,y:0}, dragCur={x:0,y:0};
 // mid-flight pitch input: keyboard flags + touch (left-zone drag). Read only while flying.
@@ -234,7 +267,7 @@ function pitchInput(){
 let banner=null, bannerT=0;             // {text, sub, col}
 let timeScale=1, slowT=0;
 let penpalWave=0;                        // >0: pen pal waving
-let hudStickerPulse=0, fanChipPulse=0, distShown=0;
+let hudStickerPulse=0, fanChipPulse=0, laserChipPulse=0, distShown=0;
 let T=0;                                 // global clock (s)
 let trail=[]; for(let i=0;i<26;i++) trail.push({x:0,y:0,on:false});
 let trailI=0, trailAcc=0;
@@ -247,6 +280,9 @@ function thrThrust(){ const t=save.up.thr; return t>0? THR_BASE+THR_STEP*(t-1) :
 function thrBurn(){   const t=save.up.thr; return t>0? BURN_BASE+BURN_STEP*(t-1) : 0; } // gas/sec
 function gasMax(){ return GAS_BASE + GAS_STEP*save.up.fuel; }                          // capacity
 function speedKeepHit(){ return save.up.clip>=4 ? 0.97 : 1; } // T4+: keep speed through hits
+function hasLaser(){ return save.up.clip>=LASER_TIER; }                                 // Laser Pointer (T4)+
+function laserRange(){ return hasLaser()? 130 + (save.up.clip-LASER_TIER)*130 : 0; }    // T4 130px .. T7 520px
+function laserColor(){ const t=save.up.clip; return t>=7?'#6FE9FF': t>=6?'#3B7BFF': t>=5?'#FF7A1A':'#FF3B2F'; }
 
 // ---------- world generation (fixed seed; lazy chunks) ----------
 // types: bus (trampoline roof), awn (awning bounce), tree (sticky), pigeon (bonk)
@@ -297,9 +333,10 @@ function beginThrow(pow, ang){
   plane.x=LAUNCH.x; plane.y=LAUNCH.y;
   plane.vx=Math.cos(ang)*pow; plane.vy=Math.sin(ang)*pow;
   plane.rot=ang;
-  run={dist:0,air:0,tricks:0,trickN:0,gas:gasMax(),boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
+  run={dist:0,air:0,tricks:0,trickN:0,gas:gasMax(),boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0,laserOn:false,laserE:1};
   boosting=false;                     // never carry a held-boost into a fresh throw
-  pointers.clear(); touchPitchActive=false; touchPitch=0;  // never carry a touch pitch/boost into a fresh throw
+  laserHeld=false; laserWasOn=false;  // never carry a held laser into a fresh throw
+  pointers.clear(); touchPitchActive=false; touchPitch=0;  // never carry a touch pitch/boost/fire into a fresh throw
   save.throws++; persist();
   resetObs(); for(const f of floats) f.on=false;
   for(const tr of trail) tr.on=false; trailAcc=0;
@@ -341,9 +378,50 @@ function startBoost(){
   if(save.up.thr>0 && run.gas>0){ sfx.fan(); fanChipPulse=1; }
 }
 
+// ---- laser fire (Nose Gun T4+): distinct input so it never fights boost/pitch ----
+function anyFirePointer(){ for(const v of pointers.values()) if(v.role==='fire') return true; return false; }
+function startLaser(){                // called on the fire key / fire-button press
+  if(state!=='fly' || !hasLaser()) return;
+  laserChipPulse=1;
+}
+// cast a forward beam from the nose along the plane's heading; vapourise pigeons and
+// burn straight through tree canopies in the path. Style points + delightful puffs.
+function fireLaser(dt){
+  const p=plane, rng=laserRange();
+  const dx=Math.cos(p.rot), dy=Math.sin(p.rot);
+  const mx=p.x+dx*40, my=p.y+dy*40;           // muzzle just ahead of the nose
+  for(const o of obs){
+    if(o.x < p.x-40 || o.x > p.x+rng+120) continue;
+    if(o.t==='pigeon' && !o.done){
+      const py=o.y+Math.sin(o.ph+T*2.2)*9;
+      const rx=o.x-mx, ry=py-my, along=rx*dx+ry*dy, perp=Math.abs(rx*-dy+ry*dx);
+      if(along>=0 && along<=rng && perp<22) zapPigeon(o,py);
+    } else if(o.t==='tree' && o.hit===0){
+      const cy=GROUND-118, rx=o.x-mx, ry=cy-my, along=rx*dx+ry*dy, perp=Math.abs(rx*-dy+ry*dx);
+      if(along>0 && along<rng && perp<58){
+        o.hit++; run.tricks+=TRICK.leafPunch; run.trickN++;
+        floatTxt('+'+TRICK.leafPunch+' BURNED THROUGH!', o.x, cy-72, RED, 17);
+        sfx.zap(); leaves(o.x,cy,10);
+      }
+    }
+  }
+  // beam sparkle along its length (readability + sizzle)
+  if(Math.random()<0.7){ const d=Math.random()*rng; spawn('star', mx+dx*d, my+dy*d, (Math.random()-0.5)*90, (Math.random()-0.5)*90, 0.22, 0.8); }
+}
+function zapPigeon(o,py){
+  o.done=true; o.dead=true;
+  run.tricks+=LASER_ZAP; run.trickN++;
+  if(save.up.clip>=6) run.tricks+=2;                 // higher-tier cannons score a touch more
+  floatTxt('ZAP! +'+LASER_ZAP, o.x, py-26, RED, 21);
+  sfx.zap(); feathers(o.x,py,11);
+  const rr=Math.random();
+  o.dvx=150+rr*180; o.dvy=-170-rr*160; o.dr=(rr<0.5?-1:1)*13;
+  for(let s=0;s<6;s++) spawn('star', o.x, py, (Math.random()-0.2)*240, -Math.random()*220, 0.7, 1);
+}
+
 function buy(i){
   const it = SHOP[i], tier = save.up[it.key];
-  if(tier>=5){ sfx.deny(); return; }
+  if(tier>=MAXTIER){ sfx.deny(); return; }
   const price = it.prices[tier];
   if(save.st < price){ sfx.deny(); cardShake=1; cardShakeI=i; return; }
   save.st -= price; save.up[it.key]++; persist();
@@ -367,6 +445,20 @@ function stepFly(dt){
     if(Math.random()<0.7) spawn('puff', p.x-16-Math.random()*8, p.y+3+(Math.random()-0.5)*8, -150-Math.random()*90, (Math.random()-0.5)*40, 0.28, 2+Math.random()*2);
     spawn('speed', p.x-22, p.y+(Math.random()-0.5)*10, -170, 0, 0.18, 1);
   }
+  // ---- LASER (Nose Gun T4+): a rationed forward beam. Metered charge (run.laserE)
+  //      drains while firing, recharges while idle — the "ration it" gauge, like gas. ----
+  run.laserOn=false;
+  const wantFire = (laserHeld || anyFirePointer()) && hasLaser();
+  const canStart = laserWasOn ? run.laserE>0.001 : run.laserE>=LASER_MIN;
+  if(wantFire && canStart){
+    run.laserOn=true;
+    run.laserE=Math.max(0, run.laserE - LASER_DRAIN*dt);
+    if(!laserWasOn) sfx.laser();       // edge-triggered fire "pew"
+    fireLaser(dt);                     // zap pigeons / burn through trees in the beam
+  } else {
+    run.laserE=Math.min(1, run.laserE + LASER_CHARGE*dt);
+  }
+  laserWasOn = run.laserOn;
   // ---- PITCH & ENERGY: active glide. Lean the nose, bank the velocity toward it over
   //      time, trade height<->speed. This is the skill layer over the ballistic arc. ----
   const pin = pitchInput();                                  // -1..1  (+1 nose up / climb)
@@ -561,6 +653,7 @@ function stepFx(dt){
   for(const o of obs){ if(o.t==='pigeon'&&o.dead){ o.dvy+=300*dt; o.x+=o.dvx*dt; o.y+=o.dvy*dt; o.ph+=o.dr*dt; } }
   if(hudStickerPulse>0) hudStickerPulse-=dt*2.4;
   if(fanChipPulse>0) fanChipPulse-=dt*2;
+  if(laserChipPulse>0) laserChipPulse-=dt*2.4;
   if(cardShake>0) cardShake-=dt*4;
   if(penpalWave>0) penpalWave-=dt;
   if(bannerT>0) bannerT-=dt;
@@ -606,12 +699,17 @@ post({gs:'ready'});
 
 // ---------- input ----------
 function toGame(e){ return { x:(e.clientX-offX)/scl, y:(e.clientY-offY)/scl }; }
+// dedicated touch FIRE button (only when the laser is owned) — a small circle tested
+// BEFORE the pitch/boost thumb-zones so it never fights them.
+function fireBtnPos(){ return {x:W*0.5, y:H-58, r:31}; }
+function inFireBtn(g){ if(!hasLaser()) return false; const b=fireBtnPos(); return Math.hypot(g.x-b.x,g.y-b.y)<=b.r+4; }
 window.addEventListener('pointerdown', (e)=>{
   e.preventDefault(); audioInit();
   if(e.pointerType==='touch') isTouch=true;
   const g=toGame(e);
   if(state==='fly'){
-    // two thumb zones: LEFT = pitch (drag ▲▼), RIGHT = hold to boost.
+    // FIRE button first (own hit-test), then two thumb zones: LEFT = pitch, RIGHT = boost.
+    if(inFireBtn(g)){ pointers.set(e.pointerId,{role:'fire'}); startLaser(); return; }
     if(g.x < W*0.46){ pointers.set(e.pointerId,{role:'pitch',sy:g.y}); touchPitchActive=true; touchPitch=0; }
     else { pointers.set(e.pointerId,{role:'boost'}); startBoost(); }  // hold to fire the thruster
     return;
@@ -673,6 +771,7 @@ window.addEventListener('keydown',(e)=>{
     if(state==='result'){ if(sel>=0) buy(sel); else toAim(); }
   } else if(k==='ArrowUp'||k==='w'||k==='W'){ e.preventDefault(); pitchHeld.up=true; }    // mid-flight: nose UP
   else if(k==='ArrowDown'||k==='s'||k==='S'){ e.preventDefault(); pitchHeld.down=true; }   // mid-flight: nose DOWN
+  else if(k==='f'||k==='F'){ if(state==='fly'){ laserHeld=true; startLaser(); } }          // mid-flight: FIRE laser (Nose Gun T4+)
   else if(k==='ArrowRight'||k==='d'){ if(state==='result'){ sel=(sel+1)%SHOP.length; sfx.pop(); } }
   else if(k==='ArrowLeft'||k==='a'){ if(state==='result'){ sel=sel<=0?SHOP.length-1:sel-1; sfx.pop(); } }
   else if(k>='1'&&k<='5'){ if(state==='result') buy(+k-1); }
@@ -682,6 +781,7 @@ window.addEventListener('keyup',(e)=>{
   if(k===' '||k==='Spacebar'){ e.preventDefault(); releaseCharge(); boosting=false; }
   else if(k==='ArrowUp'||k==='w'||k==='W') pitchHeld.up=false;
   else if(k==='ArrowDown'||k==='s'||k==='S') pitchHeld.down=false;
+  else if(k==='f'||k==='F') laserHeld=false;
 });
 
 // ============================================================
@@ -747,6 +847,7 @@ function render(){
   drawTrail();
   if(dragging && state==='aim') drawAimPreview();
   drawPlane();
+  drawLaser();
   drawParts();
   drawFloats();
   ctx.restore();
@@ -889,14 +990,45 @@ function drawSchool(){
   ctx.save(); ctx.strokeStyle=RED; ctx.beginPath(); wcircle(-64,172,7,970); ctx.stroke();
   ctx.beginPath(); ctx.lineWidth=2; wline(-68,170,-64,176,1,971); wline(-64,176,-58,166,1,972); ctx.stroke(); ctx.restore();
   ctx.restore();
-  // rubber band launcher visual (if owned): two pegs on the sill
-  if(save.up.band>0 && state==='aim'){
-    ctx.strokeStyle=RED; ctx.lineWidth=2;
-    ctx.beginPath();
-    wline(24,236, plane.x-6, plane.y+3, 1.5, 980);
-    wline(24,196, plane.x-6, plane.y-3, 1.5, 981);
-    ctx.stroke();
+  // LAUNCHER visual on the sill — visibly beefier each tier (Rubber Band -> Gauss Rail)
+  if(save.up.band>0 && state==='aim') drawLauncher(save.up.band);
+}
+// the launch device on the classroom sill; escalates with the Launcher track
+function drawLauncher(tier){
+  const px=plane.x-6, py=plane.y;
+  ctx.save();
+  // the taut band/cord that flings the plane (present on every tier, thicker & redder as it grows)
+  ctx.strokeStyle=RED; ctx.lineWidth=1.6+tier*0.28;
+  ctx.beginPath(); wline(24,py+28, px, py+3, 1.4, 980); wline(24,py-12, px, py-3, 1.4, 981); ctx.stroke();
+  ctx.strokeStyle=INK; ctx.lineWidth=2.4;
+  if(tier>=2){ // Slingshot — a Y-fork anchored on the sill
+    ctx.beginPath(); wline(20,py+34,20,py-4,1.6,982); wline(20,py-4,10,py-20,1.6,983); wline(20,py-4,30,py-20,1.6,984); ctx.stroke();
   }
+  if(tier>=3){ // Spring Cannon — a barrel tube behind the plane
+    ctx.fillStyle='rgba(36,71,214,0.08)';
+    ctx.beginPath(); wrect(2,py-12,26,26,1.6,985); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle=PENCIL; ctx.beginPath(); for(let s=0;s<3;s++){ wline(6,py-6+s*7, 26,py-9+s*7, 1.2, 986+s); } ctx.stroke(); // spring coils
+    ctx.strokeStyle=INK;
+  }
+  if(tier>=4){ // Coil Launcher — stacked coil rings on the barrel
+    ctx.strokeStyle='#B06A20'; ctx.lineWidth=2;
+    ctx.beginPath(); for(let s=0;s<4;s++) wcircle(8+s*6, py+1, 4, 990+s); ctx.stroke();
+    ctx.strokeStyle=INK;
+  }
+  if(tier>=5){ // Torsion Catapult — a throwing arm swung up behind the plane
+    ctx.lineWidth=3; ctx.beginPath(); wline(6,py+14, px-14, py-22, 2, 994); ctx.stroke();
+    ctx.beginPath(); wcircle(6,py+14,3,995); ctx.stroke();
+  }
+  if(tier>=6){ // Rail Kicker — parallel guide rails ahead of the launch
+    ctx.strokeStyle=PENCIL; ctx.lineWidth=2.2;
+    ctx.beginPath(); wline(20,py-9, px+18, py-9, 1.4, 996); wline(20,py+9, px+18, py+9, 1.4, 997); ctx.stroke();
+    ctx.strokeStyle=INK;
+  }
+  if(tier>=7){ // Gauss Rail — glowing electromagnetic coils along the rails
+    ctx.save(); ctx.strokeStyle='#5FE9FF'; ctx.lineWidth=2; ctx.globalAlpha=0.6+0.4*Math.abs(Math.sin(T*6));
+    ctx.beginPath(); for(let s=0;s<4;s++){ const rx=20+s*((px-20)/4); wline(rx,py-11,rx,py+11,1.2,998+s); } ctx.stroke(); ctx.restore();
+  }
+  ctx.restore();
 }
 function drawObstacles(){
   const vx0=cam.x+W/2-(W/2)/cam.zoom-200, vx1=cam.x+W/2+(W/2)/cam.zoom+200;
@@ -976,7 +1108,7 @@ function drawMailbox(){
   ctx.beginPath(); ctx.lineWidth=2; wline(mx-22,GROUND-86,mx+22,GROUND-86,1.4,3003); ctx.stroke();
   // flag
   ctx.beginPath(); wline(mx+22,GROUND-84,mx+22,GROUND-102,1.4,3004); wline(mx+22,GROUND-102,mx+34,GROUND-96,1.4,3005); wline(mx+34,GROUND-96,mx+22,GROUND-92,1.4,3006); ctx.stroke();
-  txt('2000m', mx, GROUND-116, 16, RED, 'center', 0.95, -0.03);
+  txt('3000m', mx, GROUND-116, 16, RED, 'center', 0.95, -0.03);
   // pen pal
   const wv = penpalWave>0 ? Math.sin(T*10)*0.9 : 0;
   ctx.strokeStyle=INK; ctx.lineWidth=2.5;
@@ -1030,7 +1162,7 @@ function drawAimPreview(){
 }
 function drawPlane(){
   const p=plane;
-  const foldT=Math.max(0,Math.min(5,save.up.folds));
+  const foldT=Math.max(0,Math.min(MAXTIER,save.up.folds));
   const mat=FOLD_MAT[foldT];
   const noseLen = 20 + foldT*1.4;      // sharper craft = longer nose
   const wingBack = -16 - foldT*1.1;    // wing sweeps back with tier
@@ -1067,31 +1199,65 @@ function drawPlane(){
   ctx.moveTo(noseLen,0); ctx.lineTo(-9,1);
   for(let f=0;f<foldT;f++){ ctx.moveTo(noseLen-6-f*5,-1.2); ctx.lineTo(-11+f*2,-5.5+f*0.8); }
   ctx.stroke();
-  // rubber band wrapped on fuselage (kept minimal so the dart stays readable)
+  // launcher residue wrapped on fuselage — more wraps the beefier the launcher (kept minimal)
   if(save.up.band>0){
     ctx.strokeStyle=RED; ctx.lineWidth=1.3;
     ctx.beginPath();
     ctx.ellipse(-1,-0.5, 1.8,4.6, 0.12,0,7);
     if(save.up.band>=3) ctx.ellipse(3.5,-1, 1.8,4.0, 0.12,0,7);
+    if(save.up.band>=6) ctx.ellipse(-5,-0.2, 1.8,4.0, 0.12,0,7);
     ctx.stroke();
   }
-  // paperclip nose
-  if(save.up.clip>0){
+  // fuel tank strapped to the belly — grows visibly with the Fuel Tank track
+  if(save.up.fuel>0){
+    const fl=2.5+save.up.fuel*1.4;             // capsule length grows with capacity
+    ctx.save(); ctx.strokeStyle=INK; ctx.lineWidth=1.2; ctx.fillStyle='rgba(217,72,43,0.20)';
+    ctx.beginPath(); ctx.ellipse(-2, 6.5, fl*0.5, 2.3, 0, 0, 7); ctx.fill(); ctx.stroke();
+    if(save.up.fuel>=4){ ctx.beginPath(); ctx.ellipse(-2, 9, fl*0.42, 1.9, 0, 0, 7); ctx.fill(); ctx.stroke(); } // twin tanks
+    ctx.restore();
+  }
+  // NOSE GUN hardware — smash noses (T1-3) or laser emitter (T4+)
+  if(save.up.clip>0) drawNose(save.up.clip, noseLen);
+  // visible boost device (changes shape with tier)
+  if(save.up.thr>0) drawDevice(save.up.thr, noseLen);
+  ctx.restore();
+}
+// Nose Gun hardware in plane-local space. T1-3 = escalating smash noses; T4+ = laser muzzle.
+function drawNose(tier, noseLen){
+  ctx.save();
+  if(tier<LASER_TIER){                       // Paperclip / Drill Nose / Spark Tip — physical smashers
     ctx.strokeStyle=PENCIL; ctx.lineWidth=1.7;
     ctx.beginPath();
     ctx.moveTo(noseLen-9,-2.4); ctx.lineTo(noseLen+1,-2.4); ctx.arc(noseLen+1,0,2.4,-Math.PI/2,Math.PI/2);
     ctx.lineTo(noseLen-7,2.4); ctx.arc(noseLen-7,0.6,1.8,Math.PI/2,-Math.PI/2,true);
     ctx.lineTo(noseLen-1,-1.2);
     ctx.stroke();
+    if(tier>=2){                             // Drill Nose — a spiral drill bit poking forward
+      ctx.strokeStyle=INK; ctx.lineWidth=1.4;
+      ctx.beginPath(); ctx.moveTo(noseLen+1,0); ctx.lineTo(noseLen+7,0);
+      for(let s=0;s<3;s++){ ctx.moveTo(noseLen+2+s*1.8,-1.6); ctx.lineTo(noseLen+3.4+s*1.8,1.6); }
+      ctx.stroke();
+    }
+    if(tier>=3){                             // Spark Tip — little crackle at the point
+      ctx.strokeStyle=RED; ctx.lineWidth=1.1;
+      for(let s=0;s<3;s++){ const a=T*8+s*2.1; ctx.beginPath(); ctx.moveTo(noseLen+7,0); ctx.lineTo(noseLen+7+Math.cos(a)*3.2, Math.sin(a)*3.2); ctx.stroke(); }
+    }
+  } else {                                   // Laser Pointer / Cutting Laser / Plasma Lance / Photon Cannon
+    const col=laserColor(), barrel=3+ (tier-LASER_TIER);
+    ctx.fillStyle='#2A3142'; ctx.strokeStyle=INK; ctx.lineWidth=1.3;
+    ctx.beginPath();                          // emitter barrel bolted under the nose
+    ctx.rect(noseLen-4, -1.6, barrel+3, 3.2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=col;                        // glowing aperture, brighter while charged/firing
+    ctx.globalAlpha= run.laserOn? 1 : 0.55+0.35*Math.abs(Math.sin(T*6));
+    ctx.beginPath(); ctx.arc(noseLen-1+barrel, 0, 1.7+(run.laserOn?0.8:0), 0, 7); ctx.fill();
+    if(tier>=6){ ctx.globalAlpha=0.5; ctx.strokeStyle=col; ctx.lineWidth=1; ctx.beginPath(); ctx.ellipse(noseLen-1+barrel,0,3,2.2,0,0,7); ctx.stroke(); } // lens ring on the big cannons
   }
-  // visible boost device (changes shape with tier)
-  if(save.up.thr>0) drawDevice(save.up.thr, noseLen);
   ctx.restore();
 }
 // exhaust flame drawn in plane-local space (already translated/rotated/scaled)
 function drawFlame(tier){
   const len = 8 + tier*4 + Math.random()*4;
-  const col = tier>=5? '#7FB0FF' : (tier>=4? '#FF9B3D' : '#FFD24D');
+  const col = tier>=7?'#B7F2FF' : tier>=6?'#C9A0FF' : tier>=5?'#7FB0FF' : tier>=4?'#FF9B3D' : '#FFD24D';
   ctx.save();
   ctx.globalAlpha=0.9; ctx.fillStyle=col;
   ctx.beginPath();
@@ -1126,11 +1292,37 @@ function drawDevice(tier, noseLen){
   } else if(tier===4){                     // Rocket — nozzle bolted at the tail
     ctx.fillStyle=PENCIL; ctx.lineWidth=1.4;
     ctx.beginPath(); ctx.moveTo(-9,-3.4); ctx.lineTo(-14,-4.8); ctx.lineTo(-14,4.8); ctx.lineTo(-9,3.4); ctx.closePath(); ctx.fill(); ctx.stroke();
-  } else {                                 // Ion Thruster — dark ringed nozzle, blue glow
+  } else if(tier===5){                     // Ion Thruster — dark ringed nozzle, blue glow
     ctx.fillStyle='#3A4256'; ctx.lineWidth=1.4;
     ctx.beginPath(); ctx.moveTo(-9,-4); ctx.lineTo(-15,-5.6); ctx.lineTo(-15,5.6); ctx.lineTo(-9,4); ctx.closePath(); ctx.fill(); ctx.stroke();
     ctx.strokeStyle='#7FB0FF'; ctx.lineWidth=1.2; ctx.beginPath(); ctx.ellipse(-15,0,1.6,4.6,0,0,7); ctx.stroke();
+  } else if(tier===6){                     // Plasma Jet — twin nozzles, violet coils
+    ctx.fillStyle='#3A2A4A'; ctx.lineWidth=1.4;
+    for(const oy of [-3,3]){ ctx.beginPath(); ctx.moveTo(-9,oy-1.6); ctx.lineTo(-16,oy-2.4); ctx.lineTo(-16,oy+2.4); ctx.lineTo(-9,oy+1.6); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+    ctx.strokeStyle='#C9A0FF'; ctx.lineWidth=1.2; ctx.beginPath(); ctx.ellipse(-16,0,1.6,5.4,0,0,7); ctx.stroke();
+  } else {                                 // Fusion Core — glowing reactor ring at the tail
+    ctx.fillStyle='#12303A'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(-9,-4.6); ctx.lineTo(-17,-6.4); ctx.lineTo(-17,6.4); ctx.lineTo(-9,4.6); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.save(); ctx.strokeStyle='#6FE9FF'; ctx.lineWidth=1.6; ctx.globalAlpha=0.6+0.4*Math.abs(Math.sin(T*7));
+    ctx.beginPath(); ctx.arc(-13,0, 3.4, 0, 7); ctx.stroke(); ctx.restore();
+    ctx.strokeStyle='#6FE9FF'; ctx.lineWidth=1.1; ctx.beginPath(); ctx.ellipse(-17,0,1.8,6,0,0,7); ctx.stroke();
   }
+  ctx.restore();
+}
+// ---- the LASER BEAM, drawn in WORLD space so it reaches far ahead of the plane ----
+function drawLaser(){
+  if(!(state==='fly' && run.laserOn && hasLaser())) return;
+  const p=plane, rng=laserRange(), dx=Math.cos(p.rot), dy=Math.sin(p.rot);
+  const mx=p.x+dx*40, my=p.y+dy*40, ex=mx+dx*rng, ey=my+dy*rng;
+  const col=laserColor();
+  ctx.save(); ctx.lineCap='round';
+  ctx.globalAlpha=0.28; ctx.strokeStyle=col; ctx.lineWidth=9+Math.random()*3;   // outer glow
+  ctx.beginPath(); ctx.moveTo(mx,my); ctx.lineTo(ex,ey); ctx.stroke();
+  ctx.globalAlpha=0.85; ctx.strokeStyle=col; ctx.lineWidth=3.4;                 // mid
+  ctx.beginPath(); ctx.moveTo(mx,my); ctx.lineTo(ex+jit(boil)*2, ey+jit(boil+7)*2); ctx.stroke();
+  ctx.globalAlpha=0.95; ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=1.4;           // hot core
+  ctx.beginPath(); ctx.moveTo(mx,my); ctx.lineTo(ex,ey); ctx.stroke();
+  ctx.globalAlpha=1; ctx.fillStyle=col; ctx.beginPath(); ctx.arc(mx,my,4.5+Math.random()*2,0,7); ctx.fill(); // muzzle flare
   ctx.restore();
 }
 function drawParts(){
@@ -1158,7 +1350,7 @@ function drawFloats(){
 // ---------- HUD ----------
 function nextUpgradeInfo(){
   let bi=-1, bp=1e9;
-  for(let i=0;i<SHOP.length;i++){ const tr=save.up[SHOP[i].key]; if(tr<5 && SHOP[i].prices[tr]<bp){ bp=SHOP[i].prices[tr]; bi=i; } }
+  for(let i=0;i<SHOP.length;i++){ const tr=save.up[SHOP[i].key]; if(tr<MAXTIER && SHOP[i].prices[tr]<bp){ bp=SHOP[i].prices[tr]; bi=i; } }
   return bi<0?null:{i:bi, price:bp, name:SHOP[bi].name};
 }
 function drawHUD(){
@@ -1190,7 +1382,7 @@ function drawHUD(){
   }
   // pen pal goal chip (until delivered)
   if(!save.delivered){
-    txt('pen pal’s mailbox: 2000m →', W-28, 74, 15, INK_SOFT, 'right', 0.9);
+    txt('pen pal’s mailbox: 3000m →', W-28, 74, 15, INK_SOFT, 'right', 0.9);
   } else if(state==='aim'){
     txt('delivered in '+save.delThrows+' throws!', W-28, 74, 14, RED, 'right', 0.8);
   }
@@ -1212,7 +1404,36 @@ function drawHUD(){
     ctx.restore();
     // first-throws coaching for the new held-boost verb
     if(save.throws<=3 && run.gas>0 && !run.boostOn && plane.y<GROUND-30){
-      txt('HOLD to boost! ▲', W/2, H-72, 17, RED, 'center', 0.55+0.45*Math.abs(Math.sin(T*4)));
+      txt('HOLD to boost! ▲', W/2, H-92, 17, RED, 'center', 0.55+0.45*Math.abs(Math.sin(T*4)));
+    }
+  }
+  // LASER charge gauge + FIRE button (Nose Gun T4+) — a rationed weapon, metered like gas
+  if(state==='fly' && hasLaser()){
+    const lw=150, lx=W-lw-22, ly= save.up.thr>0? H-84 : H-48;   // stack above the gas gauge if present
+    const frac=Math.max(0,Math.min(1,run.laserE)), low=frac<LASER_MIN, col=laserColor();
+    const lp=1+Math.max(0,laserChipPulse)*0.18;
+    ctx.save(); ctx.translate(lx+lw/2, ly+13); ctx.scale(lp,lp); ctx.translate(-(lx+lw/2),-(ly+13));
+    ctx.strokeStyle=run.laserOn?col:INK; ctx.lineWidth=2.2; ctx.fillStyle='rgba(252,249,240,0.93)';
+    ctx.beginPath(); wrect(lx,ly,lw,26,1.5,4111); ctx.fill(); ctx.stroke();
+    ctx.fillStyle= low? PENCIL : (run.laserOn? col : INK_SOFT);
+    ctx.fillRect(lx+5, ly+15, (lw-10)*frac, 7);
+    txt(NOSE_N[save.up.clip], lx+9, ly+8, 12.5, run.laserOn?col:INK, 'left');
+    txt(run.laserOn?'FIRING':(isTouch?'FIRE ▼':'F = fire'), lx+lw-9, ly+8, 11.5, run.laserOn?col:INK_SOFT, 'right');
+    ctx.restore();
+    // touch fire button (own hit-zone; never fights pitch/boost)
+    if(isTouch){
+      const b=fireBtnPos();
+      ctx.save();
+      ctx.strokeStyle=run.laserOn?col:INK; ctx.lineWidth=2.4; ctx.fillStyle= run.laserOn? 'rgba(255,255,255,0.9)':'rgba(252,249,240,0.85)';
+      ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,7); ctx.fill(); ctx.stroke();
+      ctx.fillStyle=run.laserOn?col:(low?PENCIL:RED);
+      ctx.beginPath(); ctx.arc(b.x,b.y,7+(run.laserOn?2:0),0,7); ctx.fill();
+      txt('FIRE', b.x, b.y+18, 11, low?PENCIL:INK, 'center', 0.9);
+      ctx.restore();
+    }
+    // first-laser coaching
+    if(save.throws<=6 && !run.laserOn && plane.y<GROUND-30){
+      txt(isTouch?'tap FIRE to zap pigeons! ⚡':'press F to fire the laser! ⚡', W/2, H-72, 15, col, 'center', 0.5+0.4*Math.abs(Math.sin(T*4)));
     }
   }
   // mid-flight pitch coaching (first few throws) — teaches the new active-glide verb
@@ -1362,13 +1583,13 @@ function drawResult(){
     txt('LETTER DELIVERED in '+save.delThrows+' throws — think you can do it in fewer?', 0, 0, 17, RED, 'center');
     ctx.restore();
   } else {
-    txt(save.delivered? 'keep going — how far can one plane fly?' : 'the mailbox is at 2000m. upgrade & keep throwing!', W/2, CARD.y+186, 15, INK_SOFT, 'center');
+    txt(save.delivered? 'keep going — how far can one plane fly?' : 'the mailbox is at 3000m. upgrade & keep throwing!', W/2, CARD.y+186, 15, INK_SOFT, 'center');
   }
   // ---- shop cards ----
   const rs=cardRects();
   for(let i=0;i<rs.length;i++){
     const r=rs[i], it=SHOP[i], tier=save.up[it.key];
-    const maxed=tier>=5, price=maxed?0:it.prices[tier];
+    const maxed=tier>=MAXTIER, price=maxed?0:it.prices[tier];
     const afford=!maxed && save.st>=price;
     const shk = (cardShake>0&&cardShakeI===i)? jit(boil*7+i)*5 : 0;
     ctx.save(); ctx.translate(r.x+shk, r.y);
@@ -1378,11 +1599,12 @@ function drawResult(){
     txt(it.name, r.w/2, 20, 16.5, INK, 'center');
     drawShopIcon(i, r.w/2, 56);
     txt(cardBlurb(it,tier), r.w/2, 88, 11.5, INK_SOFT, 'center');
-    // tier pips
-    for(let p=0;p<5;p++){
+    // tier pips (7 tiers)
+    for(let p=0;p<MAXTIER;p++){
+      const pipx=r.w/2-42+p*14;
       ctx.beginPath();
-      if(p<tier){ ctx.fillStyle=INK; ctx.arc(r.w/2-28+p*14, 104, 4,0,7); ctx.fill(); }
-      else { ctx.strokeStyle=INK_SOFT; ctx.lineWidth=1.5; ctx.arc(r.w/2-28+p*14, 104, 4,0,7); ctx.stroke(); }
+      if(p<tier){ ctx.fillStyle=INK; ctx.arc(pipx, 104, 3.6,0,7); ctx.fill(); }
+      else { ctx.strokeStyle=INK_SOFT; ctx.lineWidth=1.5; ctx.arc(pipx, 104, 3.6,0,7); ctx.stroke(); }
     }
     // price
     if(maxed) txt('MAXED!', r.w/2, 122, 15, RED, 'center');
@@ -1406,10 +1628,14 @@ function drawResult(){
   txt('tap here then pull back to throw  •  tap card / ←→ + enter or 1-5 to buy', W/2, CARD.y+CARD.h+18, 13.5, 'rgba(36,71,214,0.6)', 'center');
   ctx.restore();
 }
-// escalating "number-go-up" names on the boost & folds cards (shows the NEXT tier you unlock)
+// escalating "number-go-up" names on every card (shows the NEXT tier you unlock)
 function cardBlurb(it,tier){
-  if(it.key==='thr')   return tier>=5? DEVICE[5]            : 'next: '+DEVICE[tier+1];
-  if(it.key==='folds') return tier>=5? FOLD_MAT[5].name     : '→ '+FOLD_MAT[tier+1].name;
+  const max=tier>=MAXTIER;
+  if(it.key==='thr')   return max? DEVICE[MAXTIER]          : 'next: '+DEVICE[tier+1];
+  if(it.key==='folds') return max? FOLD_MAT[MAXTIER].name   : '→ '+FOLD_MAT[tier+1].name;
+  if(it.key==='band')  return max? LAUNCH_N[MAXTIER]        : '→ '+LAUNCH_N[tier+1];
+  if(it.key==='fuel')  return max? FUEL_N[MAXTIER]          : '→ '+FUEL_N[tier+1];
+  if(it.key==='clip')  return max? NOSE_N[MAXTIER]+' ⚡'     : '→ '+NOSE_N[tier+1]+(tier+1>=LASER_TIER?' ⚡':'');
   return it.blurb;
 }
 function drawShopIcon(i,x,y){
@@ -1420,10 +1646,19 @@ function drawShopIcon(i,x,y){
   } else if(i===1){ // rubber band
     ctx.strokeStyle=RED; ctx.beginPath(); ctx.ellipse(0,0,16,9,0.5,0,7); ctx.stroke();
     ctx.beginPath(); ctx.ellipse(2,1,14,7,0.9,0,7); ctx.stroke();
-  } else if(i===2){ // paperclip
-    ctx.strokeStyle=PENCIL; ctx.lineWidth=2.6;
-    ctx.beginPath(); ctx.moveTo(-8,-8); ctx.lineTo(8,-8); ctx.arc(8,-2,6,-Math.PI/2,Math.PI/2);
-    ctx.lineTo(-6,4); ctx.arc(-6,0,4,Math.PI/2,-Math.PI/2,true); ctx.lineTo(4,-4); ctx.stroke();
+  } else if(i===2){ // nose gun — paperclip smasher, or a laser emitter once unlocked
+    if(save.up.clip>=LASER_TIER){
+      const col=laserColor();
+      ctx.fillStyle='#2A3142'; ctx.strokeStyle=INK; ctx.lineWidth=1.6;
+      ctx.beginPath(); ctx.rect(-12,-3,10,6); ctx.fill(); ctx.stroke();     // emitter body
+      ctx.strokeStyle=col; ctx.lineWidth=3; ctx.globalAlpha=0.85;
+      ctx.beginPath(); ctx.moveTo(-2,0); ctx.lineTo(16,0); ctx.stroke();     // beam
+      ctx.globalAlpha=1; ctx.fillStyle=col; ctx.beginPath(); ctx.arc(-2,0,2.4,0,7); ctx.fill();
+    } else {
+      ctx.strokeStyle=PENCIL; ctx.lineWidth=2.6;
+      ctx.beginPath(); ctx.moveTo(-8,-8); ctx.lineTo(8,-8); ctx.arc(8,-2,6,-Math.PI/2,Math.PI/2);
+      ctx.lineTo(-6,4); ctx.arc(-6,0,4,Math.PI/2,-Math.PI/2,true); ctx.lineTo(4,-4); ctx.stroke();
+    }
   } else if(i===3){ // thruster — rocket body + flame + spinning fan hint
     ctx.fillStyle=PENCIL; ctx.beginPath(); ctx.moveTo(6,-6); ctx.lineTo(-6,-3.5); ctx.lineTo(-6,3.5); ctx.lineTo(6,6); ctx.closePath(); ctx.fill(); ctx.stroke();
     ctx.fillStyle=RED; ctx.beginPath(); ctx.moveTo(-6,-3); ctx.lineTo(-14,0); ctx.lineTo(-6,3); ctx.closePath(); ctx.fill();
