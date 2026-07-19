@@ -64,7 +64,7 @@ Derived from the full flash canon research (`research/top-flash-games-dna.md`, `
 - P3. Upgrades are visible and strategy-changing (new gear on the sprite, new physics behavior), not stat-only. Best tiers escalate in *kind* — a new form, material, or behavior the player sees change — not just a bigger number.
 - P4. At least two simultaneous number-go-up axes (per-run score, cumulative currency, upgrade tiers).
 - P5. Structure offers a personal-best chase and, where it fits, a finite completable goal graded on efficiency ("done in X days — think you can do better?"). Victory through persistence is guaranteed; only speed differentiates.
-- P6. The upgrade arc has depth and a peak: at least one upgrade is a tradeoff or interacts with another (not pure power), and the late game builds to an earned final upgrade rather than an empty wall once the obvious buys are done.
+- P6. The upgrade arc has depth and a long tail: at least one upgrade is a tradeoff or interacts with another (not pure power); the ladder extends well past the completion goal toward a far, aspirational ceiling so mastery players keep climbing (not an empty wall after the obvious buys); and high tiers can introduce new capabilities, not just bigger numbers — while the first tiers stay cheap and one-more-run away.
 
 ### Comedy/spectacle pack (physics comedy, destruction, ragdoll, subversion)
 - C1. Failure produces spectacle — the play-tester's report of a failed run should read as entertainment, not frustration (destruction/collapse/ragdoll payoff lands on losing runs too).
