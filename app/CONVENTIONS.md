@@ -64,6 +64,7 @@ Persist best score in `localStorage` under `gs_best:<slug>` (hardcode your slug)
 3. Failure is never boring: instant retry (≤1s, one input) AND/OR failure-as-spectacle AND/OR banked progress — per your declared dials.
 4. **Touch works fully.** Pointer events (not click-only), thumb-zone-aware layout, controls documented in-world on touch devices. Test mentally at 390×844 portrait and 844×390 landscape.
 5. Game-over screen: score + best + retry (retry is the default, triggered by tap/Enter/Space), rendered in the game's own art style.
+6. **Retry returns to the real playable start state.** A replay puts the player exactly where a first-time player begins — including any aim / charge / place / draw / setup phase the core mechanic requires. Never auto-perform the core action for them on replay. If the verb is "throw", replay lets them pull-and-release again; it does not throw for them.
 
 ## Feel & craft requirements (scored, not optional in spirit)
 

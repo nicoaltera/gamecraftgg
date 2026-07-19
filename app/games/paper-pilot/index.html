@@ -158,6 +158,7 @@ const sfx = {
 
 // ---------- game state ----------
 let state='aim';            // aim | fly | settle | result
+let charging=false, chargeT=0;   // keyboard charge-and-release throw
 let plane={x:LAUNCH.x,y:LAUNCH.y,vx:0,vy:0,rot:-0.5};
 let cam={x:-170,y:0,zoom:1,shake:0};
 let run={dist:0,air:0,tricks:0,trickN:0,fanUsed:false,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
@@ -465,6 +466,7 @@ function frame(now){
     T+=STEP;
     boil=Math.floor(T*8);
     const sdt=STEP*timeScale;
+    if(charging && state==='aim') chargeT=Math.min(1, chargeT+STEP/0.9);  // hold Space to charge power
     if(state==='fly') stepFly(sdt);
     else if(state==='settle'){ settleT+=STEP; if(settleT>0.65) finishRun(); }
     else if(state==='result'){ const pv=tallyT; tallyT+=STEP; if(pv<1.35&&tallyT>=1.35&&run.stickers>2) sfx.chaChing(); }
@@ -503,27 +505,36 @@ window.addEventListener('pointerup',(e)=>{
   dragging=false;
   const dx=dragStart.x-dragCur.x, dy=dragStart.y-dragCur.y;
   const len=Math.hypot(dx,dy);
-  if(len<14){ if(state==='aim') defaultThrow(); return; }
+  // a too-short pull is NOT a throw — you stay in aim and must pull to launch.
+  // (Retry never auto-throws; the player performs the mechanic every time.)
+  if(len<14){ return; }
   let ang=Math.atan2(dy,dx);
   ang=Math.max(-1.45, Math.min(0.5, ang));                  // must go rightish
   const pw=Math.min(1, len/190)*power();
   if(state==='aim') beginThrow(Math.max(pw, power()*0.2), ang);
 },{passive:false});
+function releaseCharge(){
+  if(state==='aim' && charging){
+    const f=Math.min(1, chargeT);
+    beginThrow(power()*(0.4+0.6*f), DEFAULT_ANG);            // keyboard throw = charged power, held-Space skill
+  }
+  charging=false; chargeT=0;
+}
 window.addEventListener('keydown',(e)=>{
   if(e.repeat) return;
   audioInit();
   const k=e.key;
   if(k===' '||k==='Spacebar'){ e.preventDefault();
-    if(state==='aim') defaultThrow();
+    if(state==='aim'){ charging=true; chargeT=0; }            // hold to charge, release to throw
     else if(state==='fly') tryFan();
-    else if(state==='result') defaultThrow();
+    else if(state==='result'){ if(sel>=0) buy(sel); else toAim(); }  // back to aim — you throw it yourself
   } else if(k==='Enter'){
-    if(state==='result'){ if(sel>=0) buy(sel); else defaultThrow(); }
-    else if(state==='aim') defaultThrow();
+    if(state==='result'){ if(sel>=0) buy(sel); else toAim(); }
   } else if(k==='ArrowRight'||k==='d'){ if(state==='result'){ sel=(sel+1)%SHOP.length; sfx.pop(); } }
   else if(k==='ArrowLeft'||k==='a'){ if(state==='result'){ sel=sel<=0?SHOP.length-1:sel-1; sfx.pop(); } }
   else if(k>='1'&&k<='5'){ if(state==='result') buy(+k-1); }
 });
+window.addEventListener('keyup',(e)=>{ if(e.key===' '||e.key==='Spacebar'){ e.preventDefault(); releaseCharge(); } });
 
 // ============================================================
 //  RENDERING — everything is wobbly biro ink on notebook paper
@@ -1001,7 +1012,14 @@ function drawHUD(){
   // aim-state coaching + next-goal
   if(state==='aim'){
     const first = save.throws===0;
-    txt(first?'drag back anywhere — release to throw!':'drag to aim  •  tap / space = quick throw', W/2, H-26, first?20:16, INK, 'center', 0.75+0.25*Math.sin(T*3), -0.01);
+    txt(charging?'release to throw!':(first?'pull back anywhere — release to throw!':'pull back to aim & throw  •  or hold Space'), W/2, H-26, first?20:16, INK, 'center', 0.75+0.25*Math.sin(T*3), -0.01);
+    if(charging){  // charge meter
+      const bw=180, f=Math.min(1,chargeT);
+      ctx.save(); ctx.strokeStyle=INK; ctx.lineWidth=2; ctx.fillStyle='rgba(252,249,240,0.9)';
+      ctx.beginPath(); wrect(W/2-bw/2, H-58, bw, 12, 1.4, 4022); ctx.fill(); ctx.stroke();
+      ctx.fillStyle=RED; ctx.fillRect(W/2-bw/2+3, H-55, (bw-6)*f, 6);
+      ctx.restore();
+    }
     const nu=nextUpgradeInfo();
     if(nu && !first){
       const afford = save.st>=nu.price;
@@ -1135,9 +1153,9 @@ function drawResult(){
   ctx.save(); ctx.translate(W/2, CARD.y+CARD.h-33); ctx.scale(bp,bp);
   ctx.fillStyle=INK; ctx.strokeStyle=INK; ctx.lineWidth=2.6;
   ctx.beginPath(); wrect(-110,-25,220,50,2,5400); ctx.fillStyle='rgba(36,71,214,0.1)'; ctx.fill(); ctx.stroke();
-  txt('THROW AGAIN ✈', 0, 1, 21, INK, 'center');
+  txt('AIM NEXT THROW ✈', 0, 1, 20, INK, 'center');
   ctx.restore();
-  txt('tap/drag or SPACE to throw  •  tap card / ←→ + enter or 1-5 to buy', W/2, CARD.y+CARD.h+18, 13.5, 'rgba(36,71,214,0.6)', 'center');
+  txt('tap here then pull back to throw  •  tap card / ←→ + enter or 1-5 to buy', W/2, CARD.y+CARD.h+18, 13.5, 'rgba(36,71,214,0.6)', 'center');
   ctx.restore();
 }
 function drawShopIcon(i,x,y){

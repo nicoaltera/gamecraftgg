@@ -32,6 +32,10 @@ Derived from the full flash canon research (`research/top-flash-games-dna.md`, `
 - U7. A full session unit is 30s–5min with a "one more" seam (the unit ends on a cliff or an adjacent reward).
 - U8. One legible brag metric always visible (score, distance, depth, wave, days), animating on change.
 
+**Interesting decisions (the "is it actually fun" gate)**
+- U8a. ⛔ Retry returns the player to the real playable start state and the player performs the core mechanic themselves — no auto-executed core action (aim/charge/draw/throw) on replay. The play-tester must confirm a second play began from the same interactive state as the first.
+- U8b. The core verb creates a live decision whose outcome the player earns: careless play and considered/skilled play produce visibly different results *through the player's choices*, not chance, and the optimal action is not a single obvious move repeated. A game that fails this is "lame" even with clean art and a novel premise — the fun-drive judge should say so plainly and score it down.
+
 **Crafted, juicy, intentional**
 - U9. Every core interaction fires ≥2 feedback channels (sound + particles/flash/shake/tween); sounds pitch-varied; nothing pops into existence without motion.
 - U10. Escalation is delivered as visible spectacle (denser, bigger, further), not just hidden numbers.

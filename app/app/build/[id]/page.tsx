@@ -30,6 +30,7 @@ export default function BuildPage({ params }: { params: Promise<{ id: string }> 
   const { id } = use(params);
   const [gen, setGen] = useState<Gen | null>(null);
   const [missing, setMissing] = useState(false);
+  const [showThinking, setShowThinking] = useState(true);
 
   useEffect(() => {
     let alive = true;
@@ -42,7 +43,7 @@ export default function BuildPage({ params }: { params: Promise<{ id: string }> 
         }
         const data = (await res.json()) as Gen;
         if (alive) setGen(data);
-        if (alive && data.status === 'running') setTimeout(poll, 2000);
+        if (alive && data.status === 'running') setTimeout(poll, 1200);
       } catch {
         if (alive) setTimeout(poll, 4000);
       }
@@ -66,7 +67,14 @@ export default function BuildPage({ params }: { params: Promise<{ id: string }> 
       </main>
     );
 
-  const events = JSON.parse(gen.trace || '[]') as { t: number; kind: string; detail: string }[];
+  type Ev = { t: number; kind: string; detail: string; stream?: 'thinking' | 'tool' | 'say' };
+  const allEvents = JSON.parse(gen.trace || '[]') as Ev[];
+  const events = showThinking ? allEvents : allEvents.filter((e) => e.stream !== 'thinking');
+  const streamStyle: Record<string, { label: string; color: string; italic?: boolean }> = {
+    thinking: { label: 'thinking', color: 'var(--graphite)', italic: true },
+    tool: { label: 'tool', color: 'var(--biro)' },
+    say: { label: 'says', color: 'var(--ink)' },
+  };
 
   return (
     <main className="game-page">
@@ -79,29 +87,48 @@ export default function BuildPage({ params }: { params: Promise<{ id: string }> 
         “{gen.prompt}”
       </p>
 
-      <ol style={{ listStyle: 'none', padding: 0, marginTop: 28, maxWidth: 720 }}>
-        {events.map((e, i) => (
-          <li
-            key={i}
-            style={{
-              display: 'flex',
-              gap: 16,
-              padding: '10px 0',
-              borderBottom: '1px solid rgba(26,24,21,0.12)',
-              alignItems: 'baseline',
-            }}
-          >
-            <span
-              className="display"
-              style={{ minWidth: 110, color: e.kind === 'error' || e.kind === 'fail' ? 'var(--redpencil)' : 'var(--biro)' }}
+      <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', marginTop: 18, fontSize: 13, color: 'var(--graphite)' }}>
+        <input type="checkbox" checked={showThinking} onChange={(e) => setShowThinking(e.target.checked)} />
+        show thinking
+      </label>
+
+      <ol style={{ listStyle: 'none', padding: 0, marginTop: 16, maxWidth: 760 }}>
+        {events.map((e, i) => {
+          if (e.stream) {
+            const s = streamStyle[e.stream] ?? streamStyle.say;
+            return (
+              <li key={i} style={{ display: 'flex', gap: 12, padding: '3px 0 3px 18px', alignItems: 'baseline' }}>
+                <span className="mono" style={{ minWidth: 74, fontSize: 11, color: s.color, textTransform: 'lowercase' }}>{s.label}</span>
+                <span style={{ fontSize: 13.5, color: s.color, fontStyle: s.italic ? 'italic' : 'normal', whiteSpace: 'pre-wrap' }}>{e.detail}</span>
+              </li>
+            );
+          }
+          return (
+            <li
+              key={i}
+              style={{
+                display: 'flex',
+                gap: 16,
+                padding: '12px 0 4px',
+                marginTop: 6,
+                borderTop: '1px solid rgba(26,24,21,0.12)',
+                alignItems: 'baseline',
+              }}
             >
-              {KIND_LABEL[e.kind] ?? e.kind}
-            </span>
-            <span style={{ fontSize: 15, whiteSpace: 'pre-wrap' }}>{e.detail}</span>
-          </li>
-        ))}
+              <span
+                className="display"
+                style={{ minWidth: 110, color: e.kind === 'error' || e.kind === 'fail' ? 'var(--redpencil)' : 'var(--biro)' }}
+              >
+                {KIND_LABEL[e.kind] ?? e.kind}
+              </span>
+              <span style={{ fontSize: 15, whiteSpace: 'pre-wrap', fontWeight: 500 }}>{e.detail}</span>
+            </li>
+          );
+        })}
         {gen.status === 'running' && (
-          <li style={{ padding: '14px 0', color: 'var(--graphite)', fontSize: 15 }}>working…</li>
+          <li style={{ padding: '14px 0 14px 18px', color: 'var(--graphite)', fontSize: 14 }}>
+            <span className="gs-blink">▍</span> working…
+          </li>
         )}
       </ol>
 

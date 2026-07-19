@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import Link from 'next/link';
 import type { Metadata } from 'next';
 import { getGame } from '@/lib/db';
 import GameStage from '@/components/GameStage';
@@ -34,6 +35,7 @@ export default async function GamePage({ params }: Params) {
 
   return (
     <main className="game-page">
+      <Link href="/#games" className="back-link">← all games</Link>
       <div className="game-title-row">
         <h1>{game.title}</h1>
         <span className="game-verb">{game.verb}</span>

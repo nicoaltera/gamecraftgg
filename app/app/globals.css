@@ -295,3 +295,9 @@ main {
   .feed-head { margin-top: 24px; }
   .feed-head .feed-note { display: none; }
 }
+
+.gs-blink { animation: gs-blink 1s steps(2) infinite; color: var(--biro); }
+@keyframes gs-blink { 0%,50% { opacity: 1 } 50.01%,100% { opacity: 0 } }
+
+.back-link { display: inline-block; color: var(--graphite); font-size: 14px; margin-bottom: 10px; }
+.back-link:hover { color: var(--biro); }

@@ -38,29 +38,98 @@ db.prepare(
    ON CONFLICT(id) DO UPDATE SET status='running', updated_at=excluded.updated_at`
 ).run(genId, prompt, Date.now(), Date.now());
 
-function trace(kind, detail) {
+// The trace is the live feed the build page renders. `stream` marks fine-grained
+// agent activity (thinking / tool / say) vs. the coarse stage-boundary rows.
+const _events = (() => {
   const row = db.prepare('SELECT trace FROM generations WHERE id = ?').get(genId);
-  const events = JSON.parse(row?.trace ?? '[]');
-  events.push({ t: Date.now(), kind, detail: String(detail).slice(0, 4000) });
-  db.prepare('UPDATE generations SET trace = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(events), Date.now(), genId);
-  console.log(`[${kind}] ${String(detail).slice(0, 160)}`);
+  return JSON.parse(row?.trace ?? '[]');
+})();
+let _lastFlush = 0;
+function flushTrace(force = false) {
+  const now = Date.now();
+  if (!force && now - _lastFlush < 400) return; // throttle DB writes during bursty streams
+  _lastFlush = now;
+  db.prepare('UPDATE generations SET trace = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(_events), now, genId);
+}
+function trace(kind, detail, stream) {
+  const ev = { t: Date.now(), kind, detail: String(detail).slice(0, 2000) };
+  if (stream) ev.stream = stream;
+  _events.push(ev);
+  flushTrace(!stream); // stage rows flush immediately; stream rows are throttled
+  console.log(`[${kind}${stream ? '/' + stream : ''}] ${String(detail).slice(0, 160)}`);
 }
 function setGen(fields) {
   const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
   db.prepare(`UPDATE generations SET ${sets}, updated_at = ? WHERE id = ?`).run(...Object.values(fields), Date.now(), genId);
 }
 
-// ---------- claude helper ----------
-// `cwd` scopes tool-enabled agents (the judge's Read) to a directory so a
-// prompt-injected game brief can't steer them to read app secrets.
-function claude(rolePrompt, { tools, timeoutMin = 15, cwd = APP } = {}) {
-  const cliArgs = ['-p', rolePrompt, '--output-format', 'text'];
-  if (tools) cliArgs.push('--allowedTools', tools, '--permission-mode', 'acceptEdits');
-  return execFileSync('claude', cliArgs, {
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-    timeout: timeoutMin * 60 * 1000,
-    cwd,
+// ---------- claude helper (streaming) ----------
+// Streams the agent's turns so the build page shows every thinking step, tool
+// call, and message live — instead of hanging on one blocking call. Returns the
+// concatenated assistant text for parsing. `cwd` scopes tool-enabled agents
+// (the judge's Read) so a prompt-injected brief can't read app secrets.
+function short(s, n = 150) {
+  const one = String(s).replace(/\s+/g, ' ').trim();
+  return one.length > n ? one.slice(0, n) + '…' : one;
+}
+function claude(rolePrompt, { tools, timeoutMin = 15, cwd = APP, phase = 'agent' } = {}) {
+  return new Promise((resolve, reject) => {
+    const cliArgs = ['-p', rolePrompt, '--output-format', 'stream-json', '--verbose'];
+    if (tools) cliArgs.push('--allowedTools', tools, '--permission-mode', 'acceptEdits');
+    const child = spawn('claude', cliArgs, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+
+    let fullText = '';
+    let buf = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      trace(phase, `timed out after ${timeoutMin} min — moving on`, 'tool');
+      child.kill('SIGKILL');
+    }, timeoutMin * 60 * 1000);
+
+    function handleEvent(ev) {
+      if (!ev || typeof ev !== 'object') return;
+      if (ev.type === 'assistant' && ev.message?.content) {
+        for (const b of ev.message.content) {
+          if (b.type === 'text' && b.text) {
+            fullText += b.text;
+            trace(phase, short(b.text, 220), 'say');
+          } else if (b.type === 'thinking' && b.thinking) {
+            trace(phase, short(b.thinking, 220), 'thinking');
+          } else if (b.type === 'tool_use') {
+            const inp = b.input ? short(JSON.stringify(b.input), 120) : '';
+            trace(phase, `${b.name} ${inp}`, 'tool');
+          }
+        }
+      } else if (ev.type === 'result' && typeof ev.result === 'string' && !fullText) {
+        fullText = ev.result; // fallback if no assistant text blocks were seen
+      }
+    }
+
+    child.stdout.on('data', (chunk) => {
+      buf += chunk.toString();
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        try {
+          handleEvent(JSON.parse(line));
+        } catch {
+          /* ignore non-JSON lines */
+        }
+      }
+    });
+    child.stderr.on('data', (c) => (stderr += c.toString()));
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(new Error(`claude spawn failed: ${e.message}`));
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      flushTrace(true);
+      if (fullText) resolve(fullText);
+      else reject(new Error(`claude exited ${code} with no output${stderr ? ': ' + short(stderr, 300) : ''}`));
+    });
   });
 }
 
@@ -85,7 +154,7 @@ const designGuidance = fs.readFileSync(path.join(APP, '..', '02-generation-pipel
 try {
   // ---------- 1. designer ----------
   trace('designer', 'Designing the game…');
-  const designerOut = claude(
+  const designerOut = await claude(
     `You are the GameSight DESIGNER agent — heavy planning, high taste, before any code.
 
 Guidance (follow the "Stage 1 — Designer agent" section exactly, including the fun-drive dials and the wide creative space):
@@ -97,7 +166,8 @@ Produce:
 1. A complete DESIGN_BRIEF (markdown) covering every bullet in Stage 1: fun-drive dials, core verb (≤5 words), the twist, failure model, structure/escalation, toy check if physics, mode (sp only for now), art direction (specific hexes, shape language), sound & juice plan, controls (desktop + touch), rendering route (canvas2d preferred; phaser only if physics-heavy).
 2. A meta.json object per the conventions (slug: kebab-case, unique-feeling, not colliding with common words).
 
-Output format: the brief inside a \`\`\`markdown fence, then the meta inside a \`\`\`json fence. Nothing else.`
+Output format: the brief inside a \`\`\`markdown fence, then the meta inside a \`\`\`json fence. Nothing else.`,
+    { phase: 'designer' }
   );
   const brief = extractBlock(designerOut, 'markdown') ?? designerOut;
   const meta = extractJson(designerOut);
@@ -125,7 +195,7 @@ Output format: the brief inside a \`\`\`markdown fence, then the meta inside a \
   for (let cycle = 1; cycle <= MAX_CYCLES; cycle++) {
     setGen({ cycles: cycle });
     trace('builder', cycle === 1 ? 'Writing the game…' : `Fixing per critique (cycle ${cycle})…`);
-    const builderOut = claude(
+    const builderOut = await claude(
       `You are the GameSight BUILDER agent. Implement the design brief EXACTLY as one self-contained index.html per the conventions. Pure Canvas2D + WebAudio unless the brief demands Phaser (then use <script src="/vendor/phaser.min.js">).
 
 CONVENTIONS (binding contract):
@@ -138,7 +208,7 @@ ${cycle > 1 ? `PREVIOUS ATTEMPT FAILED VERIFICATION. The current index.html is a
 Also produce cover.svg: a 640x400 SVG cover in the game's own art language.
 
 Output format: complete index.html inside a \`\`\`html fence, then cover.svg inside a \`\`\`xml fence. No commentary.`,
-      { timeoutMin: 40 }
+      { timeoutMin: 40, phase: 'builder' }
     );
     const html = extractBlock(builderOut, 'html');
     const cover = extractBlock(builderOut, 'xml') ?? extractBlock(builderOut, 'svg');
@@ -173,7 +243,7 @@ Output format: complete index.html inside a \`\`\`html fence, then cover.svg ins
 
     // judge panel
     trace('judge', 'Judges scoring against the rubric…');
-    const judgeOut = claude(
+    const judgeOut = await claude(
       `You are the GameSight JUDGE PANEL (feel, taste, fun-drive, integration, content judges in one pass). Score this game against the rubric. Be strict about critical fails, generous to declared archetypes, and specific in critique.
 
 RUBRIC:
@@ -189,7 +259,7 @@ Harness hard-fail: ${verifyFailed}
 Your working directory IS this game's folder. The game's code is at ./index.html and screenshots from the play-test are in ./_shots/ — READ the code and LOOK at every screenshot with the Read tool before scoring. Judge art direction from the screenshots like an art director. Read ONLY files within this folder.
 
 Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "critique": "specific, actionable, ordered by importance", "verdict": "publish" | "fix"}`,
-      { tools: 'Read', cwd: gameDir }
+      { tools: 'Read', cwd: gameDir, phase: 'judge' }
     );
     const verdict = extractJson(judgeOut);
     trace('judge', `score ${verdict.score}/100, critical fails: ${verdict.criticalFails?.length ?? 0} — ${verdict.verdict}`);
