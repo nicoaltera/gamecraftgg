@@ -214,16 +214,18 @@ export function getGame(slug: string): GameRow | undefined {
   return db().prepare('SELECT * FROM games WHERE slug = ? AND status = ?').get(slug, 'published') as GameRow | undefined;
 }
 
-export type FeedItem = GameRow & { plays: number; avg_runs: number; heat: number };
+export type FeedItem = GameRow & { plays: number; total_plays: number; avg_runs: number; heat: number };
 
-// Retention-ranked feed: plays weighted by how much people replay and stick,
-// with a freshness boost so new games get their exposure window (01-product-spec).
+// Retention-ranked feed: recent (7-day) plays weighted by how much people replay
+// and stick drive `heat`; `total_plays` is the lifetime count shown on the card
+// (social proof that never resets to "new" once a game has real plays).
 export function getFeed(limit = 24): FeedItem[] {
   const rows = db()
     .prepare(
       `
     SELECT g.*,
       COALESCE(p.plays, 0) AS plays,
+      COALESCE(t.total_plays, 0) AS total_plays,
       COALESCE(p.avg_runs, 0) AS avg_runs,
       COALESCE(p.plays, 0) * (1.0 + COALESCE(p.avg_runs, 0)) * (1.0 + MIN(COALESCE(p.avg_dur, 0) / 60000.0, 5.0))
         + CASE WHEN g.created_at > (unixepoch() * 1000 - 72 * 3600 * 1000) THEN 50 ELSE 0 END
@@ -234,6 +236,9 @@ export function getFeed(limit = 24): FeedItem[] {
       FROM plays WHERE started_at > (unixepoch() * 1000 - 7 * 86400 * 1000)
       GROUP BY slug
     ) p ON p.slug = g.slug
+    LEFT JOIN (
+      SELECT slug, COUNT(*) AS total_plays FROM plays GROUP BY slug
+    ) t ON t.slug = g.slug
     WHERE g.status = 'published'
     ORDER BY heat DESC, g.created_at DESC
     LIMIT ?
