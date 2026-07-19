@@ -1,7 +1,7 @@
 {
   "title": "Sky Duel",
   "slug": "sky-duel",
-  "description": "A free-for-all dogfight over the clouds — out-fly three rival planes and be the last one flying.",
+  "description": "A free-for-all dogfight across an open sky — out-fly a growing squadron of rival planes and be the last one flying.",
   "verb": "fly and shoot",
   "dials": ["mastery", "comedy"],
   "orientation": "landscape",

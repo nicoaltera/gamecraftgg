@@ -46,6 +46,17 @@ const snap = (page) => page.evaluate(() => ({
   playerBarrels: planes[0] && planes[0].st && planes[0].st.barrels,
   botStun: planes.filter(q=>q.id!==0 && (q.stun||0)>0).length,
   botHpMax: planes.filter(q=>q.id!==0).map(q=>q.maxHp),
+  // world/camera/countdown/enemy-kit fields
+  countT: (typeof countT!=='undefined')?+countT.toFixed(2):null,
+  live: (typeof gunsLive==='function')?gunsLive():null,
+  camX: (typeof camX!=='undefined')?Math.round(camX):null,
+  camY: (typeof camY!=='undefined')?Math.round(camY):null,
+  worldW: (typeof WORLD_W!=='undefined')?WORLD_W:null,
+  worldH: (typeof WORLD_H!=='undefined')?WORLD_H:null,
+  pX: planes[0]?Math.round(planes[0].x):null, pY: planes[0]?Math.round(planes[0].y):null,
+  enemies: planes.filter(q=>q.id!==0).length,
+  round,
+  botKit: planes.filter(q=>q.id!==0).map(q=>({sk:!!(q.kit&&q.kit.seeker), dr:q.drones?q.drones.length:0, sh:q.shieldMax||0, ace:!!q.ace})),
 }));
 const msgs = (page) => page.evaluate(() => window.__gs.msgs);
 const lastGO = (m) => [...m].reverse().find(x=>x.gs==='gameover');
@@ -59,7 +70,7 @@ const browser = await chromium.launch();
   await page.keyboard.press('Space'); // scramble
   await page.waitForTimeout(400);
   const s = await snap(page);
-  notes.push(`FRESH: ready=${m0.some(x=>x.gs==='ready')} state=${s.state} baseMaxHp=${s.pMaxHp} (expect 6) barrels=${s.playerBarrels}`);
+  notes.push(`FRESH: ready=${m0.some(x=>x.gs==='ready')} state=${s.state} baseMaxHp=${s.pMaxHp} (expect 8) barrels=${s.playerBarrels}`);
   await ctx.close();
 }
 
@@ -90,7 +101,7 @@ const browser = await chromium.launch();
 {
   const { page, ctx } = await newPage(browser, seedSave({ v:2, up:0, equip:'rockets', tier:{ speed:2,armor:2,guns:3,rockets:4,drones:0,scatter:0,emp:0 } }));
   await page.keyboard.press('Space');
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(3300); // wait out the pre-round countdown so guns are live
   const pre = await snap(page);
   await page.keyboard.down('k'); await page.waitForTimeout(150); await page.keyboard.up('k'); // one seeker (edge-fire)
   await page.waitForTimeout(80);
@@ -107,7 +118,7 @@ const browser = await chromium.launch();
 {
   const { page, ctx } = await newPage(browser, seedSave({ v:2, up:0, equip:null, tier:{ speed:1,armor:1,guns:1,rockets:0,drones:3,scatter:0,emp:0 } }));
   await page.keyboard.press('Space');
-  await page.waitForTimeout(1200); // let drones acquire + auto-fire
+  await page.waitForTimeout(4000); // wait out countdown, then let drones acquire + auto-fire
   const s = await snap(page);
   await page.screenshot({ path: path.join(shotDir, 'drive-drones.png') });
   notes.push(`DRONES: count=${s.drones} (expect 3) activeBullets=${s.activeBullets} (drones auto-fire owner-0 bullets)`);
@@ -118,9 +129,9 @@ const browser = await chromium.launch();
 {
   const { page, ctx } = await newPage(browser, seedSave({ v:2, up:0, equip:'scatter', tier:{ speed:1,armor:1,guns:1,rockets:0,drones:0,scatter:5,emp:0 } }));
   await page.keyboard.press('Space');
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(3300); // wait out countdown so guns are live
   const pre = await snap(page);
-  await page.keyboard.press('k'); // fire scatter
+  await page.keyboard.down('k'); await page.waitForTimeout(140); await page.keyboard.up('k'); // fire scatter (realistic tap spans frames)
   await page.waitForTimeout(60);
   const post = await snap(page);
   await page.screenshot({ path: path.join(shotDir, 'drive-scatter.png') });
@@ -132,10 +143,10 @@ const browser = await chromium.launch();
 {
   const { page, ctx } = await newPage(browser, seedSave({ v:2, up:0, equip:'emp', tier:{ speed:1,armor:1,guns:1,rockets:0,drones:0,scatter:0,emp:5 } }));
   await page.keyboard.press('Space');
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(3300); // wait out countdown so the EMP special is live
   // force the charge full and teleport a bot next to the player for a deterministic stun
   await page.evaluate(() => { planes[0].empC = 1; const b = planes.find(q=>q.id!==0 && q.alive); if(b){ b.x = planes[0].x+40; b.y = planes[0].y; } });
-  await page.keyboard.press('k'); // detonate EMP
+  await page.keyboard.down('k'); await page.waitForTimeout(140); await page.keyboard.up('k'); // detonate EMP (realistic tap)
   await page.waitForTimeout(80);
   const post = await snap(page);
   await page.screenshot({ path: path.join(shotDir, 'drive-emp.png') });
@@ -228,6 +239,71 @@ const browser = await chromium.launch();
   await page.waitForTimeout(50);
   await page.screenshot({ path: path.join(shotDir, 'drive-mobile-play.png') });
   notes.push(`MOBILE: state=${pre.state} equip=${pre.equip} rkAmmo=${pre.rkAmmo} (SP touch button rendered)`);
+  await ctx.close();
+}
+
+// ---- 12) COUNTDOWN: guns held during 3·2·1, live on ENGAGE (player AND bots) ----
+{
+  const { page, ctx } = await newPage(browser, seedSave({ v:2, up:0, equip:'scatter', tier:{ speed:1,armor:1,guns:2,rockets:0,drones:0,scatter:3,emp:0 } }));
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(250);
+  await page.keyboard.down('Space'); // hold FIRE during the countdown
+  await page.waitForTimeout(650);
+  const during = await page.evaluate(()=>({ countT:+countT.toFixed(2), live:gunsLive(), own0:bullets.filter(b=>b.on&&b.owner===0).length, anyBullets:bullets.filter(b=>b.on).length, heat:planes[0].heat }));
+  await page.screenshot({ path: path.join(shotDir, 'drive-countdown.png') });
+  await page.keyboard.up('Space');
+  await page.waitForTimeout(2700); // reach ENGAGE
+  await page.keyboard.down('Space');
+  await page.waitForTimeout(350);
+  const after = await page.evaluate(()=>({ live:gunsLive(), own0:bullets.filter(b=>b.on&&b.owner===0).length }));
+  await page.keyboard.up('Space');
+  notes.push(`COUNTDOWN: during(count=${during.countT}) live=${during.live} playerBullets=${during.own0} allBullets=${during.anyBullets} heat=${during.heat.toFixed(2)} (expect held: 0/0) → afterENGAGE live=${after.live} playerBullets=${after.own0} (expect >0)`);
+  await ctx.close();
+}
+
+// ---- 13) WORLD bigger than viewport + camera follows the player ----
+{
+  const { page, ctx } = await newPage(browser, seedSave({ v:2, up:0, equip:null, tier:{ speed:4,armor:1,guns:1,rockets:0,drones:0,scatter:0,emp:0 } }));
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(3300);
+  const s0 = await snap(page);
+  await page.keyboard.down('ArrowUp'); // thrust
+  for(let i=0;i<18;i++){ await page.keyboard.press('ArrowRight'); await page.waitForTimeout(120); }
+  await page.waitForTimeout(1600);
+  await page.keyboard.up('ArrowUp');
+  const s1 = await snap(page);
+  await page.screenshot({ path: path.join(shotDir, 'drive-world-camera.png') });
+  notes.push(`WORLD: ${s0.worldW}x${s0.worldH} vs viewport 960x540 (bigger=${s0.worldW>960 && s0.worldH>540})`);
+  notes.push(`CAMERA: cam (${s0.camX},${s0.camY})->(${s1.camX},${s1.camY}) moved=${s1.camX!==s0.camX||s1.camY!==s0.camY}; player (${s0.pX},${s0.pY})->(${s1.pX},${s1.pY}) travelled=${Math.round(Math.hypot(s1.pX-s0.pX,s1.pY-s0.pY))}px`);
+  await ctx.close();
+}
+
+// ---- 14) MORE enemies scale with round + bots earn cool kit at higher rounds ----
+{
+  const { page, ctx } = await newPage(browser, seedSave({ v:2, up:0, equip:null, tier:{ speed:0,armor:0,guns:0,rockets:0,drones:0,scatter:0,emp:0 } }));
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(300);
+  const r1 = await page.evaluate(()=>{ round=1; placeRing(); return planes.filter(q=>q.id!==0).length; });
+  const r4 = await page.evaluate(()=>{ round=4; placeRing(); return planes.filter(q=>q.id!==0).length; });
+  const r7 = await page.evaluate(()=>{ round=7; placeRing(); startCountdown();
+    const bots=planes.filter(q=>q.id!==0);
+    return { enemies:bots.length, seekers:bots.filter(b=>b.kit&&b.kit.seeker).length, droneBots:bots.filter(b=>b.drones&&b.drones.length).length, shieldBots:bots.filter(b=>b.shieldMax>0).length, aces:bots.filter(b=>b.ace).length, hp:bots.map(b=>b.maxHp) }; });
+  // pull a few kitted bots up next to the player so their gear renders for the shot
+  await page.evaluate(()=>{ countT=0; engageT=0; const bots=planes.filter(q=>q.id!==0); const near=bots.slice().sort((a,b)=>(b.shieldMax+ (b.ace?2:0)+(b.drones?1:0))-(a.shieldMax+(a.ace?2:0)+(a.drones?1:0))).slice(0,3); near.forEach((b,i)=>{ b.x=planes[0].x+(i-1)*80; b.y=planes[0].y-70; }); });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(shotDir, 'drive-round7-enemies.png') });
+  notes.push(`ENEMY COUNT: r1=${r1} r4=${r4} r7=${r7.enemies} (scales ~3 → 6-7)`);
+  notes.push(`ENEMY KIT @r7: seekers=${r7.seekers} droneBots=${r7.droneBots} shieldBots=${r7.shieldBots} aces=${r7.aces} botHP=${JSON.stringify(r7.hp)}`);
+  await ctx.close();
+}
+
+// ---- 15) SURVIVAL rebalance: time-to-die under sustained fire is up ----
+{
+  const { page, ctx } = await newPage(browser, seedSave({ v:2, up:0, equip:null, tier:{ speed:0,armor:0,guns:0,rockets:0,drones:0,scatter:0,emp:0 } }));
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(3300);
+  const r = await page.evaluate(()=> new Promise(res=>{ const p=planes[0]; const mh=p.maxHp,ifr=p.st.iframe; const t0=performance.now(); const id=setInterval(()=>{ const pl=planes[0]; if(!pl.alive||state==='dead'){clearInterval(id);res({mh,ifr,ttd:(performance.now()-t0)/1000});return;} hitPlane(pl,1,pl.x,pl.y,1); if(performance.now()-t0>30000){clearInterval(id);res({mh,ifr,ttd:-1});} },90); }));
+  notes.push(`SURVIVAL: maxHp=${r.mh} iframe=${r.ifr.toFixed(2)} time-to-die(sustained fire,90ms)=${r.ttd.toFixed(2)}s (baseline: maxHp6/iframe0.55/3.24s)`);
   await ctx.close();
 }
 

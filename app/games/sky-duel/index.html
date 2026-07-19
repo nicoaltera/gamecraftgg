@@ -25,7 +25,18 @@
    ============================================================ */
 
 const SLUG = 'sky-duel';
-const W = 960, H = 540;               // fixed virtual resolution (landscape)
+const W = 960, H = 540;               // fixed virtual VIEWPORT resolution (landscape)
+
+/* ---------- WORLD & CAMERA (a sky bigger than the screen) ----------
+   The arena is now a large world you fly THROUGH; the camera chases the player
+   (clamped to the world edges) so it feels open, not a single bouncing screen.
+   Off-screen rivals get edge-arrows + a corner minimap so the fight is findable. */
+const WORLD_W = 2560, WORLD_H = 1440;   // world is ~2.7x × 2.7x the viewport
+const CAM_EASE = 5.5;                    // /s how fast the camera catches the player
+const ZOOM = 0.72;                       // camera pulled back: you see MORE sky (a wide dogfight, not a close chase)
+const VW = W / ZOOM, VH = H / ZOOM;      // world-space region visible on screen (~1333×750)
+let camX = 0, camY = 0;
+function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
 
 /* ---------- FLIGHT MODEL (momentum energy flight — the heart of it) ----------
    The plane carries a real velocity vector. THRUST pushes along the nose,
@@ -56,16 +67,26 @@ const HEAT_SHOT  = 0.062;  // heat added per shot (~16 shots to peg)
 const HEAT_COOL  = 0.52;   // heat/s bled while not firing
 const HEAT_RESET = 0.34;   // must cool below this to un-jam after an overheat
 
-/* ---------- COMBAT ---------- */
+/* ---------- COMBAT (health rebalanced — punchy but forgiving, not twitchy) ---------- */
 const PLANE_R    = 15;     // hit radius
-const PLAYER_HP  = 6;      // your BASE health pips (was 4 — a fresh run survives)
+const PLAYER_HP  = 8;      // your BASE health pips (was 6 — a fresh run survives a real fight)
 const BOT_HP     = 3;      // rival base health pips (scales with round + your power)
-const IFRAME     = 0.55;   // s of brief invulnerability after taking a hit (forgiveness)
-const ARENA_PAD  = 26;     // soft-wall margin inside the 960x540 sky
+const IFRAME     = 0.82;   // s of invulnerability after a hit (was 0.55 — longer forgiveness)
+const ARENA_PAD  = 40;     // soft-wall margin inside the WORLD
+
+/* ---------- PRE-ROUND COUNTDOWN (get oriented before the guns go hot) ----------
+   Every round opens with 3·2·1·ENGAGE. You (and the bots) can FLY and position
+   during the count, but ALL guns/specials are locked until "ENGAGE!". */
+const COUNTDOWN  = 3.0;    // s of hold-fire positioning at the top of each round
 
 /* ---------- SPECIAL WEAPONS ---------- */
 const ROCKET_LIFE= 3.2;    // s a heat-seeker chases before self-destructing
 const ROCKET_TURN= 4.2;    // rad/s a seeker can swing to track its lock
+
+/* ---------- ENEMY PROGRESSION (bots earn their own cool kit as rounds climb) ----------
+   So a maxed player still gets a fight. Telegraphed, escalating, always beatable. */
+const BOT_RK_LIFE = 2.8;   // s a bot seeker chases
+const BOT_LOCK    = 0.85;  // s a bot telegraphs its seeker lock before launch (fair warning)
 
 /* ---------- palette ---------- */
 const SKY_TOP='#63B7F0', SKY_MID='#8FD0F6', SKY_LOW='#CFEBFB',
@@ -214,6 +235,9 @@ function sfxEmp(){ if(!AC)return; const t=AC.currentTime; const o=AC.createOscil
   const z=AC.createOscillator(); z.type='sawtooth'; z.frequency.setValueAtTime(1500,t); z.frequency.exponentialRampToValueAtTime(200,t+0.36); const zf=AC.createBiquadFilter(); zf.type='bandpass'; zf.frequency.value=900; zf.Q.value=3; const zg=AC.createGain(); zg.gain.value=0; env(zg,t,0.005,0.14,0.34); z.connect(zf); zf.connect(zg); zg.connect(master); z.start(t); z.stop(t+0.4); }
 function sfxBuy(){ if(!AC)return; const t=AC.currentTime; [523,784].forEach((f,i)=>{ const o=AC.createOscillator(); o.type='triangle'; o.frequency.value=f; const g=AC.createGain(); g.gain.value=0; env(g,t+i*0.07,0.01,0.14,0.16); o.connect(g); g.connect(master); o.start(t+i*0.07); o.stop(t+i*0.07+0.2); }); }
 function sfxDeny(){ if(!AC)return; const t=AC.currentTime; const o=AC.createOscillator(); o.type='square'; o.frequency.setValueAtTime(180,t); o.frequency.exponentialRampToValueAtTime(120,t+0.12); const g=AC.createGain(); g.gain.value=0; env(g,t,0.005,0.08,0.12); o.connect(g); g.connect(master); o.start(t); o.stop(t+0.16); }
+function sfxBeep(hi){ if(!AC)return; const t=AC.currentTime; const o=AC.createOscillator(); o.type='triangle'; o.frequency.value=hi?920:430; const g=AC.createGain(); g.gain.value=0; env(g,t,0.006,hi?0.2:0.13,hi?0.24:0.16); o.connect(g); g.connect(master); o.start(t); o.stop(t+0.3); }
+function sfxLock(){ if(!AC)return; const t=AC.currentTime; for(let i=0;i<2;i++){ const o=AC.createOscillator(); o.type='square'; o.frequency.value=1180; const g=AC.createGain(); g.gain.value=0; env(g,t+i*0.09,0.003,0.05,0.06); o.connect(g); g.connect(master); o.start(t+i*0.09); o.stop(t+i*0.09+0.1); } }
+function sfxShield(){ if(!AC)return; const t=AC.currentTime; const o=AC.createOscillator(); o.type='triangle'; o.frequency.setValueAtTime(680,t); o.frequency.exponentialRampToValueAtTime(1500,t+0.09); const g=AC.createGain(); g.gain.value=0; env(g,t,0.004,0.13,0.13); o.connect(g); g.connect(master); o.start(t); o.stop(t+0.2); }
 
 /* ---------- input ---------- */
 const keys = { left:false, right:false, thrust:false, fire:false, special:false };
@@ -290,12 +314,22 @@ addEventListener('pointercancel', relPtr);
 addEventListener('blur', ()=>{ ptrRole.clear(); keys.left=keys.right=keys.thrust=keys.fire=keys.special=false; });
 
 /* ---------- entities ---------- */
-const PLANE_DEFS = [
-  { name:'You',    color:YELLOW },
-  { name:'Rojo',   color:RED    },
-  { name:'Vera',   color:GREEN  },
-  { name:'Byte',   color:PURPLE },
+const PLAYER_DEF = { name:'You', color:YELLOW };
+// bot roster — distinct colors so edge-arrows/minimap read at a glance. More rivals
+// join as the rounds climb (enemyCount) up to the whole pool.
+const MAGENTA='#E0559E', INDIGO='#5A6BE0';
+const BOT_POOL = [
+  { name:'Rojo', color:RED    },
+  { name:'Vera', color:GREEN  },
+  { name:'Byte', color:PURPLE },
+  { name:'Nyx',  color:TEAL   },
+  { name:'Zip',  color:ORANGE },
+  { name:'Fen',  color:MAGENTA},
+  { name:'Kestrel', color:INDIGO },
 ];
+// ~3 rivals early → 5-6+ later, capped to the pool. Round 1:3, 3:4, 4:5, 6:6, 7:7
+function enemyCount(){ return Math.min(BOT_POOL.length, 3 + Math.floor((round-1)*0.7)); }
+function planeDef(i){ return i===0 ? PLAYER_DEF : BOT_POOL[(i-1)%BOT_POOL.length]; }
 
 let planes=[], wrecks=[];
 // pools
@@ -308,7 +342,7 @@ for(let i=0;i<PMAX;i++) parts.push({on:false});
 let clouds=[];
 
 function makePlane(i, x, y, ang){
-  const d=PLANE_DEFS[i];
+  const d=planeDef(i);
   const p = {
     id:i, isPlayer:i===0, name:d.name, color:d.color,
     x, y, ang, vx:Math.cos(ang)*140, vy:Math.sin(ang)*140,
@@ -318,9 +352,39 @@ function makePlane(i, x, y, ang){
     ai:{ target:-1, retgt:0, react:0, evade:0, jink:0, aggro:0 },
     contrail:0, hitFlash:0,
     wantFire:false, wantSpecial:false, specPrev:false,
+    // enemy kit (set by assignBotKit) — dormant on the player
+    kit:null, drones:null, shield:0, shieldMax:0, shieldCd:0, shieldRecharge:0,
+    rkAmmo:0, rkReload:0, rkTimer:0, lockT:0, lockTarget:-1, empC:0, empTimer:0, ace:false,
   };
-  if(i===0){ equipPlayer(p); } else { p.hp=botHp(); p.maxHp=p.hp; }
+  if(i===0){ equipPlayer(p); } else { p.hp=botHp(); p.maxHp=p.hp; assignBotKit(p); }
   return p;
+}
+/* Bots earn their own arsenal as the rounds climb — telegraphed, escalating, fair.
+   seeker missiles (r3+), an escort drone or two (r4+), a shield bubble (r6+),
+   plus one ACE per round from r5 (extra HP + shield + seeker + sharper aim). */
+function assignBotKit(p){
+  const r=round;
+  const k={ seeker:false, drones:0, shield:false, emp:false };
+  if(r>=3 && rng()<Math.min(0.62, 0.16+r*0.06)) k.seeker=true;
+  if(r>=4 && rng()<Math.min(0.55, 0.10+r*0.06)) k.drones = (r>=6 && rng()<0.5)?2:1;
+  if(r>=6 && rng()<0.32) k.shield=true;
+  if(r>=7 && rng()<0.22) k.emp=true;
+  applyKit(p,k);
+}
+function applyKit(p,k){
+  p.kit=k;
+  if(k.seeker){ p.rkAmmo=2; p.rkReload=0; p.rkTimer=rnd(1.6,3.4); }
+  if(k.drones>0){ p.drones=[]; p.droneCd=Math.max(0.55,1.0-round*0.03); for(let i=0;i<k.drones;i++) p.drones.push({ ang:(i/k.drones)*Math.PI*2, cd:rnd(0,p.droneCd), fx:p.x, fy:p.y, fire:0 }); }
+  if(k.shield){ p.shieldMax=1; p.shield=1; p.shieldRecharge=Math.max(5,9-round*0.4); p.shieldCd=0; }
+  if(k.emp){ p.empTimer=rnd(4,7); }
+}
+function makeAce(p){
+  const k=p.kit||{ seeker:false, drones:0, shield:false, emp:false };
+  p.ace=true; k.seeker=true; k.shield=true; if(!k.drones && round>=8) k.drones=1;
+  p.hp += 3 + Math.floor(round/3); p.maxHp=p.hp;
+  applyKit(p,k);
+  p.shieldMax=2; p.shield=2; p.name='ACE '+p.name;
+  p.aceAim=0.55; // multiplies aim error (sharper shot)
 }
 // (re)initialise all upgrade-derived state on the player plane from the saved tiers
 function equipPlayer(p){
@@ -335,12 +399,14 @@ function buildDrones(p){
   const ds=droneStats(); p.drones=[];
   for(let i=0;i<ds.count;i++) p.drones.push({ ang:(i/Math.max(1,ds.count))*Math.PI*2, cd:rnd(0,ds.cd), fx:p.x, fy:p.y, fire:0 });
 }
-function botHp(){ return BOT_HP + Math.floor((round-1)/2) + Math.min(7, Math.floor(powerLevel()/4)); }
+function botHp(){ return BOT_HP + Math.floor((round-1)*0.7) + Math.min(8, Math.floor(powerLevel()/4)); }
 
 function spawnClouds(){
   clouds=[];
-  const layers=[{n:5,sp:6, s:1.5, a:0.9, y:[40,180]},{n:5,sp:12,s:1.0,a:0.85,y:[120,360]},{n:6,sp:22,s:0.66,a:0.8,y:[220,470]}];
-  layers.forEach((L,li)=>{ for(let i=0;i<L.n;i++){ clouds.push({ x:rnd(-60,W+60), y:rnd(L.y[0],L.y[1]), s:L.s*rnd(0.8,1.25), sp:L.sp*rnd(0.8,1.2), a:L.a, seed:Math.floor(rnd(1,9999)), layer:li }); } });
+  // clouds now populate the whole WORLD (density scaled to its area) so the big sky
+  // reads as full and gives a sense of speed as the camera flies through it.
+  const layers=[{n:16,sp:6, s:1.7, a:0.9, y:[0.03,0.42]},{n:18,sp:12,s:1.1,a:0.85,y:[0.18,0.72]},{n:22,sp:22,s:0.7,a:0.8,y:[0.4,0.96]}];
+  layers.forEach((L,li)=>{ for(let i=0;i<L.n;i++){ clouds.push({ x:rnd(-60,WORLD_W+60), y:rnd(L.y[0]*WORLD_H,L.y[1]*WORLD_H), s:L.s*rnd(0.8,1.25), sp:L.sp*rnd(0.8,1.2), a:L.a, seed:Math.floor(rnd(1,9999)), layer:li }); } });
   clouds.sort((a,b)=>a.layer-b.layer);
 }
 
@@ -348,6 +414,7 @@ function spawnClouds(){
 let state='title';      // title | play | roundwin | hangar | dead
 let round=1, roundsWon=0, kills=0;
 let winT=0, deadT=0, introT=0, titleT=0;
+let countT=0, engageT=0, lastCountShown=-1;   // pre-round countdown timers
 let shake=0, flashV=0, hitStop=0;
 let killFeed=[]; // {txt,t,color}
 let scorePulse=0;
@@ -373,19 +440,31 @@ function difficulty(){
 }
 
 function placeRing(){
-  const cx=W/2, cy=H/2-10, rad=190;
-  for(let i=0;i<4;i++){
-    const a = (i/4)*Math.PI*2 + Math.PI/4;
-    const x=cx+Math.cos(a)*rad, y=cy+Math.sin(a)*rad*0.72;
+  // player starts in the middle of the world; rivals ring around at a big radius so
+  // you have to fly out and find the fight (edge-arrows + minimap point the way).
+  const cx=WORLD_W/2, cy=WORLD_H/2, n=enemyCount();
+  planes=[];
+  planes[0]=makePlane(0, cx, cy, -Math.PI/2);
+  const rad=Math.min(WORLD_W,WORLD_H)*0.34;
+  for(let i=1;i<=n;i++){
+    const a=((i-1)/n)*Math.PI*2 + Math.PI/6;
+    const x=clamp(cx+Math.cos(a)*rad, ARENA_PAD+30, WORLD_W-ARENA_PAD-30);
+    const y=clamp(cy+Math.sin(a)*rad*0.9, ARENA_PAD+30, WORLD_H-ARENA_PAD-30);
     const face=Math.atan2(cy-y, cx-x);
-    if(!planes[i]){ planes[i]=makePlane(i,x,y,face); }
-    else {
-      const p=planes[i]; p.x=x;p.y=y;p.ang=face; p.vx=Math.cos(face)*150; p.vy=Math.sin(face)*150;
-      p.alive=true; p.heat=0; p.jam=false; p.fireCd=0; p.hitFlash=0; p.stun=0; p.wantFire=false; p.wantSpecial=false;
-      if(i===0){ equipPlayer(p); } else { p.hp=botHp(); p.maxHp=p.hp; }
-    }
+    planes[i]=makePlane(i,x,y,face);
   }
+  // one ACE from round 5 (two from round 9) — the standout rival with real kit
+  if(round>=5){ makeAce(planes[n]); if(round>=9 && n>=2) makeAce(planes[n-1]); }
+  // snap the camera onto the player for the countdown
+  camX=clamp(planes[0].x-VW/2,0,WORLD_W-VW); camY=clamp(planes[0].y-VH/2,0,WORLD_H-VH);
 }
+function updateCamera(dt){
+  const p=planes[0]; if(!p) return;
+  const tx=clamp(p.x-VW/2,0,WORLD_W-VW), ty=clamp(p.y-VH/2,0,WORLD_H-VH);
+  const k=Math.min(1,CAM_EASE*dt);
+  camX+=(tx-camX)*k; camY+=(ty-camY)*k;
+}
+function gunsLive(){ return (state==='play') && countT<=0; }
 
 function startRun(){
   rng = mulberry32(0xC0FFEE);
@@ -395,14 +474,16 @@ function startRun(){
   keys.left=keys.right=keys.thrust=keys.fire=keys.special=false; ptrRole.clear();
   spawnClouds(); placeRing();
   state='play'; introT=1.1; winT=0; deadT=0; shake=0; flashV=0; scorePulse=0;
+  startCountdown();
   post({gs:'score', score:0});
 }
 function nextRound(){
   round++; roundsWon = round-1;
   wrecks.length=0; for(const b of bullets) b.on=false; for(const r of rockets) r.on=false;
   keys.left=keys.right=keys.thrust=keys.fire=keys.special=false; ptrRole.clear();
-  placeRing(); introT=1.0; state='play';
+  placeRing(); introT=1.0; state='play'; startCountdown();
 }
+function startCountdown(){ countT=COUNTDOWN; engageT=0; lastCountShown=-1; }
 function killFeed_clear(){ killFeed=[]; }
 
 /* ---------- hangar flow ---------- */
@@ -471,6 +552,7 @@ function nearestEnemyFrom(x,y,owner){ let bi=-1, bd=1e9; for(const q of planes){
 
 /* special weapons — each is metered (ammo / cooldown / charge) so it is rationed, not spammed */
 function fireSpecial(p){
+  if(!gunsLive()) return;
   const eq=save.equip; if(!eq) return;
   if(eq==='rockets'){
     const rs=rocketStats(); if(!rs.own || p.rkAmmo<=0){ sfxDeny(); return; }
@@ -505,7 +587,7 @@ function empBurst(p, es){
 
 /* ---------- update ---------- */
 function clampArena(p, dt){
-  const l=ARENA_PAD, r=W-ARENA_PAD, t=ARENA_PAD, bo=H-ARENA_PAD-58;
+  const l=ARENA_PAD, r=WORLD_W-ARENA_PAD, t=ARENA_PAD, bo=WORLD_H-ARENA_PAD;
   const K=520;
   if(p.x<l){ p.vx+=(l-p.x)*K*dt*0.016+40*dt*10; if(p.vx<0)p.vx*=0.6; p.x+=(l-p.x)*0.12; }
   if(p.x>r){ p.vx-=(p.x-r)*K*dt*0.016+40*dt*10; if(p.vx>0)p.vx*=0.6; p.x-=(p.x-r)*0.12; }
@@ -554,7 +636,7 @@ function updatePlane(p, dt){
   else if(firing){ p.heat = Math.max(0, p.heat - HEAT_COOL*0.15*dt); }
   else { p.heat = Math.max(0, p.heat - HEAT_COOL*dt); }
   p.fireCd -= dt;
-  if(firing && !p.jam && p.fireCd<=0){
+  if(firing && !p.jam && p.fireCd<=0 && gunsLive()){
     if(isP){ const n=st.barrels; for(let i=0;i<n;i++){ const off=(n>1?(i/(n-1)-0.5):0)*0.10; fireBullet(p, off); } }
     else fireBullet(p, (rng()-0.5)*0.03);
     p.fireCd = fireCdV;
@@ -569,7 +651,7 @@ function updatePlane(p, dt){
     const rs=rocketStats(); if(rs.own && p.rkAmmo<rs.max){ p.rkReload-=dt; if(p.rkReload<=0){ p.rkAmmo++; p.rkReload=rs.reload; } }
     if(p.scCd>0) p.scCd-=dt;
     const es=empStats(); if(es.own && p.empC<1) p.empC=Math.min(1, p.empC + dt/es.recharge);
-    if(p.wantSpecial && !p.specPrev) fireSpecial(p);
+    if(p.wantSpecial && !p.specPrev && gunsLive()) fireSpecial(p);
     p.specPrev = p.wantSpecial;
   }
   // --- contrail / engine smoke when thrusting hard ---
@@ -618,16 +700,63 @@ function botThink(p, dt){
   if(ai.evade>0){ desired = p.ang + (ai.jinkDir||1)*1.2; }
   else { const dx=tgt.x-p.x, dy=tgt.y-p.y, dist=Math.hypot(dx,dy); const lt=Math.min(0.8, dist/BULLET_SPD)*D.lead; const lx=tgt.x+tgt.vx*lt, ly=tgt.y+tgt.vy*lt; desired=Math.atan2(ly-p.y, lx-p.x); }
   const err=angdiff(desired, p.ang);
-  const jitter=(rng()-0.5)*D.aimErr*2;
+  const jitter=(rng()-0.5)*D.aimErr*2*(p.ace?p.aceAim:1);   // aces shoot sharper
   const steer=Math.max(-1,Math.min(1,(err+jitter)*2.2));
   p.turn += (steer - p.turn)*Math.min(1, dt* (ai.react>0? 3: 8));
   const dx=tgt.x-p.x, dy=tgt.y-p.y, dist=Math.hypot(dx,dy);
   const aimErr=Math.abs(angdiff(Math.atan2(dy,dx), p.ang));
   ai.fireTimer=(ai.fireTimer||0)-dt;
   ai.burstLeft=ai.burstLeft||0;
-  if(!p.jam && ai.evade<=0 && dist<D.range && aimErr<0.16 && ai.fireTimer<=0){ ai.burstLeft=D.burst; ai.fireTimer=D.fireGap; }
-  if(ai.burstLeft>0 && !p.jam){ p.wantFire=true; if(p.fireCd<=0) ai.burstLeft--; }
+  const live=gunsLive();
+  if(live && !p.jam && ai.evade<=0 && dist<D.range && aimErr<0.16 && ai.fireTimer<=0){ ai.burstLeft=D.burst; ai.fireTimer=D.fireGap; }
+  if(live && ai.burstLeft>0 && !p.jam){ p.wantFire=true; if(p.fireCd<=0) ai.burstLeft--; }
   else p.wantFire=false;
+  updateBotKit(p, dt, live);
+}
+// bot special weapons: seeker missiles (telegraphed lock), shield regen, rare EMP jam.
+function updateBotKit(p, dt, live){
+  const k=p.kit; if(!k) return;
+  // shield recharges out of combat (always, even during the countdown)
+  if(p.shieldMax>0 && p.shield<p.shieldMax){ p.shieldCd-=dt; if(p.shieldCd<=0){ p.shield++; p.shieldCd=p.shieldRecharge; } }
+  if(!live) { p.lockT=0; return; }
+  // SEEKER: reload ammo, then telegraph a lock (reticle on victim) before launch
+  if(k.seeker){
+    if(p.rkAmmo<2){ p.rkReload-=dt; if(p.rkReload<=0){ p.rkAmmo++; p.rkReload=rnd(3.5,5.5); } }
+    if(p.lockT>0){
+      p.lockT-=dt;
+      const tg=planes[p.lockTarget];
+      if(!tg||!tg.alive){ p.lockT=0; }
+      else if(p.lockT<=0 && p.rkAmmo>0){ p.rkAmmo--; spawnBotRocket(p, p.lockTarget); sfxRocket(); if(p.rkTimer<=0) p.rkTimer=rnd(2.6,4.6); }
+    } else {
+      p.rkTimer-=dt;
+      if(p.rkTimer<=0 && p.rkAmmo>0){
+        const tg=nearestTarget(p);
+        if(tg>=0){ const t=planes[tg]; const d=Math.hypot(t.x-p.x,t.y-p.y); if(d<560){ p.lockTarget=tg; p.lockT=BOT_LOCK; if(t.isPlayer) sfxLock(); } else p.rkTimer=0.5; }
+        else p.rkTimer=1.0;
+      }
+    }
+  }
+  // EMP: rare, telegraphed pulse that briefly jams the player's guns if close
+  if(k.emp){
+    p.empTimer-=dt;
+    if(p.empTimer<=0){
+      const pl=planes[0]; const d=pl&&pl.alive?Math.hypot(pl.x-p.x,pl.y-p.y):1e9;
+      if(d<150){ botEmpBurst(p); p.empTimer=rnd(7,11); } else p.empTimer=0.6;
+    }
+  }
+}
+function spawnBotRocket(p, tgt){
+  for(const r of rockets){ if(!r.on){
+    r.on=true; r.x=p.x+Math.cos(p.ang)*14; r.y=p.y+Math.sin(p.ang)*14; r.ang=p.ang; r.speed=300+round*9;
+    r.vx=Math.cos(p.ang)*r.speed; r.vy=Math.sin(p.ang)*r.speed; r.life=BOT_RK_LIFE; r.owner=p.id; r.target=tgt; r.dmg=1; r.st=0; r.color=p.color; return;
+  }}
+}
+function botEmpBurst(p){
+  const pl=planes[0]; if(!pl||!pl.alive) return;
+  sfxEmp(); shake=Math.min(14,shake+5);
+  for(let i=0;i<3;i++) spawnPart({type:'ring',x:p.x,y:p.y,vx:0,vy:0,life:0.55,max:0.55,size:10+i*6,col:'#c9a0ff'});
+  spawnPart({type:'emp',x:p.x,y:p.y,vx:0,vy:0,life:0.4,max:0.4,size:0,maxSize:150,col:'#d6b8ff'});
+  if(pl.iframe<=0){ pl.jam=true; pl.heat=1; } // non-lethal: kicks your guns offline, reposition!
 }
 function sfxWhoosh_maybe(p){ if(Math.hypot(p.x-planes[0].x,p.y-planes[0].y)<220) sfxWhoosh(); }
 
@@ -635,7 +764,7 @@ function sfxWhoosh_maybe(p){ if(Math.hypot(p.x-planes[0].x,p.y-planes[0].y)<220)
 function updateBullets(dt){
   for(let i=0;i<BMAX;i++){ const b=bullets[i]; if(!b.on) continue;
     b.x+=b.vx*dt; b.y+=b.vy*dt; b.life-=dt;
-    if(b.life<=0 || b.x<-20||b.x>W+20||b.y<-20||b.y>H+20){ b.on=false; continue; }
+    if(b.life<=0 || b.x<-20||b.x>WORLD_W+20||b.y<-20||b.y>WORLD_H+20){ b.on=false; continue; }
     for(const p of planes){ if(!p.alive||p.id===b.owner) continue;
       if((p.x-b.x)**2+(p.y-b.y)**2 < (PLANE_R+3)**2){ b.on=false; hitPlane(p, b.owner, b.x, b.y, b.dmg); break; }
     }
@@ -656,23 +785,28 @@ function updateRockets(dt){
       if((p.x-r.x)**2+(p.y-r.y)**2 < (PLANE_R+6)**2){ miniBlast(r.x,r.y,r.color); sfxRocketHit(); hitPlane(p, r.owner, r.x, r.y, r.dmg); r.on=false; hitOne=true; break; }
     }
     if(hitOne) continue;
-    if(r.x<-30||r.x>W+30||r.y<-30||r.y>H+30){ r.on=false; }
+    if(r.x<-30||r.x>WORLD_W+30||r.y<-30||r.y>WORLD_H+30){ r.on=false; }
   }
 }
+// escort drones for ANY plane that owns them (player + drone-kit bots)
 function updateDrones(dt){
-  const p=planes[0]; if(!p||!p.alive||!p.drones) return;
-  const ds=droneStats(); if(!ds.own) return;
-  for(const dr of p.drones){
-    dr.ang += dt*2.2;
-    const orbit=34;
-    const tx=p.x+Math.cos(dr.ang)*orbit, ty=p.y+Math.sin(dr.ang)*orbit*0.9;
-    dr.fx += (tx-dr.fx)*Math.min(1,dt*10); dr.fy += (ty-dr.fy)*Math.min(1,dt*10);
-    dr.cd-=dt; if(dr.fire>0) dr.fire-=dt;
-    const tg=nearestEnemyFrom(dr.fx,dr.fy,0);
-    if(tg>=0 && dr.cd<=0){ const t=planes[tg]; const a=Math.atan2(t.y-dr.fy,t.x-dr.fx)+(rng()-0.5)*0.05; droneFire(dr,a); dr.cd=ds.cd; dr.fire=0.08; }
+  for(const p of planes){
+    if(!p.alive || !p.drones || !p.drones.length) continue;
+    const cd = p.isPlayer ? droneStats().cd : (p.droneCd||0.8);
+    const col = p.isPlayer ? '#BFefff' : shade(p.color,30);
+    for(const dr of p.drones){
+      dr.ang += dt*2.2;
+      const orbit=34;
+      const tx=p.x+Math.cos(dr.ang)*orbit, ty=p.y+Math.sin(dr.ang)*orbit*0.9;
+      dr.fx += (tx-dr.fx)*Math.min(1,dt*10); dr.fy += (ty-dr.fy)*Math.min(1,dt*10);
+      dr.cd-=dt; if(dr.fire>0) dr.fire-=dt;
+      if(!gunsLive()) continue;
+      const tg=nearestEnemyFrom(dr.fx,dr.fy,p.id);
+      if(tg>=0 && dr.cd<=0){ const t=planes[tg]; const a=Math.atan2(t.y-dr.fy,t.x-dr.fx)+(rng()-0.5)*0.06; droneFire(dr,a,p.id,col); dr.cd=cd; dr.fire=0.08; }
+    }
   }
 }
-function droneFire(dr,a){ for(const b of bullets){ if(!b.on){ b.on=true; b.x=dr.fx; b.y=dr.fy; b.vx=Math.cos(a)*BULLET_SPD*0.92; b.vy=Math.sin(a)*BULLET_SPD*0.92; b.life=0.85; b.owner=0; b.color='#BFefff'; b.dmg=1; sfxDrone(); return; } } }
+function droneFire(dr,a,owner,color){ for(const b of bullets){ if(!b.on){ b.on=true; b.x=dr.fx; b.y=dr.fy; b.vx=Math.cos(a)*BULLET_SPD*0.92; b.vy=Math.sin(a)*BULLET_SPD*0.92; b.life=0.85; b.owner=owner; b.color=color||'#BFefff'; b.dmg=1; sfxDrone(); return; } } }
 
 function hitPlane(p, ownerId, hx, hy, dmg){
   dmg = dmg||1;
@@ -680,6 +814,10 @@ function hitPlane(p, ownerId, hx, hy, dmg){
     if(p.iframe>0) return;          // brief invulnerability window — the forgiveness
     p.iframe = p.st.iframe;
     p.regenAcc = 0;
+  } else if(p.shield>0){            // bot shield bubble absorbs a hit (telegraphed, recharges)
+    p.shield--; p.shieldCd=p.shieldRecharge; p.hitFlash=1;
+    for(let i=0;i<2;i++) spawnPart({type:'ring',x:hx,y:hy,vx:0,vy:0,life:0.3,max:0.3,size:PLANE_R+2+i*4,col:'#cfe6ff'});
+    sfxShield(); return;
   }
   p.hp -= dmg; p.hitFlash=1;
   puff(hx,hy,'#5a5a5a',5,90,7,0.5);
@@ -746,7 +884,8 @@ function updateParts(dt){
 }
 
 /* ---------- clouds ---------- */
-function updateClouds(dt){ for(const c of clouds){ c.x-=c.sp*dt; if(c.x< -120){ c.x=W+rnd(40,140); c.y=rnd(30,470); } } }
+function updateClouds(dt){ for(const c of clouds){ c.x-=c.sp*dt; if(c.x< -140){ c.x=WORLD_W+rnd(40,160); c.y=rnd(20,WORLD_H-30); } } }
+function onScreen(x,y,m){ m=m||60; return x>camX-m && x<camX+VW+m && y>camY-m && y<camY+VH+m; }
 
 /* ---------- draw helpers ---------- */
 function shade(hex, amt){
@@ -770,7 +909,7 @@ function drawCloud(c){
 function drawPlane(p){
   const s=Math.hypot(p.vx,p.vy);
   const up=p.upg; // present only on the player
-  const sizeMul = up ? 1 + Math.min(0.28, save.tier.armor*0.035) : 1;
+  const sizeMul = (up ? 1 + Math.min(0.28, save.tier.armor*0.035) : 1) * (p.ace?1.2:1);
   ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.ang);
   if(sizeMul!==1) ctx.scale(sizeMul,sizeMul);
   // afterburner exhaust (ENGINE upgrade) — brighter/longer the more speed tiers
@@ -874,13 +1013,40 @@ function drawRocket(r){
   ctx.fillStyle='#FFC15a'; ctx.beginPath(); ctx.moveTo(-7,-3); ctx.lineTo(-12-Math.random()*3,0); ctx.lineTo(-7,3); ctx.closePath(); ctx.fill();
   ctx.restore();
 }
-function drawDrone(dr){
+function drawDrone(dr, core){
   ctx.save(); ctx.translate(dr.fx,dr.fy);
   ctx.fillStyle='rgba(20,40,70,0.15)'; ctx.beginPath(); ctx.ellipse(0,3,7,3,0,0,7); ctx.fill();
   ctx.fillStyle='#Dff4ff'; ctx.beginPath(); ctx.arc(0,0,5,0,7); ctx.fill();
-  ctx.fillStyle=TEAL; ctx.beginPath(); ctx.arc(0,0,2.4,0,7); ctx.fill();
+  ctx.fillStyle=core||TEAL; ctx.beginPath(); ctx.arc(0,0,2.4,0,7); ctx.fill();
+  // glint so escort drones (yours OR an enemy's) read at a glance
+  ctx.fillStyle='rgba(255,255,255,0.8)'; ctx.beginPath(); ctx.arc(-1.4,-1.4,1,0,7); ctx.fill();
   if(dr.fire>0){ ctx.fillStyle='#fff'; ctx.globalAlpha=dr.fire*10; ctx.beginPath(); ctx.arc(0,0,6.5,0,7); ctx.fill(); ctx.globalAlpha=1; }
   ctx.strokeStyle='rgba(40,50,70,0.5)'; ctx.lineWidth=1.2; ctx.beginPath(); ctx.moveTo(-7,-4); ctx.lineTo(7,-4); ctx.stroke();
+  ctx.restore();
+}
+// telegraphs + kit tells drawn in WORLD space (called from render inside the camera)
+function drawShield(p){
+  if(!(p.shield>0)) return;
+  const pul=0.5+0.5*Math.sin(perfNow*5+p.id);
+  ctx.save(); ctx.globalAlpha=0.30+0.18*pul; ctx.strokeStyle= p.ace?'#ffe08a':'#cfe6ff'; ctx.lineWidth= p.shield>1?3:2;
+  ctx.beginPath(); ctx.arc(p.x,p.y,PLANE_R+8,0,7); ctx.stroke();
+  ctx.globalAlpha=0.10+0.08*pul; ctx.fillStyle= p.ace?'#ffe08a':'#bfe0ff'; ctx.beginPath(); ctx.arc(p.x,p.y,PLANE_R+8,0,7); ctx.fill();
+  ctx.globalAlpha=1; ctx.restore();
+}
+function drawAceCrown(p){
+  ctx.save(); ctx.translate(p.x,p.y-30-Math.sin(perfNow*3)*1.5);
+  ctx.fillStyle=YELLOW; ctx.strokeStyle=shade(YELLOW,-35); ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(-7,4); ctx.lineTo(-7,-3); ctx.lineTo(-3,1); ctx.lineTo(0,-5); ctx.lineTo(3,1); ctx.lineTo(7,-3); ctx.lineTo(7,4); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+function drawBotLock(p){
+  // enemy seeker lock telegraph — a red reticle closing on the victim (fair warning)
+  if(!(p.lockT>0)) return; const t=planes[p.lockTarget]; if(!t||!t.alive) return;
+  const prog=1-clamp(p.lockT/BOT_LOCK,0,1); const rad=34-prog*14;
+  ctx.save(); ctx.translate(t.x,t.y); ctx.strokeStyle='rgba(232,85,58,0.95)'; ctx.lineWidth=2.4;
+  ctx.rotate(-perfNow*3);
+  for(let i=0;i<4;i++){ ctx.rotate(Math.PI/2); ctx.beginPath(); ctx.moveTo(rad,-6); ctx.lineTo(rad,6); ctx.stroke(); ctx.beginPath(); ctx.moveTo(rad-6,0); ctx.lineTo(rad,0); ctx.stroke(); }
+  ctx.globalAlpha=0.6+0.4*Math.sin(perfNow*18); ctx.beginPath(); ctx.arc(0,0,rad,0,7); ctx.stroke(); ctx.globalAlpha=1;
   ctx.restore();
 }
 
@@ -989,15 +1155,35 @@ function drawTouch(){
 }
 
 /* ---------- overlays ---------- */
-function drawIntro(){
-  if(introT<=0) return;
-  const a=Math.min(1,introT*1.6);
-  ctx.globalAlpha=a; ctx.textAlign='center'; ctx.fillStyle=HUD;
-  ctx.font='800 46px '+FONT;
-  ctx.fillText(round===1?'SCRAMBLE!':'ROUND '+round, W/2, H/2-6);
-  ctx.font='600 18px '+FONT; ctx.fillStyle='rgba(32,48,76,0.8)';
-  ctx.fillText(round===1?'last plane flying wins':'faster · deadlier rivals', W/2, H/2+24);
-  ctx.globalAlpha=1;
+/* pre-round countdown overlay: 3 · 2 · 1 · ENGAGE! (guns locked until ENGAGE) */
+function drawCountdown(){
+  ctx.textAlign='center';
+  if(countT>0){
+    const n=Math.ceil(countT);
+    const f=countT-(n-1);                       // 1→0 across this second
+    const alpha=clamp(f<0.2? f/0.2 : (f>0.85? (1-f)/0.15 : 1), 0, 1);
+    const sc=1.15 - Math.min(0.15,(1-f)*0.15);
+    ctx.save(); ctx.translate(W/2, H/2-92);   // lifted above the centered player plane
+    // soft ring pulse behind the number
+    ctx.globalAlpha=alpha*0.35; ctx.strokeStyle='rgba(255,255,255,0.9)'; ctx.lineWidth=4;
+    ctx.beginPath(); ctx.arc(0,-14, 46+(1-f)*40, 0, 7); ctx.stroke();
+    ctx.globalAlpha=alpha; ctx.scale(sc,sc);
+    ctx.fillStyle=INK; ctx.font='900 128px '+FONT; ctx.fillText(n+'', 3, 34);
+    ctx.fillStyle=YELLOW; ctx.fillText(n+'', 0, 30);
+    ctx.restore();
+    ctx.globalAlpha=Math.min(1,countT*2);
+    ctx.fillStyle=HUD; ctx.font='700 22px '+FONT;
+    ctx.fillText(round===1?'SCRAMBLE! get in position…':'ROUND '+round+' — get in position…', W/2, H/2+70);
+    if(round===1){ ctx.fillStyle='rgba(32,48,76,0.82)'; ctx.font='600 15px '+FONT;
+      ctx.fillText(usingTouch?'hold FIRE — guns unlock on ENGAGE · steer ‹ › · THRUST':'hold fire — guns unlock on ENGAGE · A/D turn · W thrust', W/2, H/2+96); }
+    ctx.globalAlpha=1;
+  } else if(engageT>0){
+    const a=clamp(engageT/0.6,0,1), sc=1+ (1-Math.min(1,(0.9-engageT)/0.25))*0.25;
+    ctx.save(); ctx.translate(W/2, H/2-4); ctx.globalAlpha=a; ctx.scale(Math.max(1,sc),Math.max(1,sc));
+    ctx.fillStyle=INK; ctx.font='900 72px '+FONT; ctx.fillText('ENGAGE!', 3, 3);
+    ctx.fillStyle=GREEN; ctx.fillText('ENGAGE!', 0, 0);
+    ctx.restore(); ctx.globalAlpha=1;
+  }
 }
 function drawWinBanner(){
   ctx.textAlign='center';
@@ -1017,7 +1203,7 @@ function drawTitle(){
   ctx.fillStyle=YELLOW; ctx.fillText('SKY DUEL', 0, 0);
   ctx.restore();
   ctx.fillStyle=HUD; ctx.font='600 22px '+FONT;
-  ctx.fillText('you vs 3 rival planes — be the last one flying', W/2, H/2+2);
+  ctx.fillText('dogfight a sky full of rivals — be the last one flying', W/2, H/2+2);
   ctx.font='600 16px '+FONT; ctx.fillStyle='rgba(32,48,76,0.85)';
   const hint = usingTouch ? 'steer ‹ › · THRUST · FIRE · SP special' : 'A/D turn · W thrust · SPACE fire · K special';
   ctx.fillText(hint, W/2, H/2+34);
@@ -1083,51 +1269,97 @@ function drawHangar(){
 
 /* ---------- master render ---------- */
 let perfNow=0;
+const inWorld = (state)=> state==='play'||state==='roundwin'||state==='dead';
 function render(){
   ctx.setTransform(1,0,0,1,0,0);
   ctx.fillStyle=LETTERBOX; ctx.fillRect(0,0,cv.width,cv.height);
   let sx=0,sy=0; if(shake>0){ sx=(rng()-0.5)*shake; sy=(rng()-0.5)*shake; }
   ctx.setTransform(dpr*scl,0,0,dpr*scl, dpr*(offX+sx), dpr*(offY+sy));
   ctx.save(); ctx.beginPath(); ctx.rect(0,0,W,H); ctx.clip();
+  // --- sky backdrop (screen-fixed) ---
   const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,SKY_TOP); g.addColorStop(0.55,SKY_MID); g.addColorStop(1,SKY_LOW);
   ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
   const sg=ctx.createRadialGradient(W-140,90,10,W-140,90,220); sg.addColorStop(0,'rgba(255,246,222,0.9)'); sg.addColorStop(1,'rgba(255,246,222,0)');
   ctx.fillStyle=sg; ctx.fillRect(0,0,W,H);
-  for(const c of clouds) drawCloud(c);
-  const fg=ctx.createLinearGradient(0,H-70,0,H); fg.addColorStop(0,'rgba(207,235,251,0)'); fg.addColorStop(1,'rgba(255,243,220,0.55)');
-  ctx.fillStyle=fg; ctx.fillRect(0,H-70,W,70);
 
-  for(let i=0;i<PMAX;i++){ const p=parts[i]; if(p.on&&(p.type==='smoke'||p.type==='trail')) drawPart(p); }
-  for(const w of wrecks) drawWreck(w);
-  // bullets (tracers)
-  for(let i=0;i<BMAX;i++){ const b=bullets[i]; if(!b.on) continue;
-    ctx.strokeStyle=b.color; ctx.globalAlpha=0.9; ctx.lineWidth=2.6;
-    ctx.beginPath(); ctx.moveTo(b.x,b.y); ctx.lineTo(b.x-b.vx*0.016, b.y-b.vy*0.016); ctx.stroke();
-    ctx.globalAlpha=1; ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(b.x,b.y,1.8,0,7); ctx.fill();
+  const worldView = inWorld(state);
+  if(worldView){
+    // === WORLD SPACE (camera follows the player) ===
+    ctx.save(); ctx.scale(ZOOM,ZOOM); ctx.translate(-camX,-camY);
+    for(const c of clouds){ if(c.x-camX>-160 && c.x-camX<VW+160 && c.y-camY>-160 && c.y-camY<VH+160) drawCloud(c); }
+    for(let i=0;i<PMAX;i++){ const p=parts[i]; if(p.on&&(p.type==='smoke'||p.type==='trail')&&onScreen(p.x,p.y,40)) drawPart(p); }
+    for(const w of wrecks){ if(onScreen(w.x,w.y,60)) drawWreck(w); }
+    for(let i=0;i<BMAX;i++){ const b=bullets[i]; if(!b.on||!onScreen(b.x,b.y,20)) continue;
+      ctx.strokeStyle=b.color; ctx.globalAlpha=0.9; ctx.lineWidth=2.6;
+      ctx.beginPath(); ctx.moveTo(b.x,b.y); ctx.lineTo(b.x-b.vx*0.016, b.y-b.vy*0.016); ctx.stroke();
+      ctx.globalAlpha=1; ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(b.x,b.y,1.8,0,7); ctx.fill();
+    }
+    for(const r of rockets){ if(r.on&&onScreen(r.x,r.y,30)) drawRocket(r); }
+    // shields under planes, then planes, crowns, drones
+    for(const p of planes){ if(p.alive&&p.shield>0&&onScreen(p.x,p.y,40)) drawShield(p); }
+    for(const p of planes){ if(p.alive&&onScreen(p.x,p.y,50)) drawPlane(p); }
+    for(const p of planes){ if(p.alive&&p.ace&&onScreen(p.x,p.y,50)) drawAceCrown(p); }
+    for(const p of planes){ if(p.alive&&p.drones){ for(const dr of p.drones) if(onScreen(dr.fx,dr.fy,30)) drawDrone(dr, p.isPlayer?TEAL:shade(p.color,-10)); } }
+    // enemy seeker-lock telegraphs
+    for(const p of planes){ if(p.alive&&p.lockT>0) drawBotLock(p); }
+    // your own seeker lock reticle
+    if(gunsLive() && save.equip==='rockets' && rocketStats().own && planes[0]&&planes[0].alive){
+      const tg=nearestEnemyFrom(planes[0].x,planes[0].y,0);
+      if(tg>=0){ const t=planes[tg]; ctx.save(); ctx.translate(t.x,t.y); ctx.rotate(perfNow*2);
+        ctx.strokeStyle= planes[0].rkAmmo>0 ? 'rgba(232,85,58,0.9)' : 'rgba(255,255,255,0.4)'; ctx.lineWidth=2;
+        for(let i=0;i<4;i++){ ctx.rotate(Math.PI/2); ctx.beginPath(); ctx.arc(0,0,20,-0.4,0.4); ctx.stroke(); }
+        ctx.restore(); }
+    }
+    for(let i=0;i<PMAX;i++){ const p=parts[i]; if(p.on&&p.type!=='smoke'&&p.type!=='trail'&&onScreen(p.x,p.y,60)) drawPart(p); }
+    ctx.restore(); // === end WORLD SPACE ===
   }
-  // rockets
-  for(const r of rockets){ if(r.on) drawRocket(r); }
-  // planes
-  for(const p of planes) if(p.alive) drawPlane(p);
-  // escort drones (over the player)
-  if(planes[0]&&planes[0].alive&&planes[0].drones){ for(const dr of planes[0].drones) drawDrone(dr); }
-  // seeker lock reticle
-  if(state==='play' && save.equip==='rockets' && rocketStats().own && planes[0]&&planes[0].alive){
-    const tg=nearestEnemyFrom(planes[0].x,planes[0].y,0);
-    if(tg>=0){ const t=planes[tg]; ctx.save(); ctx.translate(t.x,t.y); ctx.rotate(perfNow*2);
-      ctx.strokeStyle= planes[0].rkAmmo>0 ? 'rgba(232,85,58,0.9)' : 'rgba(255,255,255,0.4)'; ctx.lineWidth=2;
-      for(let i=0;i<4;i++){ ctx.rotate(Math.PI/2); ctx.beginPath(); ctx.arc(0,0,20,-0.4,0.4); ctx.stroke(); }
-      ctx.restore(); }
-  }
-  // foreground particles (sparks, debris, rings, emp)
-  for(let i=0;i<PMAX;i++){ const p=parts[i]; if(p.on&&p.type!=='smoke'&&p.type!=='trail') drawPart(p); }
+  // atmospheric bottom haze (screen-fixed)
+  const fg=ctx.createLinearGradient(0,H-70,0,H); fg.addColorStop(0,'rgba(207,235,251,0)'); fg.addColorStop(1,'rgba(255,243,220,0.45)');
+  ctx.fillStyle=fg; ctx.fillRect(0,H-70,W,70);
   if(flashV>0){ ctx.globalAlpha=flashV*0.5; ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H); ctx.globalAlpha=1; }
 
-  if(state==='play'||state==='roundwin'){ drawHUD(); drawIntro(); if(state==='roundwin') drawWinBanner(); }
+  if(state==='play'||state==='roundwin'){ drawEdgeArrows(); drawMinimap(); drawHUD(); drawCountdown(); if(state==='roundwin') drawWinBanner(); }
   else if(state==='title'){ drawTitle(); if(usingTouch) drawTouch(); }
   else if(state==='hangar'){ drawHangar(); }
-  else if(state==='dead'){ drawHUD(); drawDead(); }
+  else if(state==='dead'){ drawMinimap(); drawHUD(); drawDead(); }
 
+  ctx.restore();
+}
+/* off-screen rival indicators — arrows pinned to the screen edge, pointing at the fight */
+function drawEdgeArrows(){
+  const px=planes[0]?planes[0].x:camX+VW/2, py=planes[0]?planes[0].y:camY+VH/2;
+  const m=26;
+  for(const q of planes){ if(q.id===0||!q.alive) continue;
+    const sxp=(q.x-camX)*ZOOM, syp=(q.y-camY)*ZOOM;   // world → screen (zoomed)
+    if(sxp>=-10 && sxp<=W+10 && syp>=-10 && syp<=H+10) continue; // on-screen, skip
+    // clamp the target point to the screen frame along the line from player
+    let ax=clamp(sxp,m,W-m), ay=clamp(syp,m,H-m);
+    const ang=Math.atan2(q.y-py, q.x-px);
+    // distance-based size so far rivals read as smaller/dimmer
+    const d=Math.hypot(q.x-px,q.y-py); const sc=clamp(1.15-d/2600,0.6,1.1);
+    ctx.save(); ctx.translate(ax,ay); ctx.rotate(ang); ctx.scale(sc,sc);
+    ctx.globalAlpha=0.9; ctx.fillStyle=q.color; ctx.strokeStyle='rgba(20,40,70,0.5)'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(13,0); ctx.lineTo(-6,-8); ctx.lineTo(-2,0); ctx.lineTo(-6,8); ctx.closePath(); ctx.fill(); ctx.stroke();
+    if(q.ace){ ctx.fillStyle=YELLOW; ctx.beginPath(); ctx.arc(-9,0,2.4,0,7); ctx.fill(); }   // ace pip
+    ctx.restore(); ctx.globalAlpha=1;
+  }
+}
+/* corner minimap — the whole world at a glance: you (yellow) + rivals */
+function drawMinimap(){
+  const mw=132, mh=Math.round(mw*WORLD_H/WORLD_W), mx=W-mw-14, my=92;
+  ctx.save();
+  ctx.globalAlpha=0.82; ctx.fillStyle='rgba(22,34,58,0.55)'; roundRect(mx-4,my-4,mw+8,mh+8,8); ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,0.55)'; ctx.lineWidth=1.4; roundRect(mx-4,my-4,mw+8,mh+8,8); ctx.stroke();
+  ctx.globalAlpha=1;
+  const kx=mw/WORLD_W, ky=mh/WORLD_H;
+  // camera viewport rectangle
+  ctx.strokeStyle='rgba(255,255,255,0.6)'; ctx.lineWidth=1;
+  ctx.strokeRect(mx+camX*kx, my+camY*ky, VW*kx, VH*ky);
+  for(const q of planes){ if(!q.alive) continue;
+    const dx=mx+q.x*kx, dy=my+q.y*ky;
+    if(q.id===0){ ctx.fillStyle=YELLOW; ctx.beginPath(); ctx.arc(dx,dy,3.4,0,7); ctx.fill(); ctx.strokeStyle=INK; ctx.lineWidth=1; ctx.stroke(); }
+    else { ctx.fillStyle=q.color; ctx.beginPath(); ctx.arc(dx,dy, q.ace?3.4:2.4,0,7); ctx.fill(); if(q.ace){ ctx.strokeStyle=YELLOW; ctx.lineWidth=1; ctx.stroke(); } }
+  }
   ctx.restore();
 }
 
@@ -1142,13 +1374,20 @@ function frame(now){
   for(let i=killFeed.length-1;i>=0;i--){ killFeed[i].t-=dt; if(killFeed[i].t<=0) killFeed.splice(i,1); }
 
   if(state==='play'){
+    // pre-round countdown (real-time): everyone can fly, all guns held until ENGAGE
+    if(countT>0){
+      countT-=dt;
+      const cn=Math.max(0,Math.ceil(countT));
+      if(cn!==lastCountShown){ lastCountShown=cn; if(cn>0) sfxBeep(false); }
+      if(countT<=0){ countT=0; engageT=0.9; sfxBeep(true); }
+    } else if(engageT>0){ engageT-=dt; }
     const player=planes[0];
     if(player&&player.alive){ player.turn=(inR()?1:0)-(inL()?1:0); player.thrusting=inT(); player.wantFire=inF(); player.wantSpecial=inS(); }
     acc+=dt; let guard=0;
     while(acc>=STEP && guard<8){ stepSim(STEP); acc-=STEP; guard++; }
     if(guard>=8) acc=0;
     updateBullets(dt); updateRockets(dt); updateDrones(dt); updateWrecks(dt); updateParts(dt); updateClouds(dt);
-    updateEngine(player);
+    updateCamera(dt); updateEngine(player);
   } else {
     updateWrecks(dt); updateParts(dt); updateClouds(dt);
     if(state==='roundwin'){ winT-=dt; if(winT<=0){ openHangar('round'); } }
