@@ -77,7 +77,7 @@ Call `e.preventDefault()` on every key your game consumes (arrows, space, etc.) 
 
 ## Local best score
 
-Persist best score in `localStorage` under `gs_best:<slug>` (hardcode your slug). Show current + best on the game-over screen.
+Persist best score in `localStorage` under `gs_best:<slug>` (hardcode your slug). Show current + best on the game-over screen. Persist any progression save under a slug-scoped key too (e.g. `gs_save:<slug>`) — the platform's "start over" control wipes every localStorage key containing the game's slug and reloads, so slug-keyed saves reset cleanly without touching other games. (Optionally also handle a `{gs:'reset'}` postMessage to reset in-memory state for a separate game origin.)
 
 ## Hard requirements (the rubric's critical fails — a game violating these does not ship)
 

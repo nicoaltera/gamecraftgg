@@ -149,6 +149,37 @@ export default function GameStage({ slug, title, boards }: Props) {
     return () => window.removeEventListener('message', onMsg);
   }, [challenge, boards, dareBoard]);
 
+  // Wipe a game's saved progress and restart it fresh. Progression games persist
+  // their state under gs_save:<slug> / gs_best:<slug>; clear those and reload.
+  // Direct clear works same-origin (dev); the gs:'reset' message covers a
+  // separate game origin if the game handles it.
+  function resetProgress() {
+    if (!window.confirm('Start over? This erases your saved progress for this game.')) return;
+    const w = frameRef.current?.contentWindow;
+    try {
+      const ls = w?.localStorage;
+      if (ls) {
+        // only this game's keys (gs_save:<slug> / gs_best:<slug> / any slug-scoped state)
+        Object.keys(ls)
+          .filter((k) => k.includes(slug))
+          .forEach((k) => ls.removeItem(k));
+      }
+    } catch {
+      /* cross-origin: fall back to the message + reload below */
+    }
+    w?.postMessage({ gs: 'reset' }, '*');
+    try {
+      w?.location.reload();
+    } catch {
+      if (frameRef.current) frameRef.current.src = frameRef.current.src;
+    }
+    bestByBoard.current = {};
+    setLastScores(null);
+    setPosted(null);
+    setShareNote('Progress wiped — starting fresh.');
+    setTimeout(() => setShareNote(null), 2500);
+  }
+
   async function submitScores() {
     if (!lastScores || !name.trim() || !sessionRef.current) return;
     const res = await fetch('/api/score', {
@@ -267,6 +298,9 @@ export default function GameStage({ slug, title, boards }: Props) {
           </span>
         )}
         {shareNote && <span className="gs-toast">{shareNote}</span>}
+        <button className="start-over" onClick={resetProgress} title="Erase saved progress and restart">
+          ↺ start over
+        </button>
       </div>
     </>
   );

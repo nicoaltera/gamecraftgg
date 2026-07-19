@@ -74,8 +74,9 @@ const DEFAULT_POW = 0.8, DEFAULT_ANG = -0.66; // quick-throw (space/tap): 80% po
 const PITCH_EASE   = 3.6;    // how fast the pitch COMMAND eases toward the raw input (/s)
 const PITCH_MAX    = 0.92;   // max bank of the velocity off the flight path (rad ≈ 53°)
 const TURN_RATE    = 2.3;    // how fast velocity chases the nose (/s) — this IS the "weight"
-const ENERGY_EXCH  = 200;    // extra px/s traded per unit climb/dive (arcade juice on gravity)
-const PITCH_DRAG   = 0.15;   // energy bled while actively banking hard (/s * |pitch|)
+const ENERGY_EXCH  = 200;    // px/s of speed SHED per unit climb (nose up trades speed for height)
+const DIVE_EXCH    = 460;    // px/s of speed GAINED per unit dive (nose down trades height for speed — diving is the recover maneuver, so it pays off noticeably)
+const PITCH_DRAG   = 0.15;   // energy bled while hauling the nose UP hard (/s * pitch); dives don't pay this
 const NOSE_LEAD    = 0.34;   // extra visible nose tilt beyond the flight path (rad) for readability
 const DIVE_TERM_BONUS = 2.4; // diving raises the terminal fall-cap so committed dives feel fast
 
@@ -508,10 +509,12 @@ function stepFly(dt){
       const desired = dir - run.pitch*PITCH_MAX;             // bank the path toward the nose (up = -)
       dir += (desired - dir)*Math.min(1, TURN_RATE*dt);      // finite turn rate = the "weight"
       dir = Math.max(-1.3, Math.min(1.3, dir));              // never over-rotate past ~77° — stays graceful & forward
-      // energy juice ONLY while actively pitching (|pitch|): climb(sin<0) sheds / dive(sin>0) builds.
-      // Hands-off flight keeps the original ballistic glide untouched (so it still lands & settles).
-      spd += Math.sin(dir)*ENERGY_EXCH*Math.abs(run.pitch)*dt;
-      spd -= spd*PITCH_DRAG*Math.abs(run.pitch)*dt;          // hauling the nose hard bleeds a little
+      // energy juice ONLY while actively pitching: climb (pitch>0, sin<0) sheds speed for height;
+      // dive (pitch<0, sin>0) trades height back into speed — and pays MORE so diving to build
+      // speed feels rewarding. Hands-off flight keeps the original ballistic glide untouched.
+      const exch = run.pitch < 0 ? DIVE_EXCH : ENERGY_EXCH;
+      spd += Math.sin(dir)*exch*Math.abs(run.pitch)*dt;
+      if(run.pitch > 0) spd -= spd*PITCH_DRAG*run.pitch*dt;  // only hard CLIMBS bleed; a dive is never penalized
       spd = Math.max(36, spd);
       p.vx = Math.cos(dir)*spd; p.vy = Math.sin(dir)*spd;
     }

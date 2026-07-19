@@ -305,3 +305,6 @@ main {
 .board-picker { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .board-picker button { background: none; border: 1.5px solid rgba(26,24,21,0.2); color: var(--graphite); font-size: 12px; padding: 3px 10px; border-radius: 999px; }
 .board-picker button.active { border-color: var(--biro); color: var(--biro); }
+
+.start-over { margin-left: auto; background: none; border: none; color: var(--graphite); font-size: 13px; padding: 4px 6px; text-decoration: underline; text-underline-offset: 3px; }
+.start-over:hover { color: var(--redpencil); }
