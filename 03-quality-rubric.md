@@ -59,6 +59,7 @@ Derived from the full flash canon research (`research/top-flash-games-dna.md`, `
 - M6. A risk/reward layer exists (optional danger that pays — gold near hazards, doubling bonuses, exposed pickups).
 
 ### Progression pack (launchers, upgrade loops, tycoon, digging, training)
+*Keep progression simple and legible: the player should understand the whole ladder at a glance (rock → pistol → shotgun → machine gun). Complexity is not the source of the fun — the readable climb is.*
 - P1. **Bank every attempt** — no run earns zero; failure converts to currency/progress. The player never goes backward.
 - P2. The next upgrade/unlock is always visible and 1–3 runs away early on (adjacent-reward pacing).
 - P3. Upgrades are visible and strategy-changing (new gear on the sprite, new physics behavior), not stat-only. Best tiers escalate in *kind* — a new form, material, or behavior the player sees change — not just a bigger number.
