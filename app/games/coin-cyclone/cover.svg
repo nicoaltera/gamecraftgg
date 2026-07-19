@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <radialGradient id="floor" cx="50%" cy="52%" r="55%">
+      <stop offset="0%" stop-color="#3A2140"/>
+      <stop offset="55%" stop-color="#4A2B52"/>
+      <stop offset="85%" stop-color="#5A3350"/>
+      <stop offset="100%" stop-color="#38203A"/>
+    </radialGradient>
+    <radialGradient id="cavern" cx="50%" cy="52%" r="70%">
+      <stop offset="55%" stop-color="#2B1B3D"/>
+      <stop offset="100%" stop-color="#1A0F26"/>
+    </radialGradient>
+    <radialGradient id="drain" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#070409"/>
+      <stop offset="55%" stop-color="#160A18"/>
+      <stop offset="100%" stop-color="#4A2B52"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#7A4A2E" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#7A4A2E" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFE38A"/>
+      <stop offset="100%" stop-color="#F5C542"/>
+    </linearGradient>
+    <filter id="soft"><feGaussianBlur stdDeviation="1.1"/></filter>
+  </defs>
+
+  <rect width="640" height="400" fill="url(#cavern)"/>
+  <circle cx="320" cy="212" r="260" fill="url(#glow)"/>
+
+  <!-- arena floor -->
+  <circle cx="320" cy="212" r="188" fill="url(#floor)"/>
+
+  <!-- swirling wind dust spiral arms -->
+  <g fill="none" stroke="#FFC478" stroke-opacity="0.28" stroke-width="3" stroke-linecap="round">
+    <path d="M320 212 Q360 150 430 160 Q490 172 486 240 Q480 320 380 330 Q270 340 250 250"/>
+    <path d="M320 212 Q276 160 214 190 Q160 218 188 288 Q220 356 320 350"/>
+    <path d="M320 212 Q382 224 402 168 Q416 122 356 108 Q290 94 250 150"/>
+  </g>
+  <g fill="#FFC478">
+    <circle cx="452" cy="196" r="3" opacity="0.5"/>
+    <circle cx="470" cy="260" r="2.6" opacity="0.4"/>
+    <circle cx="196" cy="236" r="3" opacity="0.5"/>
+    <circle cx="300" cy="336" r="2.6" opacity="0.4"/>
+    <circle cx="356" cy="120" r="2.6" opacity="0.4"/>
+  </g>
+
+  <!-- the drain -->
+  <circle cx="320" cy="212" r="72" fill="url(#drain)"/>
+  <circle cx="320" cy="212" r="30" fill="none" stroke="#47E0C8" stroke-opacity="0.5" stroke-width="2.5"/>
+  <circle cx="320" cy="212" r="18" fill="none" stroke="#47E0C8" stroke-opacity="0.28" stroke-width="2"/>
+
+  <!-- carnival rim + studs -->
+  <circle cx="320" cy="212" r="190" fill="none" stroke="#2A1830" stroke-width="12"/>
+  <circle cx="320" cy="212" r="190" fill="none" stroke="#7A4A2E" stroke-width="5"/>
+  <g>
+    <circle cx="320" cy="22" r="4" fill="#F5C542"/>
+    <circle cx="440" cy="55" r="4" fill="#FF8A3D"/>
+    <circle cx="510" cy="212" r="4" fill="#F5C542"/>
+    <circle cx="440" cy="369" r="4" fill="#FF8A3D"/>
+    <circle cx="200" cy="369" r="4" fill="#F5C542"/>
+    <circle cx="130" cy="212" r="4" fill="#FF8A3D"/>
+    <circle cx="200" cy="55" r="4" fill="#F5C542"/>
+  </g>
+
+  <!-- streaming coins -->
+  <g>
+    <g transform="translate(438,178)"><ellipse cx="0" cy="3" rx="10" ry="6" fill="#000" opacity="0.2"/><circle r="10" fill="url(#gold)"/><circle r="6" fill="#D69A22"/><circle r="3" fill="#FFE38A"/></g>
+    <g transform="translate(460,244)"><ellipse cx="0" cy="3" rx="8" ry="5" fill="#000" opacity="0.2"/><circle r="9" fill="url(#gold)"/><circle r="5" fill="#D69A22"/></g>
+    <g transform="translate(210,180)"><circle r="9" fill="url(#gold)"/><circle r="5" fill="#D69A22"/><circle r="2.5" fill="#FFE38A"/></g>
+    <g transform="translate(238,300)"><circle r="10" fill="url(#gold)"/><circle r="6" fill="#D69A22"/></g>
+    <g transform="translate(384,308)"><circle r="8" fill="url(#gold)"/><circle r="4.5" fill="#D69A22"/></g>
+    <g transform="translate(360,132)"><circle r="9" fill="url(#gold)"/><circle r="5" fill="#D69A22"/><circle r="2.5" fill="#FFE38A"/></g>
+    <!-- gem near the eye -->
+    <g transform="translate(360,250)"><circle r="18" fill="#47E0C8" opacity="0.28"/><path d="M0 -12 L10 -3 L6 12 L-6 12 L-10 -3 Z" fill="#47E0C8"/><path d="M0 -12 L4 -3 L-4 -3 Z" fill="#DFFCF6"/></g>
+  </g>
+
+  <!-- characters -->
+  <!-- rival blue (rim, loaded sack) -->
+  <g transform="translate(150,250)">
+    <ellipse cx="0" cy="18" rx="20" ry="8" fill="#000" opacity="0.25"/>
+    <ellipse cx="-14" cy="2" rx="11" ry="14" fill="#6E4522"/><rect x="-18" y="-11" width="9" height="4" fill="#5A3820"/>
+    <circle cx="2" cy="2" r="18" fill="#3357C7"/><circle cx="0" cy="-1" r="18" fill="#5B8CFF"/>
+    <circle cx="-6" cy="-6" r="9" fill="#fff" opacity="0.2"/>
+    <ellipse cx="-6" cy="-3" rx="4" ry="5" fill="#fff"/><ellipse cx="6" cy="-3" rx="4" ry="5" fill="#fff"/>
+    <circle cx="-5" cy="-2" r="2.2" fill="#20141E"/><circle cx="7" cy="-2" r="2.2" fill="#20141E"/>
+  </g>
+
+  <!-- rival rose (dashing) -->
+  <g transform="translate(470,320)">
+    <ellipse cx="0" cy="18" rx="20" ry="8" fill="#000" opacity="0.25"/>
+    <line x1="0" y1="0" x2="30" y2="14" stroke="#FF5C7A" stroke-width="4" stroke-linecap="round" opacity="0.6"/>
+    <circle cx="2" cy="2" r="18" fill="#C13556"/><circle cx="0" cy="-1" r="18" fill="#FF5C7A"/>
+    <circle cx="-6" cy="-6" r="9" fill="#fff" opacity="0.2"/>
+    <ellipse cx="-2" cy="-3" rx="4" ry="5" fill="#fff"/><ellipse cx="10" cy="-3" rx="4" ry="5" fill="#fff"/>
+    <circle cx="-1" cy="-2" r="2.2" fill="#20141E"/><circle cx="11" cy="-2" r="2.2" fill="#20141E"/>
+  </g>
+
+  <!-- rival violet spiraling INTO the drain (comedy) -->
+  <g transform="translate(300,196) rotate(28) scale(0.62)">
+    <circle cx="2" cy="2" r="18" fill="#8E44D6"/><circle cx="0" cy="-1" r="18" fill="#C77DFF"/>
+    <ellipse cx="-6" cy="-3" rx="4" ry="5" fill="#fff"/><ellipse cx="6" cy="-3" rx="4" ry="5" fill="#fff"/>
+    <path d="M-8 8 Q0 14 8 8" stroke="#20141E" stroke-width="2.5" fill="none"/>
+    <text x="26" y="-16" font-family="Arial Rounded MT Bold, Trebuchet MS, sans-serif" font-size="16" font-weight="800" fill="#FFF4D6">wheee!</text>
+  </g>
+
+  <!-- YOU (mint) with crown, grabbing -->
+  <g transform="translate(392,232)">
+    <ellipse cx="0" cy="20" rx="22" ry="9" fill="#000" opacity="0.3"/>
+    <ellipse cx="-13" cy="4" rx="11" ry="15" fill="#8A5A2E"/><circle cx="-13" cy="-6" r="3" fill="#F5C542"/>
+    <circle cx="2" cy="3" r="20" fill="#1E9E78"/><circle cx="0" cy="0" r="20" fill="#38E1B0"/>
+    <circle cx="-7" cy="-7" r="10" fill="#fff" opacity="0.22"/>
+    <ellipse cx="-7" cy="-4" rx="4.5" ry="5.5" fill="#fff"/><ellipse cx="7" cy="-4" rx="4.5" ry="5.5" fill="#fff"/>
+    <circle cx="-6" cy="-3" r="2.4" fill="#20141E"/><circle cx="8" cy="-3" r="2.4" fill="#20141E"/>
+    <!-- crown -->
+    <path d="M-11 -24 L-11 -32 L-5 -27 L0 -34 L5 -27 L11 -32 L11 -24 Z" fill="#F5C542" stroke="#B8860B" stroke-width="1"/>
+  </g>
+
+  <!-- title -->
+  <g transform="translate(320,64)" text-anchor="middle" font-family="Arial Rounded MT Bold, Trebuchet MS, sans-serif" font-weight="800">
+    <text x="0" y="0" font-size="58" fill="#2A1830" stroke="#2A1830" stroke-width="7" stroke-linejoin="round" transform="rotate(-3)">COIN CYCLONE</text>
+    <text x="0" y="0" font-size="58" fill="url(#gold)" transform="rotate(-3)">COIN CYCLONE</text>
+    <text x="0" y="30" font-size="17" fill="#FFF4D6">grab the loot before the cyclone eats it</text>
+  </g>
+</svg>

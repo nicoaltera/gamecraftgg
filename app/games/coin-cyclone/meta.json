@@ -1,0 +1,13 @@
+{
+  "title": "Coin Cyclone",
+  "slug": "coin-cyclone",
+  "description": "Scramble for loot in a swirling treasure-cavern vortex — grab coins, dash-bump rivals into the drain, and don't get sucked in yourself.",
+  "verb": "grab the loot",
+  "dials": ["mastery", "comedy"],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "coins",
+  "scoreOrder": "desc",
+  "palette": ["#2B1B3D", "#F5C542", "#FF8A3D", "#FFF4D6", "#38E1B0", "#FF5C7A"],
+  "author": "gamesight"
+}

@@ -1,0 +1,1379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Coin Cyclone</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#1A0F26; overflow:hidden; }
+  canvas { display:block; touch-action:none; -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<script>
+'use strict';
+/* ============================================================
+   COIN CYCLONE — grab the loot in a swirling treasure-cavern vortex.
+   You + 3 bot rivals scramble for coins as a wind cyclone drags
+   everyone toward a hungry drain in the center. Dash-bump rivals to
+   steal their loot or shove them down the hole. Most coins wins the
+   round; win to advance to a faster, greedier cyclone. Every coin
+   you grab banks into your run total forever.
+   Pure Canvas2D + WebAudio. Fixed 960x540, letterboxed, dpr-crisp.
+   ============================================================ */
+
+const W = 960, H = 540;
+const SLUG = 'coin-cyclone';
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+
+/* ---------- letterbox / dpr ---------- */
+let scale = 1, offX = 0, offY = 0, dpr = 1;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const w = window.innerWidth, h = window.innerHeight;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  cv.style.width = w + 'px'; cv.style.height = h + 'px';
+  scale = Math.min(w / W, h / H);
+  offX = (w - W * scale) / 2; offY = (h - H * scale) / 2;
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------- seeded rng ---------- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+let juice = mulberry32(0xBADF00D);           // cosmetic randomness
+let rng = mulberry32(20260718);              // gameplay randomness (reset per run)
+
+/* ---------- bridge ---------- */
+function post(m) { try { parent.postMessage(m, '*'); } catch (e) {} }
+const params = new URLSearchParams(location.search);
+const challenge = Math.max(0, parseInt(params.get('c') || '0', 10) || 0);
+
+/* ---------- persistence ---------- */
+function loadBest() { try { return parseInt(localStorage.getItem('gs_best:' + SLUG) || '0', 10) || 0; } catch (e) { return 0; } }
+function saveBest(v) { try { localStorage.setItem('gs_best:' + SLUG, String(v)); } catch (e) {} }
+let best = loadBest();
+
+/* ============================================================
+   AUDIO — WebAudio synth, all sounds generated. Starts on gesture.
+   ============================================================ */
+const AU = {
+  ctx: null, master: null, noiseBuf: null, windOn: false, windGain: null,
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    try {
+      const C = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new C();
+      const comp = this.ctx.createDynamicsCompressor();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = 0.5;
+      this.master.connect(comp); comp.connect(this.ctx.destination);
+      const len = (this.ctx.sampleRate * 1.4) | 0;
+      this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const d = this.noiseBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      this.wind();
+    } catch (e) { this.ctx = null; }
+  },
+  now() { return this.ctx ? this.ctx.currentTime : 0; },
+  vary(f) { return f * (0.92 + juice() * 0.16); },
+  tone(type, f0, f1, t0, dur, peak, curve) {
+    if (!this.ctx) return;
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type; o.frequency.setValueAtTime(f0, t0);
+    if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(peak, t0 + (curve || 0.008));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  },
+  noise(t0, dur, peak, type, f0, f1, q) {
+    if (!this.ctx) return;
+    const s = this.ctx.createBufferSource(); s.buffer = this.noiseBuf; s.loop = true;
+    const fl = this.ctx.createBiquadFilter(); fl.type = type; fl.Q.value = q || 1;
+    fl.frequency.setValueAtTime(f0, t0);
+    if (f1) fl.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(peak, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    s.connect(fl); fl.connect(g); g.connect(this.master);
+    s.start(t0); s.stop(t0 + dur + 0.05);
+  },
+  // gentle airy vortex whoosh loop
+  wind() {
+    if (!this.ctx || this.windOn) return;
+    this.windOn = true;
+    const t = this.now();
+    const s = this.ctx.createBufferSource(); s.buffer = this.noiseBuf; s.loop = true;
+    const fl = this.ctx.createBiquadFilter(); fl.type = 'bandpass'; fl.frequency.value = 480; fl.Q.value = 0.7;
+    const g = this.ctx.createGain(); g.gain.value = 0;
+    g.gain.setTargetAtTime(0.05, t, 3);
+    s.connect(fl); fl.connect(g); g.connect(this.master);
+    s.start(t);
+    // slow LFO sweep on the filter for an airy swirl
+    const lfo = this.ctx.createOscillator(), lg = this.ctx.createGain();
+    lfo.frequency.value = 0.13; lg.gain.value = 240;
+    lfo.connect(lg); lg.connect(fl.frequency); lfo.start(t);
+    this.windGain = g; this.windFl = fl;
+  },
+  setWindEnergy(e) { // 0..1 — swells with cyclone speed
+    if (!this.windGain) return;
+    this.windGain.gain.setTargetAtTime(0.035 + 0.05 * e, this.now(), 0.4);
+    if (this.windFl) this.windFl.frequency.setTargetAtTime(360 + 520 * e, this.now(), 0.4);
+  },
+  ching(combo) { // coin grab — pitch rises with combo
+    if (!this.ctx) return;
+    const t = this.now();
+    const step = Math.min(12, combo);
+    const base = this.vary(880) * Math.pow(1.0595, step); // semitone climb
+    this.tone('triangle', base, base * 1.4, t, 0.09, 0.14);
+    this.tone('sine', base * 2.01, base * 2.4, t + 0.008, 0.12, 0.06);
+  },
+  gem() {
+    if (!this.ctx) return;
+    const t = this.now();
+    const b = this.vary(660);
+    [0, 4, 7, 12].forEach((s, i) => this.tone('triangle', b * Math.pow(1.0595, s), b * Math.pow(1.0595, s) * 1.3, t + i * 0.05, 0.16, 0.1));
+    this.noise(t, 0.3, 0.05, 'bandpass', 1400, 3000, 2);
+  },
+  dash() {
+    if (!this.ctx) return;
+    const t = this.now();
+    this.noise(t, 0.22, 0.1, 'bandpass', this.vary(300), this.vary(1300), 1.1);
+    this.tone('sine', this.vary(220), 90, t, 0.14, 0.06);
+  },
+  bonk() {
+    if (!this.ctx) return;
+    const t = this.now();
+    this.tone('square', this.vary(180), 70, t, 0.11, 0.11);
+    this.tone('sine', this.vary(120), 50, t, 0.14, 0.09);
+    this.noise(t, 0.06, 0.05, 'lowpass', 800, 200, 1);
+  },
+  puff() {
+    if (!this.ctx) return;
+    const t = this.now();
+    this.noise(t, 0.16, 0.06, 'bandpass', this.vary(700), this.vary(2000), 1.4);
+    for (let i = 0; i < 3; i++) this.tone('triangle', this.vary(700 + i * 120), this.vary(900), t + i * 0.02, 0.07, 0.04);
+  },
+  slurp() { // fell in the drain
+    if (!this.ctx) return;
+    const t = this.now();
+    this.tone('sawtooth', this.vary(520), 70, t, 0.5, 0.09);
+    this.noise(t, 0.5, 0.06, 'lowpass', this.vary(900), 140, 1.5);
+    // silly "wheee" whistle down
+    this.tone('sine', this.vary(1200), 300, t + 0.05, 0.45, 0.07);
+  },
+  spitOut() {
+    if (!this.ctx) return;
+    const t = this.now();
+    this.tone('sine', 200, this.vary(560), t, 0.16, 0.08);
+    this.noise(t, 0.12, 0.05, 'bandpass', 400, 1400, 1);
+  },
+  gust() {
+    if (!this.ctx) return;
+    const t = this.now();
+    this.noise(t, 0.5, 0.12, 'bandpass', this.vary(200), this.vary(1600), 0.8);
+    this.tone('sine', 90, 260, t, 0.4, 0.05);
+  },
+  magnet() {
+    if (!this.ctx) return;
+    const t = this.now();
+    for (let i = 0; i < 5; i++) this.tone('sine', this.vary(400 + i * 130), this.vary(500 + i * 160), t + i * 0.04, 0.1, 0.05);
+  },
+  tick(hurry) {
+    if (!this.ctx) return;
+    const t = this.now();
+    this.tone('sine', hurry ? this.vary(1400) : this.vary(900), null, t, 0.05, hurry ? 0.09 : 0.05);
+  },
+  win() { // cheer chord + rising arpeggio
+    if (!this.ctx) return;
+    const t = this.now();
+    [523, 659, 784, 1046, 1318].forEach((f, i) => {
+      this.tone('triangle', f, f, t + i * 0.09, 0.5, 0.09);
+      this.tone('sine', f * 2, f * 2, t + i * 0.09, 0.3, 0.03);
+    });
+    this.noise(t, 0.7, 0.05, 'bandpass', 1200, 4000, 1.2); // crowd shimmer
+  },
+  lose() {
+    if (!this.ctx) return;
+    const t = this.now();
+    this.tone('sawtooth', this.vary(300), 90, t, 0.7, 0.08);
+    this.tone('sine', this.vary(220), 70, t + 0.1, 0.6, 0.06);
+  }
+};
+
+/* ============================================================
+   TUNING — the feel constants
+   ============================================================ */
+const CX = 480, CY = 286;          // arena center
+const ARENA_R = 232;               // playfield radius (rim)
+const DRAIN_R = 34;                // the hungry hole
+const P_R = 16;                    // player/bot body radius
+const COIN_R = 8, GEM_R = 14;      // pickup radii
+const GRAB_PAD = 8;                // grab forgiveness
+
+const SWIRL_ACC = 250;             // tangential (swirl) acceleration base
+const PULL_BASE = 110;             // inward pull at the rim
+const PULL_NEAR = 1650;            // extra inward pull ramping toward center (near^2)
+const PLAYER_ACC = 940;            // thrust from input
+const DAMP = 2.3;                  // velocity damping (actors)
+const DAMP_COIN = 1.15;            // coins keep flowing longer
+const MAX_SPD = 620;              // clamp so nothing explodes
+
+const DASH_SPEED = 380;            // dash impulse added to velocity
+const DASH_TIME = 0.22;            // window where a dash counts as a bump/steal
+const DASH_MAX = 2;                // dash pips (metered resource)
+const DASH_COST = 1;               // per dash
+const DASH_REGEN = 0.72;           // pips per second
+const BUMP_KNOCK = 300;            // knockback given to a bumped rival
+const BUMP_MIN = 3;                // a rival must carry this many to be worth stealing
+
+const ROUND_TIME = 32;             // seconds per round
+const MAX_COINS = 26;              // field cap (phone perf)
+const STEAL_DROP = 3;              // coins knocked loose on a bump
+const FALL_DROP = 0.34;            // fraction of sack dropped on falling in
+const FALL_DUR = 0.95;             // spiral-down duration
+const STUN_DUR = 0.62;             // dizzy after being spat out
+
+const COLORS = ['#38E1B0', '#FF5C7A', '#5B8CFF', '#C77DFF'];
+const DARKS  = ['#1E9E78', '#C13556', '#3357C7', '#8E44D6'];
+const NAMES  = ['YOU', 'Rook', 'Pip', 'Zed'];
+
+/* ============================================================
+   STATE
+   ============================================================ */
+let state = 'splash';              // splash | play | roundwin | over
+let round = 1, runCoins = 0;
+let timer = ROUND_TIME, roundSpeed = 1, greed = 0;
+let actors = [], coins = [], specials = [];
+let magnetActor = -1, magnetT = 0;
+let spawnAcc = 0, specialAcc = 0, clusterAcc = 0;
+let shake = 0, hitstop = 0, flash = 0, splashT = 0, overT = 0, winT = 0;
+let combo = 0, comboT = 0, hint = 1;
+let lastTickSec = 99, newBest = false;
+let cBeaten = false, cBannerT = 0, lastScorePost = 0;
+let bg;                             // cached arena gradient
+
+/* particles (pooled) */
+const P_MAX = 220;
+const parts = [];
+for (let i = 0; i < P_MAX; i++) parts.push({ on: false, x: 0, y: 0, vx: 0, vy: 0, t: 0, life: 1, r: 2, col: '#fff', kind: 0, rot: 0, vr: 0 });
+function spawnP(kind, x, y, vx, vy, life, r, col) {
+  for (let i = 0; i < P_MAX; i++) {
+    const p = parts[i];
+    if (!p.on) { p.on = true; p.kind = kind; p.x = x; p.y = y; p.vx = vx; p.vy = vy; p.t = 0; p.life = life; p.r = r; p.col = col; p.rot = juice() * 7; p.vr = (juice() - 0.5) * 12; return; }
+  }
+}
+/* floating text */
+const floats = [];
+for (let i = 0; i < 14; i++) floats.push({ on: false, x: 0, y: 0, t: 0, txt: '', col: '', sz: 18 });
+function floatTxt(txt, x, y, col, sz) {
+  for (const f of floats) if (!f.on) { f.on = true; f.txt = txt; f.x = x; f.y = y; f.t = 0; f.col = col; f.sz = sz || 18; return; }
+}
+
+/* ============================================================
+   VORTEX FORCE MODEL
+   Tangential swirl (counter-clockwise) + inward pull that ramps
+   sharply near the center. swirlMult/pullMult let coins flow
+   freely while players feel the full, dangerous suck.
+   ============================================================ */
+function vortex(x, y, swirlMult, pullMult, out) {
+  const dx = x - CX, dy = y - CY;
+  let d = Math.hypot(dx, dy); if (d < 0.001) d = 0.001;
+  const nx = dx / d, ny = dy / d;      // radial (outward) unit
+  const tx = -ny, ty = nx;             // tangential unit (CCW)
+  const near = Math.max(0, Math.min(1, 1 - d / ARENA_R));
+  const swirl = SWIRL_ACC * (0.5 + 0.85 * near) * roundSpeed * swirlMult;
+  const pull = (PULL_BASE + PULL_NEAR * near * near) * roundSpeed * pullMult;
+  out.ax = tx * swirl - nx * pull;
+  out.ay = ty * swirl - ny * pull;
+}
+const _v = { ax: 0, ay: 0 };
+
+/* ============================================================
+   SETUP
+   ============================================================ */
+function makeActor(i) {
+  const ang = -Math.PI / 2 + i * (Math.PI * 2 / 4);
+  const r = ARENA_R * 0.72;
+  return {
+    i, x: CX + Math.cos(ang) * r, y: CY + Math.sin(ang) * r, vx: 0, vy: 0,
+    r: P_R, col: COLORS[i], dark: DARKS[i], isPlayer: i === 0,
+    sack: 0, dashMeter: DASH_MAX, dashT: 0, stun: 0, face: ang,
+    falling: false, fallT: 0, fallR: 0, fallA: 0, hop: 0, blink: 0,
+    aiT: 0, target: null, sackShow: 0
+  };
+}
+function resetRound(full) {
+  if (full) { round = 1; runCoins = 0; newBest = false; cBeaten = false; }
+  rng = mulberry32(20260718 + round * 9173 + (full ? 0 : 1));
+  roundSpeed = 1 + (round - 1) * 0.13;
+  greed = Math.min(0.85, (round - 1) * 0.16);
+  timer = ROUND_TIME; lastTickSec = 99;
+  actors = [makeActor(0), makeActor(1), makeActor(2), makeActor(3)];
+  coins = []; specials = []; magnetActor = -1; magnetT = 0;
+  spawnAcc = 0; specialAcc = 3; clusterAcc = 5;
+  combo = 0; comboT = 0;
+  for (const p of parts) p.on = false;
+  for (const f of floats) f.on = false;
+  // seed the arena with some swirling loot so it never starts empty
+  for (let i = 0; i < 12; i++) spawnCoin(0.35 + rng() * 0.55);
+}
+
+function spawnCoin(radFrac, atX, atY) {
+  if (coins.length >= MAX_COINS) return null;
+  let x, y;
+  if (atX != null) { x = atX; y = atY; }
+  else {
+    const a = rng() * Math.PI * 2;
+    const r = ARENA_R * radFrac;
+    x = CX + Math.cos(a) * r; y = CY + Math.sin(a) * r;
+  }
+  // give it a tangential shove so it joins the swirl immediately
+  const dx = x - CX, dy = y - CY, d = Math.hypot(dx, dy) || 1;
+  const c = { x, y, vx: -dy / d * 40, vy: dx / d * 40, r: COIN_R, spin: rng() * 7, pop: 0, born: 0 };
+  coins.push(c);
+  return c;
+}
+function spawnCluster() {
+  // a fat pile — sometimes dangerously close to the center (high value, high risk)
+  const risky = rng() < 0.45;
+  const rf = risky ? 0.12 + rng() * 0.14 : 0.5 + rng() * 0.4;
+  const a0 = rng() * Math.PI * 2;
+  const n = 4 + (rng() * 4 | 0);
+  for (let i = 0; i < n; i++) {
+    const a = a0 + (rng() - 0.5) * 0.7;
+    const r = ARENA_R * (rf + (rng() - 0.5) * 0.06);
+    const c = spawnCoin(0, CX + Math.cos(a) * r, CY + Math.sin(a) * r);
+    if (c) c.pop = 1;
+  }
+  floatTxt(risky ? 'loot in the eye!' : 'loot drop!', CX + Math.cos(a0) * ARENA_R * rf, CY + Math.sin(a0) * ARENA_R * rf - 22, risky ? '#FF8A3D' : '#FFF4D6', 16);
+}
+function spawnSpecial() {
+  const kinds = ['gem', 'magnet', 'gust'];
+  const k = kinds[rng() * kinds.length | 0];
+  // gems love the dangerous center; magnet/gust drift mid-ring
+  const rf = k === 'gem' ? 0.1 + rng() * 0.18 : 0.4 + rng() * 0.4;
+  const a = rng() * Math.PI * 2;
+  specials.push({ kind: k, x: CX + Math.cos(a) * ARENA_R * rf, y: CY + Math.sin(a) * ARENA_R * rf, r: k === 'gem' ? GEM_R : 13, spin: 0, pop: 1, born: 0 });
+}
+
+/* ============================================================
+   INPUT
+   ============================================================ */
+const keys = { up: 0, down: 0, left: 0, right: 0 };
+const touches = {};       // id -> {sx,sy,x,y}
+let moveTouchId = -1;
+const DASH_BTN = { x: W - 92, y: H - 92, r: 52 };
+
+function toV(e) { return { x: (e.clientX - offX) / scale, y: (e.clientY - offY) / scale }; }
+
+function startOrRetry() {
+  AU.init();
+  if (state === 'splash') { state = 'play'; resetRound(true); return true; }
+  if (state === 'over' && overT > 0.35) { state = 'play'; resetRound(true); return true; }
+  if (state === 'roundwin' && winT > 0.5) { round++; state = 'play'; resetRound(false); return true; }
+  return false;
+}
+function tryDash() {
+  const p = actors[0];
+  if (state !== 'play' || !p || p.falling || p.stun > 0.15) return;
+  if (p.dashMeter < DASH_COST) return;
+  doDash(p);
+}
+function doDash(a) {
+  a.dashMeter -= DASH_COST;
+  a.dashT = DASH_TIME;
+  a.vx += Math.cos(a.face) * DASH_SPEED;
+  a.vy += Math.sin(a.face) * DASH_SPEED;
+  AU.dash();
+  for (let i = 0; i < 8; i++) {
+    const ang = a.face + Math.PI + (juice() - 0.5) * 1.2;
+    spawnP(1, a.x, a.y, Math.cos(ang) * (60 + juice() * 90), Math.sin(ang) * (60 + juice() * 90), 0.35, 3 + juice() * 3, 'rgba(255,240,214,0.7)');
+  }
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  const c = e.code;
+  if (c === 'ArrowUp' || c === 'KeyW') { keys.up = 1; e.preventDefault(); }
+  else if (c === 'ArrowDown' || c === 'KeyS') { keys.down = 1; e.preventDefault(); }
+  else if (c === 'ArrowLeft' || c === 'KeyA') { keys.left = 1; e.preventDefault(); }
+  else if (c === 'ArrowRight' || c === 'KeyD') { keys.right = 1; e.preventDefault(); }
+  else if (c === 'Space' || c === 'Enter') {
+    e.preventDefault(); AU.init();
+    if (!startOrRetry()) tryDash();
+  }
+});
+window.addEventListener('keyup', (e) => {
+  const c = e.code;
+  if (c === 'ArrowUp' || c === 'KeyW') keys.up = 0;
+  else if (c === 'ArrowDown' || c === 'KeyS') keys.down = 0;
+  else if (c === 'ArrowLeft' || c === 'KeyA') keys.left = 0;
+  else if (c === 'ArrowRight' || c === 'KeyD') keys.right = 0;
+});
+
+cv.addEventListener('contextmenu', (e) => e.preventDefault());
+cv.addEventListener('pointerdown', (e) => {
+  e.preventDefault(); AU.init();
+  const v = toV(e);
+  if (state !== 'play') { startOrRetry(); return; }
+  // dash button (right thumb)
+  const dbx = v.x - DASH_BTN.x, dby = v.y - DASH_BTN.y;
+  if (dbx * dbx + dby * dby < (DASH_BTN.r + 12) * (DASH_BTN.r + 12)) { tryDash(); return; }
+  // otherwise a move stick (floating origin)
+  touches[e.pointerId] = { sx: v.x, sy: v.y, x: v.x, y: v.y };
+  if (moveTouchId < 0) moveTouchId = e.pointerId;
+}, { passive: false });
+cv.addEventListener('pointermove', (e) => {
+  const t = touches[e.pointerId]; if (!t) return;
+  const v = toV(e); t.x = v.x; t.y = v.y;
+}, { passive: false });
+function endTouch(e) {
+  if (touches[e.pointerId]) delete touches[e.pointerId];
+  if (e.pointerId === moveTouchId) moveTouchId = -1;
+}
+cv.addEventListener('pointerup', endTouch);
+cv.addEventListener('pointercancel', endTouch);
+window.addEventListener('blur', () => { keys.up = keys.down = keys.left = keys.right = 0; moveTouchId = -1; for (const k in touches) delete touches[k]; });
+const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+/* ============================================================
+   UPDATE
+   ============================================================ */
+function playerInput() {
+  let mx = 0, my = 0;
+  mx = keys.right - keys.left; my = keys.down - keys.up;
+  if (moveTouchId >= 0 && touches[moveTouchId]) {
+    const t = touches[moveTouchId];
+    const dx = t.x - t.sx, dy = t.y - t.sy, dl = Math.hypot(dx, dy);
+    if (dl > 8) { const m = Math.min(1, dl / 56); mx = dx / dl * m; my = dy / dl * m; }
+  }
+  const ml = Math.hypot(mx, my);
+  if (ml > 1) { mx /= ml; my /= ml; }
+  return { mx, my, ml: Math.min(1, ml) };
+}
+
+function startFall(a) {
+  a.falling = true; a.fallT = 0;
+  const dx = a.x - CX, dy = a.y - CY;
+  a.fallR = Math.hypot(dx, dy); a.fallA = Math.atan2(dy, dx);
+  const drop = Math.min(a.sack, Math.max(0, Math.round(a.sack * FALL_DROP)));
+  a.sack -= drop;
+  for (let i = 0; i < drop; i++) {
+    const ra = rng() * Math.PI * 2, rr = ARENA_R * (0.55 + rng() * 0.3);
+    spawnCoin(0, CX + Math.cos(ra) * rr, CY + Math.sin(ra) * rr);
+  }
+  AU.slurp();
+  shake = Math.min(9, shake + 5);
+  floatTxt('wheee!', a.x, a.y - 26, a.col, 20);
+  for (let i = 0; i < 10; i++) spawnP(2, a.x, a.y, (juice() - 0.5) * 160, (juice() - 0.5) * 160, 0.5, 3, '#F5C542');
+}
+
+function updateActor(a, dt) {
+  if (a.falling) {
+    a.fallT += dt;
+    const p = Math.min(1, a.fallT / FALL_DUR);
+    const spin = a.fallA - p * 14;          // spiral into the drain
+    const rr = a.fallR * (1 - p) + DRAIN_R * 0.2 * (1 - p);
+    a.x = CX + Math.cos(spin) * rr * (1 - p * 0.2);
+    a.y = CY + Math.sin(spin) * rr * (1 - p * 0.2);
+    if (p >= 1) {
+      // spat back out at a fresh rim spot
+      const ra = rng() * Math.PI * 2;
+      a.x = CX + Math.cos(ra) * (ARENA_R - a.r - 4);
+      a.y = CY + Math.sin(ra) * (ARENA_R - a.r - 4);
+      const dx = a.x - CX, dy = a.y - CY, d = Math.hypot(dx, dy) || 1;
+      a.vx = -dx / d * 120; a.vy = -dy / d * 120;
+      a.falling = false; a.stun = STUN_DUR;
+      AU.spitOut();
+      for (let i = 0; i < 8; i++) spawnP(1, a.x, a.y, (juice() - 0.5) * 120, (juice() - 0.5) * 120, 0.4, 3, 'rgba(255,240,214,0.6)');
+    }
+    return;
+  }
+  a.stun = Math.max(0, a.stun - dt);
+  a.dashT = Math.max(0, a.dashT - dt);
+  a.dashMeter = Math.min(DASH_MAX, a.dashMeter + DASH_REGEN * dt);
+  if (a.blink > 0) a.blink -= dt; else if (juice() < 0.004) a.blink = 0.12;
+
+  // thrust
+  let tx = 0, ty = 0;
+  const ctrl = a.stun > 0 ? 0.28 : 1;
+  if (a.isPlayer) {
+    const inp = playerInput();
+    tx = inp.mx; ty = inp.my;
+    if (inp.ml > 0.05) a.face = Math.atan2(ty, tx);
+    if (inp.ml > 0.1) hint = Math.max(0, hint - dt * 0.6);
+  } else {
+    const d = aiThink(a, dt);
+    tx = d.x; ty = d.y;
+    if (d.x || d.y) a.face = Math.atan2(d.y, d.x);
+  }
+  const acc = a.isPlayer ? PLAYER_ACC : PLAYER_ACC * 0.85;  // bots slightly weaker → skill edge
+  a.vx += tx * acc * ctrl * dt;
+  a.vy += ty * acc * ctrl * dt;
+
+  // vortex
+  vortex(a.x, a.y, 1, 1, _v);
+  a.vx += _v.ax * dt; a.vy += _v.ay * dt;
+
+  // damp + clamp
+  const damp = Math.exp(-DAMP * dt);
+  a.vx *= damp; a.vy *= damp;
+  const sp = Math.hypot(a.vx, a.vy);
+  if (sp > MAX_SPD) { a.vx *= MAX_SPD / sp; a.vy *= MAX_SPD / sp; }
+  a.x += a.vx * dt; a.y += a.vy * dt;
+
+  // rim bounce (can't leave the arena)
+  const dx = a.x - CX, dy = a.y - CY; let d = Math.hypot(dx, dy) || 0.001;
+  const lim = ARENA_R - a.r;
+  if (d > lim) {
+    const nx = dx / d, ny = dy / d;
+    a.x = CX + nx * lim; a.y = CY + ny * lim;
+    const vn = a.vx * nx + a.vy * ny;
+    if (vn > 0) { a.vx -= nx * vn * 1.4; a.vy -= ny * vn * 1.4; }
+    d = lim;
+  }
+  // drain fall
+  if (d < DRAIN_R - 2) startFall(a);
+}
+
+/* --- bot AI: chase nearest loot, steal from a loaded player, flee the eye --- */
+function aiThink(a, dt) {
+  a.aiT -= dt;
+  const dcx = a.x - CX, dcy = a.y - CY, dc = Math.hypot(dcx, dcy) || 1;
+  // self-rescue: dangerously deep in the eye
+  if (dc < DRAIN_R * 2.6) {
+    if (a.dashMeter >= DASH_COST && dc < DRAIN_R * 1.9) { a.face = Math.atan2(dcy, dcx); doDash(a); }
+    return { x: dcx / dc, y: dcy / dc };
+  }
+  // opportunistic steal: player is loaded, close, and we've got a dash
+  const p = actors[0];
+  if (p && !p.falling && p.sack >= BUMP_MIN && a.dashMeter >= DASH_COST) {
+    const px = p.x - a.x, py = p.y - a.y, pd = Math.hypot(px, py);
+    if (pd < 150 && rng() < greed * (a.aiT <= 0 ? 1 : 0.02)) {
+      a.face = Math.atan2(py, px);
+      if (pd < 60) doDash(a);
+      if (a.aiT <= 0) a.aiT = 0.25;
+      return { x: px / pd, y: py / pd };
+    }
+  }
+  // pick a loot target periodically
+  if (a.aiT <= 0 || !a.target || a.target._gone) {
+    a.aiT = 0.22 + rng() * 0.18;
+    a.target = pickTarget(a);
+  }
+  let t = a.target;
+  if (t && t._gone) t = null;
+  if (!t) {
+    // drift toward the mid ring, hunting
+    const want = ARENA_R * 0.55;
+    const k = (want - dc) / ARENA_R;
+    return { x: -dcy / dc * 0.6 + dcx / dc * k, y: dcx / dc * 0.6 + dcy / dc * k };
+  }
+  let dx = t.x - a.x, dy = t.y - a.y; const dl = Math.hypot(dx, dy) || 1;
+  dx /= dl; dy /= dl;
+  // don't dive too deep unless greedy — bias outward when target sits in the eye
+  const td = Math.hypot(t.x - CX, t.y - CY);
+  if (td < DRAIN_R * 2.2 && greed < 0.5) { dx += dcx / dc * 0.5; dy += dcy / dc * 0.5; }
+  const l2 = Math.hypot(dx, dy) || 1;
+  return { x: dx / l2, y: dy / l2 };
+}
+function pickTarget(a) {
+  let best = null, bestScore = -1e9;
+  for (const c of coins) {
+    const dx = c.x - a.x, dy = c.y - a.y, dd = Math.hypot(dx, dy);
+    const td = Math.hypot(c.x - CX, c.y - CY);
+    const risk = td < DRAIN_R * 2.2 ? (1 - greed) * 240 : 0;
+    const s = -dd - risk;
+    if (s > bestScore) { bestScore = s; best = c; }
+  }
+  for (const sp of specials) { // specials are juicy — weight them up
+    const dx = sp.x - a.x, dy = sp.y - a.y, dd = Math.hypot(dx, dy);
+    const td = Math.hypot(sp.x - CX, sp.y - CY);
+    // but bots still fear the eye early: leave central gems for a brave player
+    const risk = td < DRAIN_R * 2.4 ? (1 - greed) * 320 : 0;
+    const s = -dd + 160 - risk;
+    if (s > bestScore) { bestScore = s; best = sp; }
+  }
+  return best;
+}
+
+function bumped(att, vic) {
+  // att is dashing into vic -> knock vic away, shake loose some loot
+  const dx = vic.x - att.x, dy = vic.y - att.y, d = Math.hypot(dx, dy) || 1;
+  const nx = dx / d, ny = dy / d;
+  vic.vx += nx * BUMP_KNOCK; vic.vy += ny * BUMP_KNOCK;
+  att.vx -= nx * BUMP_KNOCK * 0.35; att.vy -= ny * BUMP_KNOCK * 0.35;
+  vic.stun = Math.max(vic.stun, 0.22);
+  att.dashT = 0;
+  AU.bonk();
+  shake = Math.min(9, shake + 4); flash = Math.max(flash, 0.4);
+  const steal = Math.min(vic.sack, STEAL_DROP);
+  if (steal > 0) {
+    vic.sack -= steal;
+    AU.puff();
+    for (let i = 0; i < steal; i++) {
+      const ang = rng() * Math.PI * 2, spd = 90 + rng() * 130;
+      const c = spawnCoin(0, vic.x, vic.y);
+      if (c) { c.vx = Math.cos(ang) * spd; c.vy = Math.sin(ang) * spd; c.born = -0.15; }
+    }
+    floatTxt('steal!', (att.x + vic.x) / 2, (att.y + vic.y) / 2 - 20, '#FF8A3D', 18);
+  } else {
+    floatTxt('bonk!', vic.x, vic.y - 22, '#FFF4D6', 16);
+  }
+  for (let i = 0; i < 8; i++) spawnP(2, vic.x, vic.y, nx * 100 + (juice() - 0.5) * 120, ny * 100 + (juice() - 0.5) * 120, 0.4, 3, i % 2 ? '#F5C542' : '#FFF4D6');
+}
+
+function collideActors() {
+  for (let i = 0; i < actors.length; i++) {
+    const a = actors[i]; if (a.falling) continue;
+    for (let j = i + 1; j < actors.length; j++) {
+      const b = actors[j]; if (b.falling) continue;
+      let dx = b.x - a.x, dy = b.y - a.y; let d = Math.hypot(dx, dy);
+      const min = a.r + b.r;
+      if (d < min && d > 0.001) {
+        const nx = dx / d, ny = dy / d, overlap = min - d;
+        a.x -= nx * overlap / 2; a.y -= ny * overlap / 2;
+        b.x += nx * overlap / 2; b.y += ny * overlap / 2;
+        // exchange normal velocity (bouncy shove)
+        const va = a.vx * nx + a.vy * ny, vb = b.vx * nx + b.vy * ny;
+        const imp = (vb - va);
+        a.vx += nx * imp; a.vy += ny * imp;
+        b.vx -= nx * imp; b.vy -= ny * imp;
+        if (a.dashT > 0 && a.stun <= 0) bumped(a, b);
+        else if (b.dashT > 0 && b.stun <= 0) bumped(b, a);
+      }
+    }
+  }
+}
+
+function updateCoin(c, dt) {
+  c.born += dt; c.pop = Math.max(0, c.pop - dt * 3); c.spin += dt * 6;
+  vortex(c.x, c.y, 1.7, 0.62, _v);
+  c.vx += _v.ax * dt; c.vy += _v.ay * dt;
+  // magnet: pull coins toward the magnet holder
+  if (magnetActor >= 0 && magnetT > 0) {
+    const m = actors[magnetActor];
+    if (m && !m.falling) {
+      const dx = m.x - c.x, dy = m.y - c.y, d = Math.hypot(dx, dy) || 1;
+      if (d < 260) { c.vx += dx / d * 900 * dt; c.vy += dy / d * 900 * dt; }
+    }
+  }
+  const damp = Math.exp(-DAMP_COIN * dt);
+  c.vx *= damp; c.vy *= damp;
+  c.x += c.vx * dt; c.y += c.vy * dt;
+  // rim bounce
+  const dx = c.x - CX, dy = c.y - CY; let d = Math.hypot(dx, dy) || 0.001;
+  const lim = ARENA_R - c.r;
+  if (d > lim) {
+    const nx = dx / d, ny = dy / d, vn = c.vx * nx + c.vy * ny;
+    c.x = CX + nx * lim; c.y = CY + ny * lim;
+    if (vn > 0) { c.vx -= nx * vn * 1.5; c.vy -= ny * vn * 1.5; }
+  }
+  // drained
+  if (d < DRAIN_R - 4) { c._gone = true; return; }
+  // pickup (grace period for freshly-knocked-loose coins so they scatter first)
+  if (c.born < 0) return;
+  for (const a of actors) {
+    if (a.falling) continue;
+    const gx = a.x - c.x, gy = a.y - c.y;
+    if (gx * gx + gy * gy < (a.r + c.r + GRAB_PAD) * (a.r + c.r + GRAB_PAD)) {
+      c._gone = true;
+      a.sack++;
+      grabFx(a, c.x, c.y, 1);
+      break;
+    }
+  }
+}
+
+function grabFx(a, x, y, val) {
+  if (a.isPlayer) {
+    combo++; comboT = 1.1;
+    AU.ching(combo);
+    a.hop = 1;
+  } else {
+    AU.ching(1);
+  }
+  for (let i = 0; i < 6; i++) spawnP(0, x, y, (juice() - 0.5) * 160, (juice() - 0.5) * 160 - 40, 0.45, 2 + juice() * 2, '#FFF4D6');
+  if (a.isPlayer && val > 0) floatTxt('+' + val, x, y - 16, '#F5C542', 16 + Math.min(10, combo));
+}
+
+function updateSpecial(sp, dt) {
+  sp.born += dt; sp.pop = Math.max(0, sp.pop - dt * 3); sp.spin += dt * 2;
+  vortex(sp.x, sp.y, 1.3, 0.7, _v);
+  sp.vx = (sp.vx || 0) + _v.ax * dt; sp.vy = (sp.vy || 0) + _v.ay * dt;
+  sp.vx *= Math.exp(-DAMP_COIN * dt); sp.vy *= Math.exp(-DAMP_COIN * dt);
+  sp.x += sp.vx * dt; sp.y += sp.vy * dt;
+  const dx = sp.x - CX, dy = sp.y - CY; let d = Math.hypot(dx, dy) || 0.001;
+  const lim = ARENA_R - sp.r;
+  if (d > lim) { const nx = dx / d, ny = dy / d, vn = sp.vx * nx + sp.vy * ny; sp.x = CX + nx * lim; sp.y = CY + ny * lim; if (vn > 0) { sp.vx -= nx * vn * 1.5; sp.vy -= ny * vn * 1.5; } }
+  if (d < DRAIN_R - 4) { sp._gone = true; return; }
+  for (const a of actors) {
+    if (a.falling) continue;
+    const gx = a.x - sp.x, gy = a.y - sp.y;
+    if (gx * gx + gy * gy < (a.r + sp.r + GRAB_PAD) * (a.r + sp.r + GRAB_PAD)) {
+      sp._gone = true; applySpecial(sp, a); break;
+    }
+  }
+}
+function applySpecial(sp, a) {
+  if (sp.kind === 'gem') {
+    a.sack += 5;
+    if (a.isPlayer) { combo += 3; comboT = 1.1; a.hop = 1; }
+    AU.gem();
+    floatTxt('GEM +5', sp.x, sp.y - 20, '#47E0C8', 22);
+    for (let i = 0; i < 16; i++) spawnP(0, sp.x, sp.y, (juice() - 0.5) * 260, (juice() - 0.5) * 260, 0.6, 2 + juice() * 3, i % 2 ? '#47E0C8' : '#F5C542');
+    shake = Math.min(9, shake + 3);
+  } else if (sp.kind === 'magnet') {
+    magnetActor = a.i; magnetT = 5;
+    AU.magnet();
+    floatTxt(a.isPlayer ? 'MAGNET!' : 'magnet', sp.x, sp.y - 20, '#5B8CFF', 20);
+    for (let i = 0; i < 14; i++) { const an = i / 14 * 7; spawnP(1, sp.x, sp.y, Math.cos(an) * 120, Math.sin(an) * 120, 0.5, 3, '#5B8CFF'); }
+  } else { // gust — shove EVERYONE and all loot outward from the eye (comedy)
+    AU.gust();
+    floatTxt('GUST!', sp.x, sp.y - 20, '#FF8A3D', 22);
+    shake = Math.min(10, shake + 6); flash = Math.max(flash, 0.5);
+    for (const o of actors) { if (o.falling) continue; const dx = o.x - CX, dy = o.y - CY, d = Math.hypot(dx, dy) || 1; o.vx += dx / d * 340; o.vy += dy / d * 340; }
+    for (const c of coins) { const dx = c.x - CX, dy = c.y - CY, d = Math.hypot(dx, dy) || 1; c.vx += dx / d * 300; c.vy += dy / d * 300; }
+    for (let i = 0; i < 26; i++) { const an = rng() * 7; spawnP(1, CX, CY, Math.cos(an) * 260, Math.sin(an) * 260, 0.6, 3 + juice() * 3, '#FF8A3D'); }
+  }
+}
+
+function endRound() {
+  // bank the loot you actually kept this round into your run total (net of steals/falls)
+  runCoins += actors[0].sack;
+  const sorted = actors.slice().sort((p, q) => q.sack - p.sack);
+  const winner = sorted[0];
+  // tie on top -> player wins ties they're part of (be generous)
+  const playerTop = actors[0].sack === winner.sack;
+  if (playerTop) {
+    state = 'roundwin'; winT = 0;
+    AU.win();
+    for (let i = 0; i < 90; i++) spawnP(3, CX + (juice() - 0.5) * 200, CY - 40 - juice() * 60, (juice() - 0.5) * 160, -40 - juice() * 200, 1.4 + juice(), 3 + juice() * 4, ['#F5C542', '#38E1B0', '#FF5C7A', '#5B8CFF', '#C77DFF', '#FFF4D6'][juice() * 6 | 0]);
+  } else {
+    state = 'over'; overT = 0;
+    AU.lose();
+    if (runCoins > best) { best = runCoins; saveBest(best); newBest = true; }
+    post({ gs: 'gameover', score: runCoins });
+  }
+}
+
+function update(dt) {
+  splashT += dt;
+  if (hitstop > 0) { hitstop -= dt; dt = 0; }
+  shake = Math.max(0, shake - dt * 26);
+  flash = Math.max(0, flash - dt * 2.4);
+  if (cBannerT > 0) cBannerT -= dt;
+  if (comboT > 0) { comboT -= dt; if (comboT <= 0) combo = 0; }
+
+  // particles + floats always animate
+  for (let i = 0; i < P_MAX; i++) {
+    const p = parts[i]; if (!p.on) continue;
+    p.t += dt; if (p.t >= p.life) { p.on = false; continue; }
+    if (p.kind === 3) p.vy += 260 * dt;       // confetti gravity
+    else { p.vx *= 0.93; p.vy *= 0.93; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+  }
+  for (const f of floats) if (f.on) { f.t += dt; f.y -= 26 * dt; if (f.t > 1.1) f.on = false; }
+  for (const a of actors) if (a.hop > 0) a.hop = Math.max(0, a.hop - dt * 4);
+  if (magnetT > 0) { magnetT -= dt; if (magnetT <= 0) magnetActor = -1; }
+
+  // audio wind energy tracks cyclone intensity
+  AU.setWindEnergy(Math.min(1, (roundSpeed - 1) / 0.7));
+
+  if (state === 'roundwin') { winT += dt; return; }
+  if (state === 'over') { overT += dt; return; }
+  if (state !== 'play') return;
+
+  // spawn management — keep the arena flowing with loot
+  spawnAcc += dt; clusterAcc -= dt; specialAcc -= dt;
+  const wantRate = 0.55 - Math.min(0.25, (round - 1) * 0.03);
+  if (spawnAcc > wantRate && coins.length < 18) { spawnAcc = 0; spawnCoin(0.4 + rng() * 0.5); }
+  if (clusterAcc <= 0) { clusterAcc = 6.5 + rng() * 3; spawnCluster(); }
+  if (specialAcc <= 0) { specialAcc = 8 + rng() * 5; spawnSpecial(); }
+
+  for (const a of actors) updateActor(a, dt);
+  collideActors();
+  for (const c of coins) updateCoin(c, dt);
+  for (const sp of specials) updateSpecial(sp, dt);
+  coins = coins.filter((c) => !c._gone);
+  specials = specials.filter((s) => !s._gone);
+
+  // timer + tick
+  timer -= dt;
+  const sec = Math.ceil(timer);
+  if (sec !== lastTickSec && sec <= 5 && sec > 0) { lastTickSec = sec; AU.tick(sec <= 3); }
+  lastTickSec = sec;
+
+  // challenge target on the RUN total (banked + what you're carrying right now)
+  const provisional = runCoins + actors[0].sack;
+  if (challenge && !cBeaten && provisional >= challenge) {
+    cBeaten = true; cBannerT = 2.4; AU.win();
+    post({ gs: 'challenge_beaten', score: provisional });
+  }
+  if (performance.now() - lastScorePost > 300) { lastScorePost = performance.now(); post({ gs: 'score', score: provisional }); }
+
+  if (timer <= 0) { timer = 0; endRound(); }
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function makeBg() {
+  const g = ctx.createRadialGradient(CX, CY, 20, CX, CY, ARENA_R);
+  g.addColorStop(0, '#3A2140');
+  g.addColorStop(0.55, '#4A2B52');
+  g.addColorStop(0.85, '#5A3350');
+  g.addColorStop(1, '#3A2038');
+  return g;
+}
+const FONT = '"Arial Rounded MT Bold", "Baloo 2", "Trebuchet MS", system-ui, sans-serif';
+function font(px, weight) { return (weight || 800) + ' ' + px + 'px ' + FONT; }
+
+function drawArena(t) {
+  // outer cavern floor beyond the arena
+  ctx.fillStyle = '#241531';
+  ctx.fillRect(0, 0, W, H);
+  // warm cavern glow behind the rim
+  let og = ctx.createRadialGradient(CX, CY, ARENA_R * 0.6, CX, CY, ARENA_R + 70);
+  og.addColorStop(0, 'rgba(120,70,40,0.35)'); og.addColorStop(1, 'rgba(120,70,40,0)');
+  ctx.fillStyle = og; ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.beginPath(); ctx.arc(CX, CY, ARENA_R, 0, 7); ctx.clip();
+  // floor
+  if (!bg) bg = makeBg();
+  ctx.fillStyle = bg; ctx.fillRect(CX - ARENA_R, CY - ARENA_R, ARENA_R * 2, ARENA_R * 2);
+
+  // swirling wind dust — logarithmic spiral arms rotating CCW + inward
+  const arms = 5, dotsPer = 22;
+  const baseRot = -t * (0.5 + (roundSpeed - 1) * 1.1);   // CCW, faster each round
+  for (let arm = 0; arm < arms; arm++) {
+    const a0 = baseRot + arm * (Math.PI * 2 / arms);
+    for (let k = 1; k <= dotsPer; k++) {
+      const f = k / dotsPer;
+      const r = ARENA_R * f;
+      const ang = a0 + f * 6.0;            // spiral tightness
+      const x = CX + Math.cos(ang) * r, y = CY + Math.sin(ang) * r;
+      const near = 1 - f;
+      const al = 0.05 + 0.16 * (1 - Math.abs(f - 0.5) * 1.5);
+      ctx.fillStyle = 'rgba(255,196,120,' + al.toFixed(3) + ')';
+      const rad = 1.2 + near * 2.4;
+      ctx.beginPath(); ctx.arc(x, y, rad, 0, 7); ctx.fill();
+    }
+  }
+  // faint second set of finer streaks for depth
+  for (let arm = 0; arm < arms; arm++) {
+    const a0 = -baseRot * 0.6 + arm * (Math.PI * 2 / arms) + 0.6;
+    ctx.strokeStyle = 'rgba(255,244,214,0.05)'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let k = 0; k <= 26; k++) {
+      const f = k / 26, r = ARENA_R * f, ang = a0 + f * 5.2;
+      const x = CX + Math.cos(ang) * r, y = CY + Math.sin(ang) * r;
+      if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // the drain — dark hole with a subtle glow ring and spinning inner rings
+  const dg = ctx.createRadialGradient(CX, CY, 2, CX, CY, DRAIN_R * 2.3);
+  dg.addColorStop(0, '#080409'); dg.addColorStop(0.5, '#160A18'); dg.addColorStop(1, 'rgba(30,16,34,0)');
+  ctx.fillStyle = dg;
+  ctx.beginPath(); ctx.arc(CX, CY, DRAIN_R * 2.3, 0, 7); ctx.fill();
+  // glow lip
+  ctx.strokeStyle = 'rgba(71,224,200,' + (0.28 + 0.12 * Math.sin(t * 3)) + ')';
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(CX, CY, DRAIN_R + 3, 0, 7); ctx.stroke();
+  for (let ri = 0; ri < 3; ri++) {
+    const rr = DRAIN_R * (0.3 + ri * 0.26);
+    ctx.strokeStyle = 'rgba(71,224,200,' + (0.14 - ri * 0.03) + ')';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    const off = t * (2 + ri) + ri;
+    ctx.arc(CX, CY, rr, off, off + 4.5); ctx.stroke();
+  }
+  ctx.restore();
+
+  // chunky carnival rim ring
+  ctx.lineWidth = 12;
+  ctx.strokeStyle = '#2A1830';
+  ctx.beginPath(); ctx.arc(CX, CY, ARENA_R + 3, 0, 7); ctx.stroke();
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = '#7A4A2E';
+  ctx.beginPath(); ctx.arc(CX, CY, ARENA_R + 1, 0, 7); ctx.stroke();
+  // gold studs / carnival lights around the rim
+  const studs = 40;
+  for (let i = 0; i < studs; i++) {
+    const a = i / studs * Math.PI * 2 + t * 0.15;
+    const x = CX + Math.cos(a) * (ARENA_R + 2), y = CY + Math.sin(a) * (ARENA_R + 2);
+    const lit = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(t * 4 + i * 0.8));
+    ctx.fillStyle = i % 2 ? 'rgba(245,197,66,' + lit + ')' : 'rgba(255,138,61,' + lit + ')';
+    ctx.beginPath(); ctx.arc(x, y, 3, 0, 7); ctx.fill();
+  }
+}
+
+function drawCoin(c, t) {
+  const wob = 0.55 + 0.45 * Math.abs(Math.cos(c.spin));   // tumble on the swirl
+  const pop = 1 + c.pop * 0.5;
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.beginPath(); ctx.ellipse(1.5, 3, c.r * pop * 0.9, c.r * pop * 0.5, 0, 0, 7); ctx.fill();
+  ctx.scale(wob * pop, pop);
+  // body
+  ctx.fillStyle = '#F5C542';
+  ctx.beginPath(); ctx.arc(0, 0, c.r, 0, 7); ctx.fill();
+  ctx.fillStyle = '#D69A22';
+  ctx.beginPath(); ctx.arc(0, 0, c.r * 0.7, 0, 7); ctx.fill();
+  ctx.fillStyle = '#FFE38A';
+  ctx.beginPath(); ctx.arc(0, 0, c.r * 0.44, 0, 7); ctx.fill();
+  ctx.restore();
+  // glint
+  const gl = 0.4 + 0.4 * Math.sin(t * 4 + c.spin);
+  ctx.fillStyle = 'rgba(255,255,255,' + gl.toFixed(2) + ')';
+  ctx.beginPath(); ctx.arc(c.x - c.r * 0.35 * wob, c.y - c.r * 0.4, 1.6, 0, 7); ctx.fill();
+}
+
+function drawSpecial(sp, t) {
+  const pop = 1 + sp.pop * 0.4;
+  ctx.save(); ctx.translate(sp.x, sp.y);
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.beginPath(); ctx.ellipse(1.5, 4, sp.r * pop, sp.r * pop * 0.5, 0, 0, 7); ctx.fill();
+  ctx.scale(pop, pop);
+  const glow = 0.5 + 0.5 * Math.sin(t * 5);
+  if (sp.kind === 'gem') {
+    ctx.fillStyle = 'rgba(71,224,200,' + (0.3 + 0.3 * glow) + ')';
+    ctx.beginPath(); ctx.arc(0, 0, sp.r * 1.8, 0, 7); ctx.fill();
+    ctx.rotate(sp.spin);
+    ctx.fillStyle = '#47E0C8';
+    ctx.beginPath();
+    ctx.moveTo(0, -sp.r); ctx.lineTo(sp.r * 0.8, -sp.r * 0.2); ctx.lineTo(sp.r * 0.5, sp.r); ctx.lineTo(-sp.r * 0.5, sp.r); ctx.lineTo(-sp.r * 0.8, -sp.r * 0.2);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.beginPath(); ctx.moveTo(0, -sp.r); ctx.lineTo(sp.r * 0.3, -sp.r * 0.2); ctx.lineTo(-sp.r * 0.3, -sp.r * 0.2); ctx.closePath(); ctx.fill();
+  } else if (sp.kind === 'magnet') {
+    ctx.fillStyle = 'rgba(91,140,255,' + (0.25 + 0.3 * glow) + ')';
+    ctx.beginPath(); ctx.arc(0, 0, sp.r * 1.7, 0, 7); ctx.fill();
+    // horseshoe magnet
+    ctx.strokeStyle = '#5B8CFF'; ctx.lineWidth = 6; ctx.lineCap = 'butt';
+    ctx.beginPath(); ctx.arc(0, 1, sp.r * 0.7, Math.PI * 0.85, Math.PI * 0.15, true); ctx.stroke();
+    ctx.strokeStyle = '#E8422E'; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.moveTo(-sp.r * 0.66, 1); ctx.lineTo(-sp.r * 0.66, sp.r * 0.7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sp.r * 0.66, 1); ctx.lineTo(sp.r * 0.66, sp.r * 0.7); ctx.stroke();
+  } else { // gust
+    ctx.fillStyle = 'rgba(255,138,61,' + (0.25 + 0.3 * glow) + ')';
+    ctx.beginPath(); ctx.arc(0, 0, sp.r * 1.7, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#FF8A3D'; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const yy = -sp.r * 0.5 + i * sp.r * 0.5;
+      ctx.beginPath(); ctx.moveTo(-sp.r, yy); ctx.lineTo(sp.r * 0.4, yy);
+      ctx.arc(sp.r * 0.4, yy - sp.r * 0.28, sp.r * 0.28, Math.PI / 2, -Math.PI / 2, true); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawActor(a, t) {
+  const dead = a.falling;
+  let sc = 1, alpha = 1;
+  if (dead) { const p = Math.min(1, a.fallT / FALL_DUR); sc = 1 - p * 0.85; alpha = 1 - p * 0.3; }
+  const hop = a.hop * 6;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  // shadow
+  if (!dead) {
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.beginPath(); ctx.ellipse(a.x, a.y + a.r * 0.7, a.r * 1.05, a.r * 0.5, 0, 0, 7); ctx.fill();
+  }
+  ctx.translate(a.x, a.y - hop);
+  const spin = dead ? a.fallT * 16 : 0;
+  ctx.rotate(spin);
+  ctx.scale(sc, sc);
+
+  // loot sack on the back — grows with the round score
+  a.sackShow += (a.sack - a.sackShow) * 0.2;
+  const load = Math.min(1, a.sackShow / 16);
+  if (load > 0.02) {
+    const sw = 8 + load * 12, sh = 8 + load * 16;
+    ctx.save();
+    ctx.translate(-a.r * 0.5, -a.r * 0.2);
+    ctx.fillStyle = '#8A5A2E';
+    ctx.beginPath(); ctx.ellipse(0, 2, sw * 0.6, sh * 0.6, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#6E4522';
+    ctx.fillRect(-sw * 0.28, -sh * 0.6, sw * 0.56, 4);
+    // a couple coins peeking out when full
+    if (load > 0.5) { ctx.fillStyle = '#F5C542'; ctx.beginPath(); ctx.arc(0, -sh * 0.55, 3, 0, 7); ctx.fill(); }
+    ctx.restore();
+  }
+
+  // dash streak
+  if (a.dashT > 0.05) {
+    ctx.strokeStyle = a.col; ctx.globalAlpha = alpha * a.dashT * 2.5; ctx.lineWidth = 4; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-Math.cos(a.face) * 26, -Math.sin(a.face) * 26); ctx.stroke();
+    ctx.globalAlpha = alpha;
+  }
+
+  // body
+  ctx.fillStyle = a.dark;
+  ctx.beginPath(); ctx.arc(0, a.r * 0.15, a.r, 0, 7); ctx.fill();
+  ctx.fillStyle = a.col;
+  ctx.beginPath(); ctx.arc(0, 0, a.r, 0, 7); ctx.fill();
+  // rim light
+  ctx.fillStyle = 'rgba(255,255,255,0.22)';
+  ctx.beginPath(); ctx.arc(-a.r * 0.3, -a.r * 0.35, a.r * 0.55, 0, 7); ctx.fill();
+
+  // eyes — look toward facing
+  const ex = Math.cos(a.face) * 3.2, ey = Math.sin(a.face) * 2.4;
+  const eo = a.r * 0.36;
+  const blink = a.blink > 0 || a.stun > 0;
+  for (const s of [-1, 1]) {
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.ellipse(s * eo, -a.r * 0.15, 4.2, blink ? 1.1 : 4.6, 0, 0, 7); ctx.fill();
+    if (!blink) {
+      ctx.fillStyle = '#20141E';
+      ctx.beginPath(); ctx.arc(s * eo + ex, -a.r * 0.15 + ey, 2.3, 0, 7); ctx.fill();
+    }
+  }
+  // stun stars
+  if (a.stun > 0 && !dead) {
+    for (let i = 0; i < 3; i++) {
+      const sa = t * 6 + i * 2.1;
+      ctx.fillStyle = '#F5C542';
+      const sx = Math.cos(sa) * 12, sy = -a.r - 6 + Math.sin(sa) * 4;
+      ctx.beginPath(); ctx.arc(sx, sy, 2.2, 0, 7); ctx.fill();
+    }
+  }
+  ctx.restore();
+
+  // "YOU" crown marker
+  if (a.isPlayer && !dead) {
+    const by = a.y - a.r - 16 - hop + Math.sin(t * 3) * 2;
+    ctx.fillStyle = '#F5C542';
+    ctx.beginPath();
+    ctx.moveTo(a.x - 9, by + 6); ctx.lineTo(a.x - 9, by - 4); ctx.lineTo(a.x - 4, by + 1);
+    ctx.lineTo(a.x, by - 6); ctx.lineTo(a.x + 4, by + 1); ctx.lineTo(a.x + 9, by - 4);
+    ctx.lineTo(a.x + 9, by + 6); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#B8860B'; ctx.lineWidth = 1; ctx.stroke();
+  }
+}
+
+function drawParticles() {
+  for (let i = 0; i < P_MAX; i++) {
+    const p = parts[i]; if (!p.on) continue;
+    const k = 1 - p.t / p.life;
+    ctx.globalAlpha = Math.max(0, k);
+    if (p.kind === 3) { // confetti rectangles
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.fillStyle = p.col; ctx.fillRect(-p.r, -p.r * 0.5, p.r * 2, p.r); ctx.restore();
+    } else if (p.kind === 0) {
+      ctx.fillStyle = p.col; ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (0.5 + 0.5 * k), 0, 7); ctx.fill();
+    } else {
+      ctx.fillStyle = p.col; ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (1.4 - k * 0.5), 0, 7); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center';
+  for (const f of floats) {
+    if (!f.on) continue;
+    ctx.globalAlpha = Math.min(1, (1.1 - f.t) * 2);
+    ctx.font = font(f.sz, 800);
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(20,10,25,0.6)'; ctx.lineJoin = 'round';
+    ctx.strokeText(f.txt, f.x, f.y); ctx.fillStyle = f.col; ctx.fillText(f.txt, f.x, f.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ---- HUD ---- */
+function drawHUD() {
+  ctx.textAlign = 'left';
+  // your sack (round score) — big
+  const p = actors[0];
+  ctx.font = font(15, 800); ctx.fillStyle = 'rgba(255,244,214,0.7)';
+  ctx.fillText('THIS ROUND', 22, 30);
+  ctx.save(); ctx.translate(22, 74); const pop = 1 + p.hop * 0.25; ctx.scale(pop, pop);
+  ctx.fillStyle = '#F5C542'; ctx.font = font(42, 800);
+  ctx.fillText(String(p.sack), 0, 0); ctx.restore();
+  // coin icon
+  ctx.fillStyle = '#F5C542'; ctx.beginPath(); ctx.arc(30 + ctx.measureText('').width, 0, 0, 0, 7);
+  // run total: while playing, banked + what you're carrying; once a round ends
+  // the sack is already banked into runCoins, so show it straight (no double count)
+  ctx.font = font(16, 800); ctx.fillStyle = '#FFF4D6';
+  const shownTotal = state === 'play' ? runCoins + p.sack : runCoins;
+  ctx.fillText('TOTAL ' + shownTotal + ' coins', 22, 98);
+  ctx.font = font(13, 700); ctx.fillStyle = 'rgba(255,244,214,0.55)';
+  ctx.fillText('best ' + best, 22, 118);
+
+  // round + timer (top center)
+  ctx.textAlign = 'center';
+  ctx.font = font(16, 800); ctx.fillStyle = 'rgba(255,244,214,0.8)';
+  ctx.fillText('ROUND ' + round, W / 2, 26);
+  const tf = timer / ROUND_TIME;
+  const barW = 220, bx = W / 2 - barW / 2, by = 36;
+  ctx.fillStyle = 'rgba(0,0,0,0.35)'; roundRect(bx, by, barW, 12, 6); ctx.fill();
+  const hurry = timer <= 5;
+  ctx.fillStyle = hurry ? (Math.sin(splashT * 12) > 0 ? '#FF5C7A' : '#FF8A3D') : '#47E0C8';
+  roundRect(bx, by, Math.max(0, barW * tf), 12, 6); ctx.fill();
+  ctx.fillStyle = '#FFF4D6'; ctx.font = font(15, 800);
+  ctx.fillText(Math.ceil(timer) + 's', W / 2, by + 30);
+
+  // standings (top right) — who's winning, colored
+  const sorted = actors.slice().sort((a, b) => b.sack - a.sack);
+  ctx.textAlign = 'right';
+  for (let i = 0; i < sorted.length; i++) {
+    const a = sorted[i], y = 30 + i * 22;
+    ctx.fillStyle = a.col;
+    ctx.beginPath(); ctx.arc(W - 96, y - 5, 6, 0, 7); ctx.fill();
+    if (a.isPlayer) { ctx.strokeStyle = '#FFF4D6'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    ctx.font = font(15, a.isPlayer ? 800 : 700);
+    ctx.fillStyle = a.isPlayer ? '#FFF4D6' : 'rgba(255,244,214,0.75)';
+    ctx.fillText(a.sack + '  ' + (NAMES[a.i]), W - 22, y);
+  }
+  // dash meter pips (bottom-left on desktop, above stick note)
+  drawDashMeter(p);
+
+  // challenge target
+  if (challenge) {
+    ctx.textAlign = 'center';
+    ctx.font = font(16, 800);
+    ctx.fillStyle = cBeaten ? '#38E1B0' : '#FF8A3D';
+    ctx.fillText((cBeaten ? '✓ ' : '') + 'TARGET ' + challenge, W / 2, H - 20);
+  }
+  if (cBannerT > 0) {
+    ctx.globalAlpha = Math.min(1, cBannerT);
+    ctx.textAlign = 'center'; ctx.font = font(34, 800); ctx.fillStyle = '#38E1B0';
+    ctx.fillText('TARGET BEATEN!', W / 2, 150); ctx.globalAlpha = 1;
+  }
+
+  // fading hint
+  if (hint > 0.02 && state === 'play') {
+    ctx.globalAlpha = Math.min(0.9, hint);
+    ctx.textAlign = 'center'; ctx.font = font(18, 800);
+    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(20,10,25,0.6)'; ctx.lineJoin = 'round';
+    const msg = isTouch ? 'drag to move  •  tap to dash-bump' : 'WASD to move  •  SPACE to dash-bump';
+    ctx.strokeText(msg, W / 2, H - 54); ctx.fillStyle = '#FFF4D6'; ctx.fillText(msg, W / 2, H - 54);
+    ctx.globalAlpha = 1;
+  }
+}
+function drawDashMeter(p) {
+  const n = DASH_MAX, x0 = 22, y = 164, r = 9, gap = 26;
+  ctx.textAlign = 'left'; ctx.font = font(12, 700); ctx.fillStyle = 'rgba(255,244,214,0.6)';
+  ctx.fillText('DASH', x0, y - 14);
+  for (let i = 0; i < n; i++) {
+    const cx = x0 + r + i * gap;
+    const filled = p.dashMeter >= i + 1;
+    const partial = !filled && p.dashMeter > i ? p.dashMeter - i : 0;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath(); ctx.arc(cx, y, r, 0, 7); ctx.fill();
+    if (filled || partial > 0) {
+      ctx.fillStyle = filled ? '#47E0C8' : 'rgba(71,224,200,0.45)';
+      ctx.beginPath();
+      if (filled) ctx.arc(cx, y, r - 2, 0, 7);
+      else { ctx.moveTo(cx, y); ctx.arc(cx, y, r - 2, -Math.PI / 2, -Math.PI / 2 + partial * 7); }
+      ctx.fill();
+    }
+    ctx.strokeStyle = 'rgba(255,244,214,0.4)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(cx, y, r, 0, 7); ctx.stroke();
+  }
+}
+function drawTouchControls() {
+  // move stick
+  if (moveTouchId >= 0 && touches[moveTouchId]) {
+    const t = touches[moveTouchId];
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = '#FFF4D6'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(t.sx, t.sy, 46, 0, 7); ctx.stroke();
+    const dx = t.x - t.sx, dy = t.y - t.sy, dl = Math.hypot(dx, dy);
+    const kx = dl > 46 ? t.sx + dx / dl * 46 : t.x, ky = dl > 46 ? t.sy + dy / dl * 46 : t.y;
+    ctx.fillStyle = '#38E1B0'; ctx.beginPath(); ctx.arc(kx, ky, 20, 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  // dash button
+  const b = DASH_BTN, ready = actors[0] && actors[0].dashMeter >= DASH_COST;
+  ctx.globalAlpha = 0.75;
+  ctx.fillStyle = ready ? 'rgba(71,224,200,0.32)' : 'rgba(120,120,130,0.22)';
+  ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 7); ctx.fill();
+  ctx.strokeStyle = ready ? '#47E0C8' : 'rgba(200,200,210,0.4)'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 7); ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = ready ? '#FFF4D6' : 'rgba(255,255,255,0.4)';
+  ctx.textAlign = 'center'; ctx.font = font(17, 800);
+  ctx.fillText('DASH', b.x, b.y + 6);
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function panel(x, y, w, h) {
+  ctx.fillStyle = 'rgba(26,14,32,0.92)';
+  roundRect(x, y, w, h, 18); ctx.fill();
+  ctx.strokeStyle = 'rgba(245,197,66,0.4)'; ctx.lineWidth = 2; ctx.stroke();
+}
+
+function drawTitle() {
+  const t = splashT;
+  // logo
+  ctx.textAlign = 'center';
+  ctx.save();
+  ctx.translate(W / 2, 118 + Math.sin(t * 2) * 5);
+  ctx.rotate(-0.03);
+  ctx.font = font(62, 800);
+  ctx.lineWidth = 8; ctx.strokeStyle = '#2A1830'; ctx.lineJoin = 'round';
+  ctx.strokeText('COIN CYCLONE', 0, 0);
+  const g = ctx.createLinearGradient(0, -40, 0, 20);
+  g.addColorStop(0, '#FFE38A'); g.addColorStop(1, '#F5C542');
+  ctx.fillStyle = g; ctx.fillText('COIN CYCLONE', 0, 0);
+  ctx.restore();
+  ctx.font = font(19, 800); ctx.fillStyle = '#FFF4D6';
+  ctx.fillText('grab the loot before the cyclone eats it', W / 2, 170);
+
+  const blink = 0.55 + 0.45 * Math.sin(t * 3.4);
+  ctx.globalAlpha = blink;
+  ctx.font = font(22, 800); ctx.fillStyle = '#47E0C8';
+  ctx.fillText(isTouch ? 'tap to play' : 'press SPACE to play', W / 2, CY + 150);
+  ctx.globalAlpha = 1;
+  ctx.font = font(14, 700); ctx.fillStyle = 'rgba(255,244,214,0.6)';
+  ctx.fillText(isTouch ? 'drag to move • tap DASH to bump rivals' : 'WASD move • SPACE dash-bump & steal', W / 2, CY + 178);
+  if (best > 0) ctx.fillText('best run  ' + best + ' coins', W / 2, CY + 200);
+  if (challenge) { ctx.fillStyle = '#FF8A3D'; ctx.font = font(16, 800); ctx.fillText('TARGET ' + challenge + ' coins', W / 2, CY + 222); }
+}
+
+function drawRoundWin() {
+  ctx.fillStyle = 'rgba(20,10,25,' + Math.min(0.55, winT * 1.2) + ')'; ctx.fillRect(0, 0, W, H);
+  const a = Math.min(1, winT * 3);
+  const pw = 440, ph = 250, px = (W - pw) / 2, py = (H - ph) / 2 - 6 + (1 - a) * 18;
+  ctx.globalAlpha = a; panel(px, py, pw, ph);
+  ctx.textAlign = 'center';
+  ctx.font = font(34, 800); ctx.fillStyle = '#F5C542';
+  ctx.fillText('ROUND ' + round + ' WON!', W / 2, py + 48);
+  // standings
+  const sorted = actors.slice().sort((x, y) => y.sack - x.sack);
+  ctx.font = font(18, 800);
+  for (let i = 0; i < sorted.length; i++) {
+    const s = sorted[i], yy = py + 84 + i * 30;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = s.col; ctx.beginPath(); ctx.arc(px + 60, yy - 6, 7, 0, 7); ctx.fill();
+    ctx.fillStyle = s.isPlayer ? '#FFF4D6' : 'rgba(255,244,214,0.7)';
+    ctx.fillText((i === 0 ? '★ ' : '') + NAMES[s.i], px + 78, yy);
+    ctx.textAlign = 'right';
+    ctx.fillText(s.sack + ' coins', px + pw - 60, yy);
+  }
+  ctx.textAlign = 'center';
+  ctx.font = font(15, 700); ctx.fillStyle = 'rgba(255,244,214,0.7)';
+  ctx.fillText('run total  ' + runCoins + ' coins  •  next cyclone spins faster', W / 2, py + ph - 44);
+  const blink = 0.55 + 0.45 * Math.sin(winT * 4);
+  ctx.globalAlpha = a * blink; ctx.font = font(20, 800); ctx.fillStyle = '#47E0C8';
+  ctx.fillText(isTouch ? 'tap for round ' + (round + 1) : 'SPACE for round ' + (round + 1), W / 2, py + ph - 16);
+  ctx.globalAlpha = 1;
+}
+
+function drawOver() {
+  ctx.fillStyle = 'rgba(20,10,25,' + Math.min(0.6, overT * 1.3) + ')'; ctx.fillRect(0, 0, W, H);
+  const a = Math.min(1, overT * 3);
+  const pw = 440, ph = 258, px = (W - pw) / 2, py = (H - ph) / 2 - 6 + (1 - a) * 18;
+  ctx.globalAlpha = a; panel(px, py, pw, ph);
+  ctx.textAlign = 'center';
+  const winner = actors.slice().sort((x, y) => y.sack - x.sack)[0];
+  ctx.font = font(30, 800); ctx.fillStyle = '#FF5C7A';
+  ctx.fillText('OUT-LOOTED!', W / 2, py + 46);
+  ctx.font = font(15, 700); ctx.fillStyle = 'rgba(255,244,214,0.7)';
+  ctx.fillText(NAMES[winner.i] + ' grabbed more this round', W / 2, py + 72);
+  ctx.font = font(16, 800); ctx.fillStyle = 'rgba(255,244,214,0.8)';
+  ctx.fillText('YOUR RUN', W / 2, py + 108);
+  ctx.font = font(52, 800); ctx.fillStyle = '#F5C542';
+  ctx.fillText(String(runCoins), W / 2, py + 156);
+  ctx.font = font(16, 700); ctx.fillStyle = 'rgba(255,244,214,0.7)';
+  ctx.fillText('coins kept across ' + round + (round === 1 ? ' round' : ' rounds') + '  •  best ' + best, W / 2, py + 182);
+  if (newBest) {
+    ctx.font = font(19, 800); ctx.fillStyle = '#38E1B0';
+    ctx.globalAlpha = a * (0.7 + 0.3 * Math.sin(overT * 6));
+    ctx.fillText('★ NEW BEST ★', W / 2, py + 208); ctx.globalAlpha = a;
+  }
+  const blink = 0.55 + 0.45 * Math.sin(overT * 4);
+  ctx.globalAlpha = a * blink; ctx.font = font(20, 800); ctx.fillStyle = '#47E0C8';
+  ctx.fillText(isTouch ? 'tap to loot again' : 'SPACE to loot again', W / 2, py + ph - 16);
+  ctx.globalAlpha = 1;
+}
+
+function render() {
+  const t = splashT;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#1A0F26'; ctx.fillRect(0, 0, cv.width, cv.height);
+  let sx = 0, sy = 0;
+  if (shake > 0.2) { sx = (juice() - 0.5) * shake * 2; sy = (juice() - 0.5) * shake * 2; }
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, (offX + sx) * dpr, (offY + sy) * dpr);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+
+  drawArena(t);
+
+  // sort draw order roughly by y for a little depth
+  for (const c of coins) drawCoin(c, t);
+  for (const sp of specials) drawSpecial(sp, t);
+  const drawList = actors.slice().sort((p, q) => p.y - q.y);
+  for (const a of drawList) drawActor(a, t);
+  drawParticles();
+
+  // flash
+  if (flash > 0.02) { ctx.fillStyle = 'rgba(255,244,214,' + (flash * 0.35) + ')'; ctx.fillRect(0, 0, W, H); }
+
+  // vignette
+  const vg = ctx.createRadialGradient(CX, CY, ARENA_R * 0.7, CX, CY, ARENA_R * 1.4);
+  vg.addColorStop(0, 'rgba(20,10,25,0)'); vg.addColorStop(1, 'rgba(20,10,25,0.5)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+
+  if (state === 'splash') drawTitle();
+  else {
+    drawHUD();
+    if (isTouch && state === 'play') drawTouchControls();
+    if (state === 'roundwin') drawRoundWin();
+    if (state === 'over') drawOver();
+  }
+  ctx.restore();
+}
+
+/* ---------- main loop ---------- */
+let lastT = performance.now();
+function frame(now) {
+  const dt = Math.min(0.033, (now - lastT) / 1000);
+  lastT = now;
+  update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+
+/* boot */
+resetRound(true);
+state = 'splash';
+post({ gs: 'ready' });
+requestAnimationFrame(frame);
+
+/* debug hook for the verification harness (read-only, harmless in production) */
+try {
+  window.__cc = function () {
+    const p = actors[0];
+    return { state, round, runCoins, timer, px: p.x, py: p.y, sack: p.sack,
+      dash: p.dashMeter, CX, CY, DRAIN_R, ARENA_R,
+      coins: coins.map((c) => ({ x: c.x, y: c.y })),
+      specials: specials.map((s) => ({ x: s.x, y: s.y })) };
+  };
+} catch (e) {}
+</script>
+</body>
+</html>
