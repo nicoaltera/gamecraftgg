@@ -308,3 +308,8 @@ main {
 
 .start-over { margin-left: auto; background: none; border: none; color: var(--graphite); font-size: 13px; padding: 4px 6px; text-decoration: underline; text-underline-offset: 3px; }
 .start-over:hover { color: var(--redpencil); }
+
+.yours-link { position: relative; display: inline-flex; align-items: center; gap: 5px; }
+.building-dot { color: var(--biro); font-size: 10px; }
+.build-leave { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 16px; padding: 12px 14px; border: 1.5px dashed rgba(36,71,214,0.4); border-radius: 8px; font-size: 14px; color: var(--graphite); }
+.build-leave .btn { padding: 8px 14px; font-size: 14px; }

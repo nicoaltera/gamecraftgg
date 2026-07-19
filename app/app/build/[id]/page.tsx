@@ -87,6 +87,14 @@ export default function BuildPage({ params }: { params: Promise<{ id: string }> 
         “{gen.prompt}”
       </p>
 
+      {gen.status === 'running' && (
+        <div className="build-leave">
+          <span>This keeps building even if you leave — go play while you wait.</span>
+          <Link className="btn" href="/#games">Play other games</Link>
+          <Link className="btn" href="/yours">Your games</Link>
+        </div>
+      )}
+
       <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', marginTop: 18, fontSize: 13, color: 'var(--graphite)' }}>
         <input type="checkbox" checked={showThinking} onChange={(e) => setShowThinking(e.target.checked)} />
         show thinking

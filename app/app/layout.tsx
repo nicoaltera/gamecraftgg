@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Shantell_Sans, Instrument_Sans, IBM_Plex_Mono } from 'next/font/google';
 import Link from 'next/link';
+import YoursLink from '@/components/YoursLink';
 import './globals.css';
 
 const shantell = Shantell_Sans({ subsets: ['latin'], weight: ['500', '600', '700'], variable: '--font-display' });
@@ -23,6 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <nav className="site-nav">
             <Link href="/#games">play</Link>
             <Link href="/#make">make</Link>
+            <YoursLink />
           </nav>
         </header>
         {children}

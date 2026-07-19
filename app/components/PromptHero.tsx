@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import HandFrame from './HandFrame';
+import { addCreation } from '@/lib/creations';
 
 export default function PromptHero() {
   const [prompt, setPrompt] = useState('');
@@ -23,6 +24,7 @@ export default function PromptHero() {
       });
       const data = await res.json();
       if (res.ok && data.id) {
+        addCreation({ id: data.id, prompt: prompt.trim(), ts: Date.now() });
         router.push(`/build/${data.id}`);
       } else {
         setNote(data.error ?? 'That prompt broke our pencil. Try again.');
