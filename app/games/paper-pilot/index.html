@@ -79,6 +79,23 @@ const PITCH_DRAG   = 0.15;   // energy bled while actively banking hard (/s * |p
 const NOSE_LEAD    = 0.34;   // extra visible nose tilt beyond the flight path (rad) for readability
 const DIVE_TERM_BONUS = 2.4; // diving raises the terminal fall-cap so committed dives feel fast
 
+// ---- AERODYNAMIC STALL (the skill gate on the climb — closes "hold ↑ = fly forever") ----
+// A wing only makes lift with airspeed. Climbing already bleeds speed (the energy model
+// above does the honest work); once airspeed falls below STALL_SPD *while the nose is held
+// steeply UP*, the wing STALLS: lift dies, the nose drops on its own, and the plane noses
+// over into a RECOVERABLE dive that rebuilds speed (dive → regain airspeed → fly out at
+// STALL_RECOVER). Level off or dive before the speed meter bottoms out and you never stall —
+// only OVER-holding the climb does. Gentle climbs, level flight and dives (pitch below
+// STALL_PITCH, or airspeed above the threshold) are untouched, so normal flying is unchanged.
+// Boosting adds airspeed, so a live thruster staves off a stall — but only while gas lasts.
+const STALL_SPD     = 150;   // px/s airspeed under which a steeply nose-up wing stalls (~30 on the m/s meter)
+const STALL_RECOVER = 250;   // px/s airspeed that flies you out of a stall (hysteresis, > STALL_SPD)
+const STALL_WARN    = 95;    // px/s band above STALL_SPD where the telegraph (meter flash + "STALL!") begins
+const STALL_PITCH   = 0.7;   // only a firmly-held nose-up command can stall (~330ms+ hold); brief taps stay safe
+const STALL_HANG    = 0.4;   // s of floaty "hang" at the apex before the nose drops (readable, not a brick)
+const STALL_NOSE    = -0.9;  // the pitch the stalled wing forces itself to (a firm, recoverable nose-over)
+const STALL_DROP    = 2.6;   // how fast the nose falls over once the hang ends (/s toward STALL_NOSE)
+
 // ---------- TUNING CONSTANTS (economy) ----------
 // Stickers = dist_m*PAY_DIST + airtime_s*PAY_AIR + trick bonuses. Never < 1 (bank every run).
 // First throw pays ~28; cheapest tier-1 prices below = a buy on run 1, then next always ~1-3 runs out.
@@ -240,6 +257,7 @@ const sfx = {
   pop(){ tone(vary(300),0.06,'square',0.08,500); },
   laser(){ tone(1500,0.12,'sawtooth',0.09,420); },                 // beam fire-up "pew"
   zap(){ tone(1900,0.09,'square',0.1,600); noiseBurst(0.06,0.09,2600); }, // pigeon vapourised
+  stall(){ tone(300,0.22,'sawtooth',0.10,120); noiseBurst(0.22,0.10,420); }, // wing buffet: falling wobble as lift dies
 };
 
 // ---------- game state ----------
@@ -250,7 +268,7 @@ let laserHeld=false;             // keyboard laser-fire input (F held during fli
 let laserWasOn=false;            // edge-detect for the fire-start sfx
 let plane={x:LAUNCH.x,y:LAUNCH.y,vx:0,vy:0,rot:-0.5};
 let cam={x:-170,y:0,zoom:1,shake:0};
-let run={dist:0,air:0,tricks:0,trickN:0,gas:0,boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0,laserOn:false,laserE:1};
+let run={dist:0,air:0,tricks:0,trickN:0,gas:0,boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0,laserOn:false,laserE:1,stalling:false,stallHang:0,stallWarn:0};
 let settleT=0, tallyT=0, sel=-1, lastScorePost=0, cardShake=0, cardShakeI=-1;
 let dragging=false, dragStart={x:0,y:0}, dragCur={x:0,y:0};
 // mid-flight pitch input: keyboard flags + touch (left-zone drag). Read only while flying.
@@ -333,7 +351,7 @@ function beginThrow(pow, ang){
   plane.x=LAUNCH.x; plane.y=LAUNCH.y;
   plane.vx=Math.cos(ang)*pow; plane.vy=Math.sin(ang)*pow;
   plane.rot=ang;
-  run={dist:0,air:0,tricks:0,trickN:0,gas:gasMax(),boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0,laserOn:false,laserE:1};
+  run={dist:0,air:0,tricks:0,trickN:0,gas:gasMax(),boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0,laserOn:false,laserE:1,stalling:false,stallHang:0,stallWarn:0};
   boosting=false;                     // never carry a held-boost into a fresh throw
   laserHeld=false; laserWasOn=false;  // never carry a held laser into a fresh throw
   pointers.clear(); touchPitchActive=false; touchPitch=0;  // never carry a touch pitch/boost/fire into a fresh throw
@@ -462,7 +480,27 @@ function stepFly(dt){
   // ---- PITCH & ENERGY: active glide. Lean the nose, bank the velocity toward it over
   //      time, trade height<->speed. This is the skill layer over the ballistic arc. ----
   const pin = pitchInput();                                  // -1..1  (+1 nose up / climb)
-  run.pitch += (pin - run.pitch)*Math.min(1, PITCH_EASE*dt); // eased command (weighty, no snap)
+  // ---- AERODYNAMIC STALL: a wing needs airspeed. If the nose is held steeply UP while
+  //      airspeed decays below STALL_SPD, lift dies and the plane noses over (recoverable). ----
+  const airspeed = Math.hypot(p.vx, p.vy);
+  const aloft = p.y < GROUND-8;
+  const noseHeldUp = run.pitch > STALL_PITCH;                // committed to a real climb (gentle climbs stay safe)
+  // telegraph 0..1: how close a climbing wing is to the stall (drives the speed-meter flash + "STALL?")
+  run.stallWarn = run.stalling ? 1
+    : (aloft && noseHeldUp ? Math.max(0, Math.min(1, (STALL_SPD + STALL_WARN - airspeed)/STALL_WARN)) : 0);
+  if(run.stalling){
+    if(airspeed > STALL_RECOVER || !aloft){ run.stalling=false; run.stallHang=0; }  // dived back to speed → fly out
+  } else if(aloft && noseHeldUp && airspeed < STALL_SPD){
+    run.stalling=true; run.stallHang=STALL_HANG;             // STALL! brief hang at the apex, then a nose-over
+    floatTxt('STALL!', p.x, p.y-34, RED, 22); sfx.stall();
+  }
+  // drive the pitch COMMAND: normal easing — but a stalled wing overrides the player and drops its nose.
+  if(run.stalling){
+    if(run.stallHang>0){ run.stallHang-=dt; run.pitch += (0 - run.pitch)*Math.min(1, PITCH_EASE*dt); } // hang: lift gone, climb stops
+    else { run.pitch += (STALL_NOSE - run.pitch)*Math.min(1, STALL_DROP*dt); }                          // nose-over into the dive
+  } else {
+    run.pitch += (pin - run.pitch)*Math.min(1, PITCH_EASE*dt); // eased command (weighty, no snap)
+  }
   if(p.y < GROUND-8){                                         // steering only matters aloft; never fights the ground slide/settle
     let spd = Math.hypot(p.vx, p.vy);
     if(spd > 1){
@@ -1469,17 +1507,27 @@ function drawFlightMeters(){
   const alt = Math.max(0,(GROUND-6 - plane.y)/PXM);     // metres above the street
   const spd = Math.hypot(plane.vx,plane.vy)/PXM;         // current speed (m/s in world scale)
   // ---- SPEED: small labelled readout + bar under "best", matches distance ink style ----
+  // Doubles as the STALL telegraph: as a climbing wing nears the stall the readout flashes
+  // red + wobbles and shouts "STALL?" (then "STALL!" while stalled) — the tradeoff made loud.
   const sbx=28, sby=118, sbw=132;
   const SPD_REF=190, sf=Math.max(0,Math.min(1,spd/SPD_REF));
+  const warn = (state==='fly') ? (run.stallWarn||0) : 0;         // 0 normal .. 1 stalling
+  const flash = warn>0 ? (0.45+0.55*Math.abs(Math.sin(T*22))) : 1; // fast flash as we near the stall
+  const spdCol = warn>0 ? RED : INK;
+  const wob = warn>0 ? Math.sin(T*30)*warn*1.6 : 0;              // little buffet wobble on the readout
   txt('spd', sbx, 100, 13, INK_SOFT, 'left', 0.9);
-  txt(Math.round(spd)+'', sbx+34, 100, 22, INK, 'left', 1, -0.01);
+  txt(Math.round(spd)+'', sbx+34, 100+wob, 22, spdCol, 'left', flash, -0.01);
   txt('m/s', sbx+34+String(Math.round(spd)).length*13+4, 104, 12, INK_SOFT, 'left', 0.85);
   ctx.save();
-  ctx.strokeStyle=INK; ctx.lineWidth=1.8; ctx.fillStyle='rgba(252,249,240,0.85)';
+  ctx.strokeStyle= warn>0? RED : INK; ctx.lineWidth=1.8; ctx.fillStyle='rgba(252,249,240,0.85)';
   ctx.beginPath(); wrect(sbx,sby,sbw,8,1.1,6100); ctx.fill(); ctx.stroke();
-  ctx.fillStyle= sf>0.82? RED : INK_SOFT;
-  ctx.fillRect(sbx+2, sby+2, (sbw-4)*sf, 4);
+  ctx.fillStyle= warn>0? RED : (sf>0.82? RED : INK_SOFT);
+  ctx.globalAlpha= warn>0? flash : 1;
+  ctx.fillRect(sbx+2, sby+2, (sbw-4)*Math.max(sf, warn>0?0.08:0), 4); // keep a visible sliver so the flash reads even when slow
   ctx.restore();
+  if(warn>0){
+    txt(run.stalling?'STALL!':'STALL?', sbx+sbw+16+wob, 100, 16, RED, 'left', Math.min(1,flash+0.25), Math.sin(T*24)*0.06);
+  }
   // ---- ALTITUDE: vertical altimeter tape on the far-left edge, fills from the ground up ----
   const gx=18, gTop=150, gBot=H-108, gh=gBot-gTop, gw=13;
   const ALT_REF=150, af=Math.max(0,Math.min(1,alt/ALT_REF));

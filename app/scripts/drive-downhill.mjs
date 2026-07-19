@@ -50,29 +50,42 @@ for (let lvl = 1; lvl <= 8; lvl++) {
   await page.context().close();
 }
 
-// ---- (b) real ride on hill 1: draw a bridging track, GO, reach the flag ----
+// ---- (b) real ride on hill 1: draw a gentle track (grazing the star) -> GO -> reach flag ----
 {
   const { page, errors } = await open(browser, `${base}?lvl=1`);
   await page.keyboard.press('Space');
   await page.waitForTimeout(300);
-  // bridge the gap from the start-slope end (~330,278) across to the right shelf (~600,300),
-  // arcing up through the star at (430,236) for a full-marks run.
-  await draw(page, [[300, 264], [372, 252], [430, 244], [500, 262], [560, 288], [612, 300]]);
+  // smooth shallow bowl: builds speed then coasts up to the flag (no sharp corners to stall on).
+  await draw(page, [[322, 278], [398, 322], [480, 350], [560, 356], [640, 348], [720, 336], [800, 324], [842, 319]]);
   await page.screenshot({ path: path.join(shotDir, 'ride-0-drawn.png') });
   await page.keyboard.press('Space');          // GO
-  await page.waitForTimeout(700);
+  await page.waitForTimeout(650);
   await page.screenshot({ path: path.join(shotDir, 'ride-1-riding.png') });
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(900);
   await page.screenshot({ path: path.join(shotDir, 'ride-2-riding.png') });
-  await page.waitForTimeout(2500);
-  await page.screenshot({ path: path.join(shotDir, 'ride-3-result.png') }); // WIN overlay or later ride
+  await page.waitForTimeout(3800);
+  await page.screenshot({ path: path.join(shotDir, 'ride-3-result.png') }); // WIN overlay (Nice run / PERFECT)
   const m = await msgs(page);
-  notes.push(`hill1 ride: bridge messages = [${m.map((x) => x.gs + (x.score != null ? ':' + x.score : '')).join(', ')}]`);
+  const scored = m.filter((x) => x.gs === 'score');
+  notes.push(`hill1 ride: msgs = [${m.map((x) => x.gs + (x.score != null ? ':' + x.score : '')).join(', ')}] (score msg => star grabbed + flag reached)`);
   allErrors.push(...errors);
   await page.context().close();
 }
 
-// ---- (c) wipeout keeps your lines: draw a stub that does NOT bridge, GO, fall in ----
+// ---- (c) hill 5 bounce pad: ramp into the spring, GO, capture the boing/air ----
+{
+  const { page, errors } = await open(browser, `${base}?lvl=5`);
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(300);
+  await draw(page, [[430, 358], [452, 366], [472, 370]]); // guide into the pad
+  await page.keyboard.press('Space');          // GO
+  await page.waitForTimeout(1300);
+  await page.screenshot({ path: path.join(shotDir, 'bounce-air.png') }); // sledder flung up, "wheee"
+  allErrors.push(...errors);
+  await page.context().close();
+}
+
+// ---- (d) wipeout keeps your lines: draw a stub that does NOT bridge, GO, fall in ----
 {
   const { page, errors } = await open(browser, `${base}?lvl=1`);
   await page.keyboard.press('Space');
@@ -80,16 +93,24 @@ for (let lvl = 1; lvl <= 8; lvl++) {
   await draw(page, [[300, 268], [360, 300], [410, 330]]); // a stub into the pit
   await page.screenshot({ path: path.join(shotDir, 'wipe-0-drawn.png') });
   await page.keyboard.press('Space');          // GO
-  await page.waitForTimeout(900);
+  await page.waitForTimeout(800);
   await page.screenshot({ path: path.join(shotDir, 'wipe-1-tumble.png') }); // comedic fall
-  await page.waitForTimeout(1400);             // FAIL auto-returns to DRAW (lines kept)
+  await page.waitForTimeout(2200);             // FAIL auto-returns to DRAW (lines kept)
   await page.screenshot({ path: path.join(shotDir, 'wipe-2-backtodraw.png') }); // GO/Undo/Clear + line still there
-  // gameover via Escape
-  await page.keyboard.press('Escape');
+  allErrors.push(...errors);
+  await page.context().close();
+}
+
+// ---- (e) gameover fires: Escape from a clean DRAW state ----
+{
+  const { page, errors } = await open(browser, `${base}?lvl=1`);
+  await page.keyboard.press('Space');          // splash -> DRAW
+  await page.waitForTimeout(500);
+  await page.keyboard.press('Escape');         // DRAW -> endRun -> gs:'gameover'
   await page.waitForTimeout(400);
   const m = await msgs(page);
   const go = m.filter((x) => x.gs === 'gameover');
-  notes.push(`wipeout+escape: gameover count = ${go.length} (score ${go.map((x) => x.score).join(',')})`);
+  notes.push(`escape-from-draw: gameover count = ${go.length} (score ${go.map((x) => x.score).join(',')})`);
   allErrors.push(...errors);
   await page.context().close();
 }
