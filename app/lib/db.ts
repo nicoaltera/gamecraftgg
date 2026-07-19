@@ -44,6 +44,7 @@ function migrate(d: Database.Database) {
       mode TEXT DEFAULT 'sp',
       score_label TEXT DEFAULT '',
       score_order TEXT DEFAULT 'desc',
+      boards TEXT DEFAULT '[]',
       palette TEXT DEFAULT '[]',
       author TEXT DEFAULT 'gamesight',
       status TEXT DEFAULT 'published',
@@ -64,6 +65,7 @@ function migrate(d: Database.Database) {
     CREATE TABLE IF NOT EXISTS scores (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       slug TEXT NOT NULL,
+      board TEXT NOT NULL DEFAULT '',
       session_id TEXT NOT NULL,
       name TEXT NOT NULL,
       score INTEGER NOT NULL,
@@ -104,6 +106,40 @@ function migrate(d: Database.Database) {
   // additive migrations for DBs created before a column existed
   const reportCols = (d.prepare('PRAGMA table_info(reports)').all() as { name: string }[]).map((c) => c.name);
   if (!reportCols.includes('session_id')) d.exec('ALTER TABLE reports ADD COLUMN session_id TEXT');
+  const gameCols = (d.prepare('PRAGMA table_info(games)').all() as { name: string }[]).map((c) => c.name);
+  if (!gameCols.includes('boards')) d.exec("ALTER TABLE games ADD COLUMN boards TEXT DEFAULT '[]'");
+  const scoreCols = (d.prepare('PRAGMA table_info(scores)').all() as { name: string }[]).map((c) => c.name);
+  if (!scoreCols.includes('board')) d.exec("ALTER TABLE scores ADD COLUMN board TEXT NOT NULL DEFAULT ''");
+}
+
+export type Board = { key: string; label: string; order: 'asc' | 'desc'; primary: boolean; challenge: boolean };
+
+// A game declares one or more leaderboards. Games with a completable goal should
+// rank by efficiency-to-goal (fewest attempts / fastest time), not raw score;
+// dual boards let an endless chase and a completion challenge coexist. `primary`
+// is the headline leaderboard; `challenge` marks the board the per-run "dare a
+// friend" link uses (a cross-session completion metric makes a poor per-run dare,
+// so a game can point the dare at its endless board while ranking on efficiency).
+export function parseBoards(row: { boards?: string; score_label: string; score_order: 'asc' | 'desc' }): Board[] {
+  try {
+    const arr = JSON.parse(row.boards || '[]');
+    if (Array.isArray(arr) && arr.length) {
+      const boards = arr.map((b) => ({
+        key: String(b.key ?? ''),
+        label: String(b.label ?? ''),
+        order: b.order === 'asc' ? 'asc' : ('desc' as 'asc' | 'desc'),
+        primary: !!b.primary,
+        challenge: !!b.challenge,
+      }));
+      if (!boards.some((b) => b.primary)) boards[0].primary = true;
+      if (!boards.some((b) => b.challenge)) boards.find((b) => b.primary)!.challenge = true;
+      return boards;
+    }
+  } catch {
+    /* fall through to the single-board default */
+  }
+  // back-compat: synthesize one board from the legacy single score fields
+  return [{ key: '', label: row.score_label, order: row.score_order, primary: true, challenge: true }];
 }
 
 export type GameMeta = {
@@ -123,12 +159,12 @@ export type GameMeta = {
 function syncGamesFromDisk(d: Database.Database) {
   if (!fs.existsSync(GAMES_DIR)) return;
   const upsert = d.prepare(`
-    INSERT INTO games (slug, title, description, verb, dials, orientation, mode, score_label, score_order, palette, author, created_at)
-    VALUES (@slug, @title, @description, @verb, @dials, @orientation, @mode, @scoreLabel, @scoreOrder, @palette, @author, @createdAt)
+    INSERT INTO games (slug, title, description, verb, dials, orientation, mode, score_label, score_order, boards, palette, author, created_at)
+    VALUES (@slug, @title, @description, @verb, @dials, @orientation, @mode, @scoreLabel, @scoreOrder, @boards, @palette, @author, @createdAt)
     ON CONFLICT(slug) DO UPDATE SET
       title=excluded.title, description=excluded.description, verb=excluded.verb,
       dials=excluded.dials, orientation=excluded.orientation, mode=excluded.mode,
-      score_label=excluded.score_label, score_order=excluded.score_order, palette=excluded.palette
+      score_label=excluded.score_label, score_order=excluded.score_order, boards=excluded.boards, palette=excluded.palette
   `);
   for (const slug of fs.readdirSync(GAMES_DIR)) {
     const metaPath = path.join(GAMES_DIR, slug, 'meta.json');
@@ -146,6 +182,7 @@ function syncGamesFromDisk(d: Database.Database) {
         mode: meta.mode ?? 'sp',
         scoreLabel: meta.scoreLabel ?? '',
         scoreOrder: meta.scoreOrder === 'asc' ? 'asc' : 'desc',
+        boards: JSON.stringify(Array.isArray(meta.boards) ? meta.boards : []),
         palette: JSON.stringify(meta.palette ?? []),
         author: meta.author ?? 'gamesight',
         createdAt: Math.floor(fs.statSync(htmlPath).mtimeMs), // NOT | 0 — that 32-bit-truncates a ~1.7e12 ms value
@@ -166,6 +203,7 @@ export type GameRow = {
   mode: string;
   score_label: string;
   score_order: 'asc' | 'desc';
+  boards: string;
   palette: string;
   author: string;
   status: string;
@@ -205,16 +243,16 @@ export function getFeed(limit = 24): FeedItem[] {
   return rows;
 }
 
-export function getLeaderboard(slug: string, order: 'asc' | 'desc', window?: 'day') {
+export function getLeaderboard(slug: string, order: 'asc' | 'desc', window?: 'day', board = '') {
   const since = window === 'day' ? Date.now() - 86400_000 : 0;
   const agg = order === 'asc' ? 'MIN(score)' : 'MAX(score)';
   return db()
     .prepare(
       `SELECT name, ${agg} as score, MIN(created_at) as created_at FROM scores
-       WHERE slug = ? AND quarantined = 0 AND created_at > ?
+       WHERE slug = ? AND board = ? AND quarantined = 0 AND created_at > ?
        GROUP BY name
        ORDER BY score ${order === 'asc' ? 'ASC' : 'DESC'}
        LIMIT 10`
     )
-    .all(slug, since) as { name: string; score: number; created_at: number }[];
+    .all(slug, board, since) as { name: string; score: number; created_at: number }[];
 }

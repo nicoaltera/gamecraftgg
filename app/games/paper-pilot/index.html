@@ -31,24 +31,34 @@ const GLIDE  = 6;                // how fast fall speed relaxes to terminal (per
 const DRAG_BASE = 0.16, DRAG_STEP = 0.024; // air drag /s; Sharper Folds tier5 -> 0.04
 const TERM_BASE = 132,  TERM_STEP = 12;    // terminal fall px/s; folds tier5 -> 72 (glides way longer)
 const POW_BASE  = 375,  POW_STEP  = 112;   // launch speed px/s; Rubber Band tier5 -> 935
-const REST_BASE = 0.5,  REST_STEP = 0.08;  // ground bounce restitution; Gum tier5 -> 0.88 (capped)
+const REST_BASE = 0.5;                      // ground bounce restitution (fixed; no upgrade)
 const SLIDE  = 1.15;             // ground slide friction /s (skid after last bounce)
 const BOUNCE_KEEP = 0.985;       // vx kept per ground bounce
-const FAN_BOOST = 210, FAN_STEP = 65;      // Pocket Fan: one mid-air boost per run
-// sim+playtest verified: naive 1st throw ~146m/26 stickers; first buys land runs 2/4/5;
-// maxed full-power throw ~2100-2300m — mailbox delivery guaranteed by persistence.
+// ---- HELD BOOST (thruster device + fuel tank) ----
+// Boost is HELD, not tapped: hold to fire continuous forward+up thrust; it DRAINS gas.
+// Tradeoff you must ration: stronger devices push harder AND burn gas faster.
+//   Thruster tier -> thrust power & burn RATE.   Fuel Tank tier -> gas CAPACITY.
+// Gas is set at launch and never refills mid-run — timing the boost is the real skill.
+const THR_BASE  = 300, THR_STEP  = 72;     // forward thrust accel px/s^2; T1 PocketFan 300 -> T5 Ion 588
+const THR_LIFT  = 0.5;                       // fraction of thrust re-applied as lift (climb)
+const BURN_BASE = 1.0, BURN_STEP = 0.17;   // gas burn/sec; T1 1.0 -> T5 1.68 (stronger devices drink more)
+const GAS_BASE  = 1.15, GAS_STEP = 0.6;    // gas capacity (sec@rate1); Fuel T0 1.15s -> T5 4.15s
+const DEVICE = ['(none)','Pocket Fan','Propeller','Drone','Rocket','Ion Thruster']; // visible tiers
+// sim+playtest verified: naive 1st throw ~150m/~28 stickers; first 3 buys land within ~5 runs;
+// maxed full-power + rationed boost throw ~2200m+ — mailbox delivery guaranteed by persistence.
 const DEFAULT_POW = 0.8, DEFAULT_ANG = -0.66; // quick-throw (space/tap): 80% power, ~38 deg up
 
 // ---------- TUNING CONSTANTS (economy) ----------
-// Stickers = dist_m*PAY_DIST + airtime_s*PAY_AIR + trick bonuses. Never < 1.
-// First throw pays ~45; tier-1 prices below = 3 buys within ~4 runs.
+// Stickers = dist_m*PAY_DIST + airtime_s*PAY_AIR + trick bonuses. Never < 1 (bank every run).
+// First throw pays ~28; cheapest tier-1 prices below = a buy on run 1, then next always ~1-3 runs out.
+// Curve stays gentle late (x2.1/tier, not x2.5) so maxing feels earned, not walled.
 const PAY_DIST = 0.14, PAY_AIR = 2.0;
 const SHOP = [
-  { key:'folds', name:'Sharper Folds',  blurb:'less drag, longer glide', prices:[35, 80,160,300,550] },
-  { key:'band',  name:'Rubber Band',    blurb:'launch power',            prices:[45,100,200,380,700] },
-  { key:'clip',  name:'Paperclip Nose', blurb:'smash leaves & pigeons',  prices:[70,150,300,560,990] },
-  { key:'gum',   name:'Gum Coating',    blurb:'bouncier landings',       prices:[50,115,230,430,780] },
-  { key:'fan',   name:'Pocket Fan',     blurb:'1 boost per run (tap!)',  prices:[90,190,380,680,1200] },
+  { key:'folds', name:'Sharper Folds',  blurb:'reshape & re-material', prices:[30, 70,140,260,460] },
+  { key:'band',  name:'Rubber Band',    blurb:'launch power',          prices:[40, 90,180,340,620] },
+  { key:'clip',  name:'Paperclip Nose', blurb:'smash leaves & pigeons',prices:[60,130,260,480,850] },
+  { key:'thr',   name:'Thruster',       blurb:'hold to boost',         prices:[45,110,230,430,780] },
+  { key:'fuel',  name:'Fuel Tank',      blurb:'more boost gas',        prices:[35, 85,175,330,600] },
 ];
 const TRICK = { bus:3, awning:3, closeCall:2, smash:4, leafPunch:2, pageTurn:5 };
 
@@ -62,6 +72,17 @@ const PAPER='#FCF9F0', PAPER_DK='#F5EEDC', INK='#2447D6', INK_SOFT='rgba(36,71,2
       RED='#D9482B', WHITE='#FFFFFF', PENCIL='#8A93A8', GUM_PINK='#E8849E',
       LETTERBOX='#16255C', RULE='rgba(36,71,214,0.10)';
 const FONT='"Comic Neue","Chalkboard SE","Comic Sans MS","Segoe Print",cursive';
+
+// Sharper Folds is a VISIBLE craft transformation: shape (sweep) + material (fill/outline/sheen)
+// both change per tier — from a scrappy notebook page to a gleaming foil jet.
+const FOLD_MAT = [
+  { name:'Notebook Scrap',    fill:'#FCF9F0', fill2:'#EFE9DA', line:'#2447D6', sheen:0.00, sweep:0 },
+  { name:'Crisp Dart',        fill:'#FFFFFF', fill2:'#ECE6D4', line:'#2447D6', sheen:0.08, sweep:1 },
+  { name:'Waxed Glider',      fill:'#FFFDF0', fill2:'#EDE3C2', line:'#2340C4', sheen:0.24, sweep:2 },
+  { name:'Cardstock Cruiser', fill:'#E9F0FF', fill2:'#C4D3F4', line:'#1B37B0', sheen:0.32, sweep:3 },
+  { name:'Foil Jet',          fill:'#DCE1EB', fill2:'#A6AEC0', line:'#3A4256', sheen:0.64, sweep:4 },
+  { name:'Aluminum Jet',      fill:'#EEF1F6', fill2:'#98A2B8', line:'#2A3142', sheen:0.92, sweep:5 },
+];
 
 // ---------- boilerplate: canvas, letterbox, dpr ----------
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
@@ -83,11 +104,24 @@ let boil=0;                                     // hand-drawn "boil" phase (upda
 function jit(n){const s=Math.sin(n*127.1+boil*311.7)*43758.5453;return (s-Math.floor(s))-0.5;}
 
 // ---------- save / best ----------
-let save = { st:0, up:{folds:0,band:0,clip:0,gum:0,fan:0}, throws:0, delivered:false, delThrows:0 };
+let save = { st:0, up:{folds:0,band:0,clip:0,thr:0,fuel:0}, throws:0, delivered:false, delThrows:0 };
 let best = 0;
 try{
   const s = localStorage.getItem('gs_save:'+SLUG);
-  if(s){ const j = JSON.parse(s); if(j && j.up){ save = Object.assign(save,j); save.up=Object.assign({folds:0,band:0,clip:0,gum:0,fan:0}, j.up);} }
+  if(s){
+    const j = JSON.parse(s);
+    if(j){
+      // migrate old save shape safely (never crash): fan->thruster, gum->fuel; clamp 0..5
+      if(typeof j.st==='number' && isFinite(j.st)) save.st=Math.max(0,j.st);
+      if(typeof j.throws==='number' && isFinite(j.throws)) save.throws=Math.max(0,j.throws);
+      if(j.delivered) save.delivered=true;
+      if(typeof j.delThrows==='number') save.delThrows=j.delThrows;
+      const o=j.up||{}, cl=n=>Math.max(0,Math.min(5,(typeof n==='number'&&isFinite(n))?Math.floor(n):0));
+      save.up.folds=cl(o.folds); save.up.band=cl(o.band); save.up.clip=cl(o.clip);
+      save.up.thr = cl(typeof o.thr ==='number'? o.thr : o.fan);  // old Pocket Fan track -> Thruster
+      save.up.fuel= cl(typeof o.fuel==='number'? o.fuel: o.gum);  // old Gum track -> Fuel Tank
+    }
+  }
   best = Math.max(0, parseInt(localStorage.getItem('gs_best:'+SLUG)||'0',10)||0);
 }catch(e){}
 function persist(){ try{ localStorage.setItem('gs_save:'+SLUG, JSON.stringify(save)); localStorage.setItem('gs_best:'+SLUG, String(best)); }catch(e){} }
@@ -100,7 +134,7 @@ try{ const c = parseInt(new URLSearchParams(location.search).get('c')||'0',10); 
 function post(m){ try{ parent.postMessage(m, '*'); }catch(e){} }
 
 // ---------- audio ----------
-let AC=null, master=null, whooshGain=null, whooshFilt=null, flutGain=null;
+let AC=null, master=null, whooshGain=null, whooshFilt=null, flutGain=null, boostGain=null, boostFilt=null;
 function audioInit(){
   if(AC) { if(AC.state==='suspended') AC.resume(); return; }
   try{
@@ -117,7 +151,12 @@ function audioInit(){
     const hp = AC.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=2600;
     flutGain = AC.createGain(); flutGain.gain.value=0;
     src2.connect(hp); hp.connect(flutGain); flutGain.connect(master);
-    src.start(); src2.start();
+    // held-boost drone (gated in the frame loop while boosting)
+    const src3 = AC.createBufferSource(); src3.buffer=buf; src3.loop=true;
+    boostFilt = AC.createBiquadFilter(); boostFilt.type='bandpass'; boostFilt.frequency.value=260; boostFilt.Q.value=1.3;
+    boostGain = AC.createGain(); boostGain.gain.value=0;
+    src3.connect(boostFilt); boostFilt.connect(boostGain); boostGain.connect(master);
+    src.start(); src2.start(); src3.start();
   }catch(e){ AC=null; }
 }
 function vary(f){ return f*(0.9+Math.random()*0.2); }  // ±10% pitch (cosmetic — ok to be unseeded)
@@ -159,9 +198,10 @@ const sfx = {
 // ---------- game state ----------
 let state='aim';            // aim | fly | settle | result
 let charging=false, chargeT=0;   // keyboard charge-and-release throw
+let boosting=false;              // held-boost input state (pointer down / Space held during flight)
 let plane={x:LAUNCH.x,y:LAUNCH.y,vx:0,vy:0,rot:-0.5};
 let cam={x:-170,y:0,zoom:1,shake:0};
-let run={dist:0,air:0,tricks:0,trickN:0,fanUsed:false,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
+let run={dist:0,air:0,tricks:0,trickN:0,gas:0,boostOn:false,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
 let settleT=0, tallyT=0, sel=-1, lastScorePost=0, cardShake=0, cardShakeI=-1;
 let dragging=false, dragStart={x:0,y:0}, dragCur={x:0,y:0};
 let banner=null, bannerT=0;             // {text, sub, col}
@@ -176,7 +216,9 @@ let trailI=0, trailAcc=0;
 function drag(){ return DRAG_BASE - DRAG_STEP*save.up.folds; }
 function term(){ return TERM_BASE - TERM_STEP*save.up.folds; }
 function power(){ return POW_BASE + POW_STEP*save.up.band; }
-function rest(){ return Math.min(0.88, REST_BASE + REST_STEP*save.up.gum); }
+function thrThrust(){ const t=save.up.thr; return t>0? THR_BASE+THR_STEP*(t-1) : 0; } // thrust accel
+function thrBurn(){   const t=save.up.thr; return t>0? BURN_BASE+BURN_STEP*(t-1) : 0; } // gas/sec
+function gasMax(){ return GAS_BASE + GAS_STEP*save.up.fuel; }                          // capacity
 function speedKeepHit(){ return save.up.clip>=4 ? 0.97 : 1; } // T4+: keep speed through hits
 
 // ---------- world generation (fixed seed; lazy chunks) ----------
@@ -228,7 +270,8 @@ function beginThrow(pow, ang){
   plane.x=LAUNCH.x; plane.y=LAUNCH.y;
   plane.vx=Math.cos(ang)*pow; plane.vy=Math.sin(ang)*pow;
   plane.rot=ang;
-  run={dist:0,air:0,tricks:0,trickN:0,fanUsed:false,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
+  run={dist:0,air:0,tricks:0,trickN:0,gas:gasMax(),boostOn:false,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
+  boosting=false;                     // never carry a held-boost into a fresh throw
   save.throws++; persist();
   resetObs(); for(const f of floats) f.on=false;
   for(const tr of trail) tr.on=false; trailAcc=0;
@@ -252,21 +295,22 @@ function finishRun(){
   save.st += run.stickers;
   if(dm > best){ best = dm; run.newBest = true; }
   persist();
-  post({gs:'gameover', score:dm});
+  // Two leaderboards: 'distance' every run (endless chase + dare), and
+  // 'delivery' = throws taken to reach the mailbox, posted on the delivering run
+  // (the meaningful "reach the pen pal efficiently" ranking — fewer is better).
+  const scores = { distance: dm };
+  if(run.justDelivered) scores.delivery = save.delThrows;
+  post({gs:'gameover', scores});
   state='result'; tallyT=0; sel=-1; chingCount=0;
   if(run.newBest && dm > 60) sfx.fanfare();
 }
 let chingCount=0;
 
-function tryFan(){
-  if(state!=='fly' || save.up.fan<1 || run.fanUsed) return false;
-  run.fanUsed=true;
-  const b = FAN_BOOST + FAN_STEP*(save.up.fan-1);
-  plane.vx += b; plane.vy = Math.min(plane.vy, plane.vy*0.4 - 50);
-  sfx.fan(); puff(plane.x-14, plane.y+4, 8, 70);
-  floatTxt('WHIRRR!', plane.x, plane.y-28, INK, 20);
-  fanChipPulse=1;
-  return true;
+// held boost: start firing the thruster (called on pointerdown / Space-down during flight).
+function startBoost(){
+  if(state!=='fly') return;
+  boosting=true;
+  if(save.up.thr>0 && run.gas>0){ sfx.fan(); fanChipPulse=1; }
 }
 
 function buy(i){
@@ -283,6 +327,18 @@ function buy(i){
 function stepFly(dt){
   const p=plane;
   p.vy += GRAV*dt;
+  // ---- HELD BOOST: continuous forward+up thrust while held, drains gas, no refill ----
+  run.boostOn=false;
+  if(boosting && save.up.thr>0 && run.gas>0){
+    run.boostOn=true;
+    const thr=thrThrust();
+    p.vx += thr*dt;                 // forward push
+    p.vy -= thr*THR_LIFT*dt;        // lift (climb / counter gravity)
+    run.gas=Math.max(0, run.gas - thrBurn()*dt);
+    // exhaust plume behind the plane
+    if(Math.random()<0.7) spawn('puff', p.x-16-Math.random()*8, p.y+3+(Math.random()-0.5)*8, -150-Math.random()*90, (Math.random()-0.5)*40, 0.28, 2+Math.random()*2);
+    spawn('speed', p.x-22, p.y+(Math.random()-0.5)*10, -170, 0, 0.18, 1);
+  }
   const dr=drag();
   p.vx -= p.vx*dr*dt;
   p.vy -= p.vy*dr*dt*0.5;
@@ -304,7 +360,7 @@ function stepFly(dt){
   if(p.y > GROUND-6){
     p.y = GROUND-6;
     if(p.vy > 34){
-      const R = rest();
+      const R = REST_BASE;
       const impact = p.vy;
       p.vy = -p.vy*R;
       p.vx *= BOUNCE_KEEP;
@@ -312,7 +368,6 @@ function stepFly(dt){
       puff(p.x, GROUND-4, Math.min(10, 3+impact/60), 40+impact*0.25);
       sfx.boing(Math.min(1, impact/400));
       if(impact>260) cam.shake = Math.min(7, impact/70);
-      if(save.up.gum>0 && p.vy<0) floatTxt('boing', p.x, GROUND-40, GUM_PINK, 15);
     }else{
       p.vy = 0;
       p.vx -= p.vx*SLIDE*dt;
@@ -479,6 +534,11 @@ function frame(now){
     whooshGain.gain.value = flying?Math.min(0.22, spd/2600):0;
     whooshFilt.frequency.value = 300+spd*0.9;
     flutGain.gain.value = (flying && plane.y<GROUND-14) ? Math.min(0.05, spd/9000)*(0.7+0.3*Math.sin(T*34)) : 0;
+    if(boostGain){
+      const on = flying && run.boostOn;
+      boostGain.gain.value = on ? 0.15 : 0;
+      boostFilt.frequency.value = 190 + save.up.thr*120;   // pitch rises with device tier
+    }
   }
   render();
 }
@@ -491,7 +551,7 @@ window.addEventListener('pointerdown', (e)=>{
   e.preventDefault(); audioInit();
   const g=toGame(e);
   if(state==='aim'){ dragging=true; dragStart=g; dragCur=g; }
-  else if(state==='fly'){ tryFan(); }
+  else if(state==='fly'){ startBoost(); }        // hold to fire the thruster
   else if(state==='settle'){ /* let it land */ }
   else if(state==='result'){
     const hit = resultHit(g);
@@ -501,6 +561,7 @@ window.addEventListener('pointerdown', (e)=>{
 },{passive:false});
 window.addEventListener('pointermove',(e)=>{ if(dragging) dragCur=toGame(e); },{passive:false});
 window.addEventListener('pointerup',(e)=>{
+  boosting=false;                 // release always stops the held boost
   if(!dragging) return;
   dragging=false;
   const dx=dragStart.x-dragCur.x, dy=dragStart.y-dragCur.y;
@@ -526,7 +587,7 @@ window.addEventListener('keydown',(e)=>{
   const k=e.key;
   if(k===' '||k==='Spacebar'){ e.preventDefault();
     if(state==='aim'){ charging=true; chargeT=0; }            // hold to charge, release to throw
-    else if(state==='fly') tryFan();
+    else if(state==='fly') startBoost();                     // hold to fire the thruster
     else if(state==='result'){ if(sel>=0) buy(sel); else toAim(); }  // back to aim — you throw it yourself
   } else if(k==='Enter'){
     if(state==='result'){ if(sel>=0) buy(sel); else toAim(); }
@@ -534,7 +595,7 @@ window.addEventListener('keydown',(e)=>{
   else if(k==='ArrowLeft'||k==='a'){ if(state==='result'){ sel=sel<=0?SHOP.length-1:sel-1; sfx.pop(); } }
   else if(k>='1'&&k<='5'){ if(state==='result') buy(+k-1); }
 });
-window.addEventListener('keyup',(e)=>{ if(e.key===' '||e.key==='Spacebar'){ e.preventDefault(); releaseCharge(); } });
+window.addEventListener('keyup',(e)=>{ if(e.key===' '||e.key==='Spacebar'){ e.preventDefault(); releaseCharge(); boosting=false; } });
 
 // ============================================================
 //  RENDERING — everything is wobbly biro ink on notebook paper
@@ -882,26 +943,39 @@ function drawAimPreview(){
 }
 function drawPlane(){
   const p=plane;
-  ctx.save();
-  ctx.translate(p.x,p.y); ctx.rotate(p.rot);
-  const foldT=save.up.folds;
-  const noseLen = 20+foldT*1.2;
+  const foldT=Math.max(0,Math.min(5,save.up.folds));
+  const mat=FOLD_MAT[foldT];
+  const noseLen = 20 + foldT*1.4;      // sharper craft = longer nose
+  const wingBack = -16 - foldT*1.1;    // wing sweeps back with tier
+  const wingUp   = -9  - foldT*0.6;    // taller profile
   // shadow on ground
-  ctx.restore();
   if(p.y<GROUND-12){
     ctx.save(); ctx.globalAlpha=Math.max(0.04, 0.22-(GROUND-p.y)/1600);
     ctx.fillStyle=INK; ctx.beginPath(); ctx.ellipse(p.x,GROUND-2, 16,3.5,0,0,7); ctx.fill(); ctx.restore();
   }
   ctx.save();
   ctx.translate(p.x,p.y); ctx.rotate(p.rot); ctx.scale(1.4,1.4);
-  // lower fin (shaded)
-  ctx.fillStyle='#EFE9DA'; ctx.strokeStyle=INK; ctx.lineWidth=1.8;
-  ctx.beginPath(); ctx.moveTo(noseLen,0); ctx.lineTo(-14,10); ctx.lineTo(-9,1); ctx.closePath(); ctx.fill(); ctx.stroke();
-  // upper wing (white)
-  ctx.fillStyle=WHITE;
-  ctx.beginPath(); ctx.moveTo(noseLen,0); ctx.lineTo(-16,-9); ctx.lineTo(-9,1); ctx.closePath(); ctx.fill(); ctx.stroke();
-  // fold lines (more with Sharper Folds)
-  ctx.strokeStyle='rgba(36,71,214,0.35)'; ctx.lineWidth=0.9;
+  // exhaust flame (behind the craft) while boosting
+  if(run.boostOn && save.up.thr>0) drawFlame(save.up.thr);
+  // lower fin (shaded, matches material)
+  ctx.fillStyle=mat.fill2; ctx.strokeStyle=mat.line; ctx.lineWidth=1.8;
+  ctx.beginPath(); ctx.moveTo(noseLen,0); ctx.lineTo(wingBack+2,10); ctx.lineTo(-9,1); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // upper wing — metallic gradient at high tiers, flat fill low
+  if(mat.sheen>0.4){
+    const g=ctx.createLinearGradient(noseLen,-2, wingBack,wingUp);
+    g.addColorStop(0, mat.fill); g.addColorStop(0.5,'#FFFFFF'); g.addColorStop(1, mat.fill2);
+    ctx.fillStyle=g;
+  } else ctx.fillStyle=mat.fill;
+  ctx.beginPath(); ctx.moveTo(noseLen,0); ctx.lineTo(wingBack,wingUp); ctx.lineTo(-9,1); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // sheen streak (glint grows with material tier)
+  if(mat.sheen>0){
+    ctx.save(); ctx.globalAlpha=mat.sheen*0.75; ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=1.4;
+    ctx.beginPath(); ctx.moveTo(noseLen-4,-1.5); ctx.lineTo(wingBack+5, wingUp+3); ctx.stroke(); ctx.restore();
+  }
+  // upswept winglet on the high-tier jets
+  if(foldT>=4){ ctx.strokeStyle=mat.line; ctx.lineWidth=1.6; ctx.beginPath(); ctx.moveTo(wingBack,wingUp); ctx.lineTo(wingBack-3,wingUp-4); ctx.stroke(); }
+  // fold crease lines (more creases the sharper the folds)
+  ctx.strokeStyle='rgba(36,71,214,0.32)'; ctx.lineWidth=0.9;
   ctx.beginPath();
   ctx.moveTo(noseLen,0); ctx.lineTo(-9,1);
   for(let f=0;f<foldT;f++){ ctx.moveTo(noseLen-6-f*5,-1.2); ctx.lineTo(-11+f*2,-5.5+f*0.8); }
@@ -923,20 +997,52 @@ function drawPlane(){
     ctx.lineTo(noseLen-1,-1.2);
     ctx.stroke();
   }
-  // gum blob underside
-  if(save.up.gum>0){
-    ctx.fillStyle=GUM_PINK; ctx.strokeStyle='rgba(180,60,90,0.7)'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.ellipse(-4,6, 3.4+save.up.gum*0.4,2.4,0,0,7); ctx.fill(); ctx.stroke();
-  }
-  // pocket fan strapped on top
-  if(save.up.fan>0){
-    ctx.strokeStyle=INK; ctx.lineWidth=1.2;
+  // visible boost device (changes shape with tier)
+  if(save.up.thr>0) drawDevice(save.up.thr, noseLen);
+  ctx.restore();
+}
+// exhaust flame drawn in plane-local space (already translated/rotated/scaled)
+function drawFlame(tier){
+  const len = 8 + tier*4 + Math.random()*4;
+  const col = tier>=5? '#7FB0FF' : (tier>=4? '#FF9B3D' : '#FFD24D');
+  ctx.save();
+  ctx.globalAlpha=0.9; ctx.fillStyle=col;
+  ctx.beginPath();
+  ctx.moveTo(-9,-3.2); ctx.lineTo(-9-len, (Math.random()-0.5)*3); ctx.lineTo(-9,3.2); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha=0.65; ctx.fillStyle='#FFFFFF';
+  ctx.beginPath(); ctx.moveTo(-9,-1.5); ctx.lineTo(-9-len*0.5,0); ctx.lineTo(-9,1.5); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+// the boost DEVICE on the plane — visibly upgrades: Fan -> Propeller -> Drone -> Rocket -> Ion
+function drawDevice(tier, noseLen){
+  ctx.save();
+  ctx.strokeStyle=INK; ctx.lineWidth=1.3; ctx.fillStyle=PAPER;
+  const spin = run.boostOn ? T*30 : T*5;   // spins up while boosting
+  if(tier===1){                            // Pocket Fan — little fan strapped on top
     ctx.beginPath(); ctx.moveTo(-8,-4); ctx.lineTo(-8,-9); ctx.stroke();
     ctx.save(); ctx.translate(-8,-12);
     ctx.beginPath(); ctx.arc(0,0,4,0,7); ctx.stroke();
-    const spin = run.fanUsed||state!=='fly' ? T*3 : T*26;
-    for(let b=0;b<3;b++){ const a=spin+b*2.09; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(Math.cos(a)*3.4, Math.sin(a)*3.4); ctx.stroke(); }
+    for(let b=0;b<3;b++){ const a=spin+b*2.09; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(Math.cos(a)*3.4,Math.sin(a)*3.4); ctx.stroke(); }
     ctx.restore();
+  } else if(tier===2){                     // Propeller — spinning nose prop
+    ctx.save(); ctx.translate(noseLen+2,0);
+    ctx.beginPath(); ctx.arc(0,0,1.6,0,7); ctx.fill(); ctx.stroke();
+    for(let b=0;b<2;b++){ const a=spin+b*3.14; ctx.beginPath(); ctx.moveTo(Math.cos(a)*5.5,Math.sin(a)*5.5); ctx.lineTo(-Math.cos(a)*5.5,-Math.sin(a)*5.5); ctx.stroke(); }
+    ctx.restore();
+  } else if(tier===3){                     // Drone — twin rotors on struts
+    for(const sx of [-2,-13]){
+      ctx.beginPath(); ctx.moveTo(sx,-3); ctx.lineTo(sx,-8); ctx.stroke();
+      ctx.save(); ctx.translate(sx,-9);
+      for(let b=0;b<2;b++){ const a=spin+b*3.14; ctx.beginPath(); ctx.moveTo(Math.cos(a)*4,Math.sin(a)*4); ctx.lineTo(-Math.cos(a)*4,-Math.sin(a)*4); ctx.stroke(); }
+      ctx.restore();
+    }
+  } else if(tier===4){                     // Rocket — nozzle bolted at the tail
+    ctx.fillStyle=PENCIL; ctx.lineWidth=1.4;
+    ctx.beginPath(); ctx.moveTo(-9,-3.4); ctx.lineTo(-14,-4.8); ctx.lineTo(-14,4.8); ctx.lineTo(-9,3.4); ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else {                                 // Ion Thruster — dark ringed nozzle, blue glow
+    ctx.fillStyle='#3A4256'; ctx.lineWidth=1.4;
+    ctx.beginPath(); ctx.moveTo(-9,-4); ctx.lineTo(-15,-5.6); ctx.lineTo(-15,5.6); ctx.lineTo(-9,4); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle='#7FB0FF'; ctx.lineWidth=1.2; ctx.beginPath(); ctx.ellipse(-15,0,1.6,4.6,0,0,7); ctx.stroke();
   }
   ctx.restore();
 }
@@ -999,15 +1105,26 @@ function drawHUD(){
   } else if(state==='aim'){
     txt('delivered in '+save.delThrows+' throws!', W-28, 74, 14, RED, 'right', 0.8);
   }
-  // fan chip during flight
-  if(state==='fly' && save.up.fan>0){
-    const used=run.fanUsed;
-    const fp=1+Math.max(0,fanChipPulse)*0.3;
-    ctx.save(); ctx.translate(W-96, H-44); ctx.scale(fp,fp);
-    ctx.strokeStyle=used?PENCIL:RED; ctx.lineWidth=2.4; ctx.fillStyle=used?'rgba(245,238,220,0.85)':'rgba(252,249,240,0.95)';
-    ctx.beginPath(); wrect(-66,-20,150,40,1.8,4011); ctx.fill(); ctx.stroke();
-    txt(used?'fan used':'FAN! tap/space', 8, 0, 16, used?PENCIL:RED, 'center');
+  // boost gas gauge during flight (held-boost mechanic)
+  if(state==='fly' && save.up.thr>0){
+    const gm=gasMax(), frac=gm>0? Math.max(0,Math.min(1,run.gas/gm)):0;
+    const gw=176, gx=W-gw-22, gy=H-48, empty=frac<=0.001;
+    const gp=1+Math.max(0,fanChipPulse)*0.18;
+    ctx.save(); ctx.translate(gx+gw/2, gy+15); ctx.scale(gp,gp); ctx.translate(-(gx+gw/2),-(gy+15));
+    ctx.strokeStyle=run.boostOn?RED:INK; ctx.lineWidth=2.4; ctx.fillStyle='rgba(252,249,240,0.93)';
+    ctx.beginPath(); wrect(gx,gy,gw,30,1.6,4011); ctx.fill(); ctx.stroke();
+    // gas fill
+    ctx.fillStyle= empty? PENCIL : (frac<0.28? '#E08A2B' : (run.boostOn?RED:INK));
+    ctx.fillRect(gx+5, gy+17, (gw-10)*frac, 9);
+    ctx.strokeStyle='rgba(36,71,214,0.25)'; ctx.lineWidth=1;
+    for(let i=1;i<4;i++){ const tx=gx+5+(gw-10)*i/4; ctx.beginPath(); ctx.moveTo(tx,gy+17); ctx.lineTo(tx,gy+26); ctx.stroke(); }
+    txt(empty?'OUT OF GAS':DEVICE[save.up.thr], gx+10, gy+9, 13, empty?PENCIL:INK, 'left');
+    txt(run.boostOn?'BOOSTING':'HOLD = boost', gx+gw-10, gy+9, 12, run.boostOn?RED:INK_SOFT, 'right');
     ctx.restore();
+    // first-throws coaching for the new held-boost verb
+    if(save.throws<=3 && run.gas>0 && !run.boostOn && plane.y<GROUND-30){
+      txt('HOLD to boost! ▲', W/2, H-72, 17, RED, 'center', 0.55+0.45*Math.abs(Math.sin(T*4)));
+    }
   }
   // aim-state coaching + next-goal
   if(state==='aim'){
@@ -1129,7 +1246,7 @@ function drawResult(){
     ctx.beginPath(); wrect(0,0,r.w,r.h,1.8,5200+i*17); ctx.fill(); ctx.stroke();
     txt(it.name, r.w/2, 20, 16.5, INK, 'center');
     drawShopIcon(i, r.w/2, 56);
-    txt(it.blurb, r.w/2, 88, 11.5, INK_SOFT, 'center');
+    txt(cardBlurb(it,tier), r.w/2, 88, 11.5, INK_SOFT, 'center');
     // tier pips
     for(let p=0;p<5;p++){
       ctx.beginPath();
@@ -1158,6 +1275,12 @@ function drawResult(){
   txt('tap here then pull back to throw  •  tap card / ←→ + enter or 1-5 to buy', W/2, CARD.y+CARD.h+18, 13.5, 'rgba(36,71,214,0.6)', 'center');
   ctx.restore();
 }
+// escalating "number-go-up" names on the boost & folds cards (shows the NEXT tier you unlock)
+function cardBlurb(it,tier){
+  if(it.key==='thr')   return tier>=5? DEVICE[5]            : 'next: '+DEVICE[tier+1];
+  if(it.key==='folds') return tier>=5? FOLD_MAT[5].name     : '→ '+FOLD_MAT[tier+1].name;
+  return it.blurb;
+}
 function drawShopIcon(i,x,y){
   ctx.save(); ctx.translate(x,y); ctx.strokeStyle=INK; ctx.lineWidth=2.2;
   if(i===0){ // sharper folds — crisp dart
@@ -1170,13 +1293,16 @@ function drawShopIcon(i,x,y){
     ctx.strokeStyle=PENCIL; ctx.lineWidth=2.6;
     ctx.beginPath(); ctx.moveTo(-8,-8); ctx.lineTo(8,-8); ctx.arc(8,-2,6,-Math.PI/2,Math.PI/2);
     ctx.lineTo(-6,4); ctx.arc(-6,0,4,Math.PI/2,-Math.PI/2,true); ctx.lineTo(4,-4); ctx.stroke();
-  } else if(i===3){ // gum
-    ctx.fillStyle=GUM_PINK; ctx.beginPath(); ctx.arc(0,0,11,0,7); ctx.fill();
-    ctx.strokeStyle='rgba(180,60,90,0.8)'; ctx.beginPath(); ctx.arc(0,0,11,0,7); ctx.stroke();
-    ctx.beginPath(); ctx.arc(-6,-2,4,0,7); ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.fill();
-  } else { // fan
-    ctx.beginPath(); ctx.arc(0,0,12,0,7); ctx.stroke();
-    for(let b=0;b<3;b++){ const a=T*8+b*2.09; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(Math.cos(a)*10,Math.sin(a)*10); ctx.stroke(); }
+  } else if(i===3){ // thruster — rocket body + flame + spinning fan hint
+    ctx.fillStyle=PENCIL; ctx.beginPath(); ctx.moveTo(6,-6); ctx.lineTo(-6,-3.5); ctx.lineTo(-6,3.5); ctx.lineTo(6,6); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=RED; ctx.beginPath(); ctx.moveTo(-6,-3); ctx.lineTo(-14,0); ctx.lineTo(-6,3); ctx.closePath(); ctx.fill();
+    for(let b=0;b<3;b++){ const a=T*10+b*2.09; ctx.strokeStyle=INK; ctx.beginPath(); ctx.moveTo(9,-9); ctx.lineTo(9+Math.cos(a)*4.5,-9+Math.sin(a)*4.5); ctx.stroke(); }
+  } else { // fuel tank — jerry can with gas level
+    ctx.fillStyle='rgba(36,71,214,0.08)';
+    ctx.beginPath(); ctx.moveTo(-8,-9); ctx.lineTo(8,-9); ctx.lineTo(8,9); ctx.lineTo(-8,9); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle=INK; ctx.beginPath(); ctx.moveTo(-4,-9); ctx.lineTo(-4,-12); ctx.lineTo(3,-12); ctx.lineTo(3,-9); ctx.stroke(); // cap
+    ctx.fillStyle=RED; ctx.fillRect(-7,2,14,6);                                        // gas level
+    ctx.strokeStyle='rgba(36,71,214,0.5)'; ctx.beginPath(); ctx.moveTo(-8,0); ctx.lineTo(8,0); ctx.stroke();
   }
   ctx.restore();
 }

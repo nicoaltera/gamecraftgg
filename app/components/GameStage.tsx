@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import HandFrame from './HandFrame';
+import type { Board } from '@/lib/db';
 
 type Props = {
   slug: string;
   title: string;
-  scoreLabel: string;
-  scoreOrder: 'asc' | 'desc';
+  boards: Board[];
 };
 
 // Set NEXT_PUBLIC_GAME_ORIGIN to a distinct host in production so untrusted
@@ -23,24 +23,26 @@ function playerRef(): string {
   return r;
 }
 
-export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props) {
+export default function GameStage({ slug, title, boards }: Props) {
+  const primaryBoard = boards.find((b) => b.primary) ?? boards[0];
+  // the per-run "dare" uses the challenge board (a game's endless metric makes a
+  // better single-run dare than a cross-session completion metric)
+  const dareBoard = boards.find((b) => b.challenge) ?? primaryBoard;
+
   const frameRef = useRef<HTMLIFrameElement>(null);
   const sessionRef = useRef<string | null>(null);
   const runsRef = useRef(0);
-  const bestRef = useRef<number | null>(null);
+  const bestByBoard = useRef<Record<string, number>>({});
   const [challenge, setChallenge] = useState<number | null>(null);
   const [challengeBeaten, setChallengeBeaten] = useState(false);
-  const [lastScore, setLastScore] = useState<number | null>(null);
+  const [lastScores, setLastScores] = useState<Record<string, number> | null>(null);
   const [name, setName] = useState('');
   const [nameLocked, setNameLocked] = useState(false);
-  const [rank, setRank] = useState<number | null>(null);
-  const [submitted, setSubmitted] = useState(false);
+  const [posted, setPosted] = useState<{ ranks: Record<string, number | null> } | null>(null);
   const [shareNote, setShareNote] = useState<string | null>(null);
 
-  const isBetter = useCallback(
-    (a: number, b: number | null) => (b == null ? true : scoreOrder === 'asc' ? a < b : a > b),
-    [scoreOrder]
-  );
+  const better = (order: 'asc' | 'desc', a: number, b: number | undefined) =>
+    b == null ? true : order === 'asc' ? a < b : a > b;
 
   // session + heartbeat
   useEffect(() => {
@@ -61,7 +63,6 @@ export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props
       .then((r) => r.json())
       .then((d) => {
         sessionRef.current = d.sessionId ?? null;
-        // expose to the sibling ReportButton (report requires a real session)
         (window as { __gsSession?: string }).__gsSession = d.sessionId ?? undefined;
       })
       .catch(() => {});
@@ -71,7 +72,7 @@ export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props
       const payload = JSON.stringify({
         sessionId: sessionRef.current,
         runs: runsRef.current,
-        bestScore: bestRef.current,
+        bestScore: bestByBoard.current[primaryBoard.key],
       });
       navigator.sendBeacon?.('/api/heartbeat', new Blob([payload], { type: 'application/json' })) ||
         fetch('/api/heartbeat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload });
@@ -83,46 +84,54 @@ export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props
       document.removeEventListener('visibilitychange', beat);
       beat();
     };
-  }, [slug]);
+  }, [slug, primaryBoard.key]);
 
   // bridge messages from the game iframe
   useEffect(() => {
     const expectedOrigin = GAME_ORIGIN || window.location.origin;
     function onMsg(e: MessageEvent) {
-      // source check is the primary guard (browser sets e.source unforgeably);
-      // origin check adds defense-in-depth when games run on a separate origin.
       if (e.source !== frameRef.current?.contentWindow) return;
       if (e.origin !== expectedOrigin) return;
       const d = e.data;
       if (!d || typeof d.gs !== 'string') return;
-      if (d.gs === 'gameover' && Number.isFinite(d.score)) {
-        const score = Math.floor(d.score);
+      if (d.gs === 'gameover') {
+        // accept either a single score (→ dare board) or a per-board map
+        const scores: Record<string, number> =
+          d.scores && typeof d.scores === 'object'
+            ? Object.fromEntries(Object.entries(d.scores).filter(([, v]) => Number.isFinite(v)).map(([k, v]) => [k, Math.floor(v as number)]))
+            : Number.isFinite(d.score)
+            ? { [dareBoard.key]: Math.floor(d.score) }
+            : {};
+        if (Object.keys(scores).length === 0) return;
         runsRef.current += 1;
-        if (isBetter(score, bestRef.current)) bestRef.current = score;
-        setLastScore(score);
-        setSubmitted(false);
-        setRank(null);
-        if (challenge != null && (scoreOrder === 'asc' ? score <= challenge : score >= challenge)) setChallengeBeaten(true);
+        for (const b of boards) {
+          if (b.key in scores && better(b.order, scores[b.key], bestByBoard.current[b.key])) {
+            bestByBoard.current[b.key] = scores[b.key];
+          }
+        }
+        setLastScores(scores);
+        setPosted(null);
+        const cv = scores[dareBoard.key];
+        if (challenge != null && cv != null && (dareBoard.order === 'asc' ? cv <= challenge : cv >= challenge)) setChallengeBeaten(true);
       }
       if (d.gs === 'challenge_beaten') setChallengeBeaten(true);
     }
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
-  }, [challenge, isBetter, scoreOrder]);
+  }, [challenge, boards, dareBoard]);
 
-  async function submitScore() {
-    if (lastScore == null || !name.trim() || !sessionRef.current) return;
+  async function submitScores() {
+    if (!lastScores || !name.trim() || !sessionRef.current) return;
     const res = await fetch('/api/score', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ slug, sessionId: sessionRef.current, name: name.trim(), score: lastScore }),
+      body: JSON.stringify({ slug, sessionId: sessionRef.current, name: name.trim(), scores: lastScores }),
     });
     const data = await res.json();
     if (res.ok && data.ok) {
       localStorage.setItem('gs_player_name', name.trim());
       setNameLocked(true);
-      setSubmitted(true);
-      setRank(data.rank ?? null);
+      setPosted({ ranks: data.ranks ?? {} });
       window.dispatchEvent(new CustomEvent('gs:board-refresh'));
     } else {
       setShareNote(data.error ?? 'Could not submit that score.');
@@ -131,10 +140,10 @@ export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props
   }
 
   async function shareChallenge() {
-    const score = bestRef.current ?? lastScore;
+    const score = bestByBoard.current[dareBoard.key] ?? lastScores?.[dareBoard.key];
     if (score == null) return;
     const url = `${location.origin}/g/${slug}?c=${score}&r=${playerRef()}`;
-    const text = `Beat my ${score.toLocaleString()}${scoreLabel ? ` ${scoreLabel}` : ''} on ${title}`;
+    const text = `Beat my ${score.toLocaleString()}${dareBoard.label ? ` ${dareBoard.label}` : ''} on ${title}`;
     if (sessionRef.current) {
       fetch('/api/share', {
         method: 'POST',
@@ -156,6 +165,12 @@ export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props
   }
 
   const challengeSrc = challenge != null ? `?c=${challenge}` : '';
+  const runSummary =
+    lastScores &&
+    boards
+      .filter((b) => b.key in lastScores)
+      .map((b) => `${lastScores[b.key].toLocaleString()}${b.label ? ` ${b.label}` : ''}`)
+      .join(' · ');
 
   return (
     <>
@@ -163,14 +178,19 @@ export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props
         <p className="challenge-banner">
           {challengeBeaten ? (
             <>
-              Dare <span style={{ whiteSpace: 'nowrap' }}><span className="swipe mono">{challenge.toLocaleString()}</span>{scoreLabel ? ` ${scoreLabel}` : ''}</span> beaten. Send one back.
+              Dare{' '}
+              <span style={{ whiteSpace: 'nowrap' }}>
+                <span className="swipe mono">{challenge.toLocaleString()}</span>
+                {dareBoard.label ? ` ${dareBoard.label}` : ''}
+              </span>{' '}
+              beaten. Send one back.
             </>
           ) : (
             <>
               Someone dares you to beat{' '}
               <span style={{ whiteSpace: 'nowrap' }}>
                 <span className="swipe mono">{challenge.toLocaleString()}</span>
-                {scoreLabel ? ` ${scoreLabel}` : ''}.
+                {dareBoard.label ? ` ${dareBoard.label}` : ''}.
               </span>
             </>
           )}
@@ -188,12 +208,12 @@ export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props
         />
       </div>
       <div className="stage-actions">
-        <button className="btn btn-biro" onClick={shareChallenge} disabled={bestRef.current == null && lastScore == null}>
+        <button className="btn btn-biro" onClick={shareChallenge} disabled={bestByBoard.current[dareBoard.key] == null && !lastScores}>
           Dare a friend
         </button>
-        {lastScore != null && !submitted && (
+        {lastScores && !posted && (
           <span className="name-pop">
-            <span className="mono">{lastScore.toLocaleString()}{scoreLabel ? ` ${scoreLabel}` : ''}</span>
+            <span className="mono">{runSummary}</span>
             {!nameLocked && (
               <input
                 value={name}
@@ -203,12 +223,18 @@ export default function GameStage({ slug, title, scoreLabel, scoreOrder }: Props
                 aria-label="Leaderboard name"
               />
             )}
-            <button className="btn" onClick={submitScore} disabled={!name.trim()}>
+            <button className="btn" onClick={submitScores} disabled={!name.trim()}>
               {nameLocked ? `Post as ${name}` : 'Post score'}
             </button>
           </span>
         )}
-        {submitted && <span>{rank ? `#${rank} on the board.` : 'Posted.'}</span>}
+        {posted && (
+          <span>
+            {primaryBoard.key in posted.ranks && posted.ranks[primaryBoard.key]
+              ? `#${posted.ranks[primaryBoard.key]} on ${primaryBoard.label || 'the board'}.`
+              : 'Posted.'}
+          </span>
+        )}
         {shareNote && <span className="gs-toast">{shareNote}</span>}
       </div>
     </>

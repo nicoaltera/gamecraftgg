@@ -1,0 +1,24 @@
+{
+  "title": "Fogspeak",
+  "slug": "fogspeak",
+  "description": "You're the lighthouse: tap dots and hold dashes to steer blind ships through the fog — every wreck is your fault, and it's spectacular.",
+  "verb": "flash coded light at ships",
+  "dials": [
+    "mastery",
+    "comedy"
+  ],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "ships",
+  "scoreOrder": "desc",
+  "palette": [
+    "#0A1522",
+    "#16283B",
+    "#8FA6BC",
+    "#FFE9A8",
+    "#F2B950",
+    "#37D69B",
+    "#D9472B"
+  ],
+  "author": "gamesight"
+}

@@ -29,6 +29,24 @@ games/<slug>/
 ```
 `dials` ⊂ {mastery, progression, comedy, toy} — declares which rubric packs apply. `scoreOrder` is `desc` (higher better) or `asc` (lower better, e.g. fastest time). `scoreLabel` is the unit shown next to numbers.
 
+### Leaderboards — match the metric to the goal
+
+Pick your board(s) from what the game is actually about. An **endless** game ranks its endless metric (`scoreLabel`/`scoreOrder` as above). A game with a **completable goal** should rank efficiency-to-goal (fewest attempts / fastest time), not raw distance — "reached it in 40 throws" beats "flew 2000m". When both an endless chase and a completion exist, declare **two boards**:
+
+```json
+"boards": [
+  { "key": "delivery", "label": "throws", "order": "asc", "primary": true },
+  { "key": "distance", "label": "m", "order": "desc", "challenge": true }
+]
+```
+
+- `primary` = the headline leaderboard. `challenge` = the board the "dare a friend" link uses (default: primary — but point it at an endless per-run metric if the primary is a cross-session completion stat).
+- With `boards` declared, post a per-board map at session end:
+  ```js
+  parent.postMessage({ gs: 'gameover', scores: { distance: 2169, delivery: 40 } }, '*');
+  ```
+  Only include a board's value when this session produced it (e.g. only send `delivery` on the run that reaches the goal). A single-board game may keep posting `{ gs: 'gameover', score: N }`.
+
 ## Allowed libraries (vendored, exact paths — nothing else, no CDNs)
 
 - `/vendor/phaser.min.js` (Phaser 3.90, pinned) — classic script: `<script src="/vendor/phaser.min.js"></script>`

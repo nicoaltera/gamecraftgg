@@ -3,17 +3,24 @@
 import { useCallback, useEffect, useState } from 'react';
 
 type Entry = { name: string; score: number };
+type Board = { key: string; label: string; order: 'asc' | 'desc'; primary: boolean };
 
-export default function Leaderboard({ slug, scoreLabel }: { slug: string; scoreLabel: string }) {
+export default function Leaderboard({ slug, boards }: { slug: string; boards: Board[] }) {
+  const [boardKey, setBoardKey] = useState(boards.find((b) => b.primary)?.key ?? boards[0]?.key ?? '');
   const [tab, setTab] = useState<'all' | 'day'>('all');
   const [entries, setEntries] = useState<Entry[] | null>(null);
 
+  const board = boards.find((b) => b.key === boardKey) ?? boards[0];
+
   const load = useCallback(() => {
-    fetch(`/api/leaderboard/${slug}${tab === 'day' ? '?window=day' : ''}`)
+    const q = new URLSearchParams();
+    if (boardKey) q.set('board', boardKey);
+    if (tab === 'day') q.set('window', 'day');
+    fetch(`/api/leaderboard/${slug}${q.toString() ? `?${q}` : ''}`)
       .then((r) => r.json())
       .then((d) => setEntries(d.entries ?? []))
       .catch(() => setEntries([]));
-  }, [slug, tab]);
+  }, [slug, boardKey, tab]);
 
   useEffect(() => {
     load();
@@ -24,6 +31,15 @@ export default function Leaderboard({ slug, scoreLabel }: { slug: string; scoreL
   return (
     <div className="board">
       <h3>Leaderboard</h3>
+      {boards.length > 1 && (
+        <div className="board-picker">
+          {boards.map((b) => (
+            <button key={b.key} className={b.key === boardKey ? 'active' : ''} onClick={() => setBoardKey(b.key)}>
+              {b.label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="board-tabs">
         <button className={tab === 'all' ? 'active' : ''} onClick={() => setTab('all')}>
           all time
@@ -45,7 +61,7 @@ export default function Leaderboard({ slug, scoreLabel }: { slug: string; scoreL
               </span>
               <span className="score">
                 {e.score.toLocaleString()}
-                {scoreLabel ? ` ${scoreLabel}` : ''}
+                {board?.label ? ` ${board.label}` : ''}
               </span>
             </li>
           ))}

@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import type { Metadata } from 'next';
-import { getGame } from '@/lib/db';
+import { getGame, parseBoards } from '@/lib/db';
 import GameStage from '@/components/GameStage';
 import Leaderboard from '@/components/Leaderboard';
 import ReportButton from '@/components/ReportButton';
@@ -32,6 +32,7 @@ export default async function GamePage({ params }: Params) {
   const { slug } = await params;
   const game = getGame(slug);
   if (!game) notFound();
+  const boards = parseBoards(game);
 
   return (
     <main className="game-page">
@@ -42,12 +43,12 @@ export default async function GamePage({ params }: Params) {
       </div>
       <div className="game-columns">
         <div>
-          <GameStage slug={game.slug} title={game.title} scoreLabel={game.score_label} scoreOrder={game.score_order} />
+          <GameStage slug={game.slug} title={game.title} boards={boards} />
           <p className="about-game">{game.description}</p>
           <ReportButton slug={game.slug} />
         </div>
         <aside>
-          <Leaderboard slug={game.slug} scoreLabel={game.score_label} />
+          <Leaderboard slug={game.slug} boards={boards} />
         </aside>
       </div>
     </main>

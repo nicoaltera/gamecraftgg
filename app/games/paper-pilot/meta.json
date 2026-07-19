@@ -8,6 +8,10 @@
   "mode": "sp",
   "scoreLabel": "m",
   "scoreOrder": "desc",
+  "boards": [
+    { "key": "delivery", "label": "throws", "order": "asc", "primary": true },
+    { "key": "distance", "label": "m", "order": "desc", "challenge": true }
+  ],
   "palette": ["#FCF9F0", "#2447D6", "#D9482B", "#FFFFFF"],
   "author": "gamesight"
 }

@@ -26,9 +26,17 @@
 
 ## Leaderboards & modes
 
-- **Single-player:** per-game leaderboard (daily + all-time tabs), name claimed at score-submit time (moderated word filter), high score persisted client-side too.
+**The leaderboard metric must match what the game is actually about.** A raw-score/distance board is right for an *endless* game, but for a game with a *completable goal* it is wrong — the meaningful competition is efficiency-to-goal (fewest attempts / fastest time to finish), the way Learn to Fly ranked "delivered in N days," not "farthest flight." Designers pick the board metric from the game's structure:
+
+- **Endless game** → one board on the endless metric (score, distance, waves, depth), higher (or, for time-attack, lower) is better.
+- **Goal/completion game** → the primary board ranks efficiency to the goal (fewest throws to deliver, fewest days, fastest clear).
+- **Both** → declare **two boards** (a completion board + an endless-chase board). A game may declare any number of named boards in metadata; the platform renders a board picker and each has daily + all-time tabs.
+- **The per-run "dare a friend" link uses a designated board too** — and a cross-session completion metric ("fewest throws ever") makes a poor single-run dare, so a game can point the dare at its endless board while the headline leaderboard ranks on efficiency. (Separating "what we rank on" from "what a single shared run challenges" is itself the general lesson.)
+
+Details: per-game boards (daily + all-time tabs), name claimed at score-submit time (moderated word filter), high score persisted client-side too. Anti-cheat (quarantine) applies per board.
+
 - **Party (≤8):** Playroom-based rooms; per-room results screen with share card. Session leaderboards only in v1.
-- Every game declares its mode in metadata at design time; the pipeline wires the right service.
+- Every game declares its mode and its board(s) in metadata at design time; the pipeline wires the right services.
 
 ## K-factor instrumentation (day one, non-negotiable)
 
