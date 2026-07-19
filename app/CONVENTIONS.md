@@ -67,6 +67,11 @@ parent.postMessage({ gs: 'challenge_beaten', score: 1234 }, '*');
 ```
 The platform page handles leaderboard submission, player names, and share UI. The game handles its own game-over screen and **instant retry** internally — the platform never interrupts play.
 
+## Controls must be clear and feel right
+
+- **Legible immediately.** Show how to MOVE and how to perform the PRIMARY ACTION in-world (a brief on-screen prompt / control hint), on both desktop and touch. A player should never have to guess the movement keys (e.g. surface "WASD / arrows to move · hold to shoot"). Fade the hint after the player demonstrably gets it.
+- **Hold-to-repeat for continuous actions.** If an action is meant to be performed repeatedly or continuously (firing, throwing, building, digging), holding the input must auto-repeat it at the action's natural cadence — never force the player to spam clicks/taps. (One-shot or single-aimed actions can stay discrete; this is only about actions the player does over and over.)
+
 ## Keyboard
 
 Call `e.preventDefault()` on every key your game consumes (arrows, space, etc.) in your `keydown` handler so the browser never scrolls or page-jumps during play. The platform also focuses the game iframe on load/hover and guards page scroll on game-control keys, but preventing default in-game is required hygiene. On load, `window.focus()` in response to the first pointer interaction is a good extra safeguard (especially if you `preventDefault` on `pointerdown`, which can otherwise suppress focus).
