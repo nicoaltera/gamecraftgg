@@ -1184,6 +1184,28 @@ function drawCountdown(){
     ctx.fillStyle=GREEN; ctx.fillText('ENGAGE!', 0, 0);
     ctx.restore(); ctx.globalAlpha=1;
   }
+  // "YOU — the yellow one" tag pinned to the player plane during the count-in, self-dismissing at ENGAGE
+  if(planes[0] && planes[0].alive && (countT>0 || engageT>0.4)){
+    const pl=planes[0];
+    const psx=(pl.x-camX)*ZOOM, psy=(pl.y-camY)*ZOOM;
+    const a=countT>0 ? Math.min(1,countT*2) : clamp((engageT-0.4)/0.25,0,1);
+    const ty=psy-48+Math.sin(perfNow*5)*3;   // bobbing above the chevron marker
+    ctx.save();
+    ctx.globalAlpha=a;
+    // arrow pointing down to the plane
+    ctx.fillStyle=YELLOW; ctx.strokeStyle=INK; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.moveTo(psx-9,ty+14); ctx.lineTo(psx+9,ty+14); ctx.lineTo(psx,ty+28); ctx.closePath(); ctx.fill(); ctx.stroke();
+    // pill
+    ctx.font='800 18px '+FONT;
+    const label='YOU — the yellow one';
+    const pw=ctx.measureText(label).width+26;
+    ctx.fillStyle=YELLOW; ctx.strokeStyle=INK; ctx.lineWidth=3;
+    roundRect(psx-pw/2, ty-16, pw, 32, 12); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=INK; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(label, psx, ty+1);
+    ctx.restore();
+    ctx.textBaseline='alphabetic';
+  }
 }
 function drawWinBanner(){
   ctx.textAlign='center';

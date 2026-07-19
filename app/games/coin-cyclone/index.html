@@ -259,7 +259,7 @@ let timer = ROUND_TIME, roundSpeed = 1, greed = 0;
 let actors = [], coins = [], specials = [];
 let magnetActor = -1, magnetT = 0;
 let spawnAcc = 0, specialAcc = 0, clusterAcc = 0;
-let shake = 0, hitstop = 0, flash = 0, splashT = 0, overT = 0, winT = 0;
+let shake = 0, hitstop = 0, flash = 0, splashT = 0, overT = 0, winT = 0, youTag = 0;
 let combo = 0, comboT = 0, hint = 1;
 let lastTickSec = 99, newBest = false;
 let cBeaten = false, cBannerT = 0, lastScorePost = 0;
@@ -325,6 +325,7 @@ function resetRound(full) {
   coins = []; specials = []; magnetActor = -1; magnetT = 0;
   spawnAcc = 0; specialAcc = 3; clusterAcc = 5;
   combo = 0; comboT = 0;
+  youTag = 1.6;                       // start-of-round "YOU" callout timer
   for (const p of parts) p.on = false;
   for (const f of floats) f.on = false;
   // seed the arena with some swirling loot so it never starts empty
@@ -796,6 +797,7 @@ function update(dt) {
   if (state === 'roundwin') { winT += dt; return; }
   if (state === 'over') { overT += dt; return; }
   if (state !== 'play') return;
+  if (youTag > 0) youTag -= dt;
 
   // spawn management — keep the arena flowing with loot
   spawnAcc += dt; clusterAcc -= dt; specialAcc -= dt;
@@ -1070,6 +1072,37 @@ function drawActor(a, t) {
   }
 }
 
+// start-of-round "YOU" callout: spotlight + tag with an arrow to the player, self-dismissing
+function drawYouCallout(t) {
+  if (youTag <= 0 || state !== 'play') return;
+  const a = actors[0]; if (!a || a.falling) return;
+  const alpha = Math.min(1, youTag / 0.45);           // hold, then fade over the last 0.45s
+  const hop = a.hop * 6;
+  // soft spotlight glow in the player's own colour
+  const glowR = a.r * 3.1;
+  const rg = ctx.createRadialGradient(a.x, a.y, 0, a.x, a.y, glowR);
+  rg.addColorStop(0, 'rgba(56,225,176,' + (0.32 * alpha) + ')');
+  rg.addColorStop(1, 'rgba(56,225,176,0)');
+  ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(a.x, a.y, glowR, 0, 7); ctx.fill();
+  // pulsing ring on the ground under the player
+  const pr = a.r * (1.5 + 0.5 * Math.sin(t * 8));
+  ctx.globalAlpha = 0.85 * alpha; ctx.strokeStyle = '#FFF4D6'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.ellipse(a.x, a.y + a.r * 0.7, pr, pr * 0.45, 0, 0, 7); ctx.stroke();
+  ctx.globalAlpha = 1;
+  // "YOU" tag with a downward arrow, bobbing above the crown
+  const ty = a.y - a.r - 34 - hop + Math.sin(t * 6) * 3;
+  ctx.font = font(20, 900);
+  const pw = ctx.measureText('YOU').width + 24;
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#38E1B0'; ctx.strokeStyle = '#FFF4D6'; ctx.lineWidth = 3;
+  roundRect(a.x - pw / 2, ty - 16, pw, 30, 11); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#0C2A22'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('YOU', a.x, ty);
+  ctx.fillStyle = '#38E1B0'; ctx.strokeStyle = '#FFF4D6'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(a.x - 8, ty + 15); ctx.lineTo(a.x + 8, ty + 15); ctx.lineTo(a.x, ty + 27); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
 function drawParticles() {
   for (let i = 0; i < P_MAX; i++) {
     const p = parts[i]; if (!p.on) continue;
@@ -1328,6 +1361,7 @@ function render() {
   for (const sp of specials) drawSpecial(sp, t);
   const drawList = actors.slice().sort((p, q) => p.y - q.y);
   for (const a of drawList) drawActor(a, t);
+  drawYouCallout(t);
   drawParticles();
 
   // flash
@@ -1363,17 +1397,6 @@ resetRound(true);
 state = 'splash';
 post({ gs: 'ready' });
 requestAnimationFrame(frame);
-
-/* debug hook for the verification harness (read-only, harmless in production) */
-try {
-  window.__cc = function () {
-    const p = actors[0];
-    return { state, round, runCoins, timer, px: p.x, py: p.y, sack: p.sack,
-      dash: p.dashMeter, CX, CY, DRAIN_R, ARENA_R,
-      coins: coins.map((c) => ({ x: c.x, y: c.y })),
-      specials: specials.map((s) => ({ x: s.x, y: s.y })) };
-  };
-} catch (e) {}
 </script>
 </body>
 </html>

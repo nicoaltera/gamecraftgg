@@ -57,8 +57,10 @@ export async function POST(req: NextRequest) {
       if (board.order === 'asc' && best > 0 && score < best / 20) quarantined = 1;
     }
     insert.run(slug, board.key, sessionId, name, score, quarantined, now);
+    // rank by NAME (the board aggregates each name to their best) — matching on the
+    // just-submitted score misreports null when the player already had a better one.
     const fresh = getLeaderboard(slug, board.order, undefined, board.key);
-    ranks[board.key] = fresh.findIndex((r) => r.name === name && r.score === score) + 1 || null;
+    ranks[board.key] = quarantined ? null : fresh.findIndex((r) => r.name === name) + 1 || null;
   }
 
   if (Object.keys(ranks).length === 0) return NextResponse.json({ error: 'bad score' }, { status: 400 });

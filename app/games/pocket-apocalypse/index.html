@@ -1213,13 +1213,6 @@ function frame(now){
   let dt = now-last; last=now; if(dt>50) dt=50;
   update(dt);
   draw();
-  // opt-in read-only snapshot for scripted drive/verify (no cost unless requested)
-  if(window.__paWant){
-    const zs=[]; for(const z of zombies){ if(z.active) zs.push({x:z.x,y:z.y,hp:z.hp,maxhp:z.maxhp}); }
-    window.__pa = { state, phase, wave, wavesCleared, curWeapon, weapon:WEAPONS[curWeapon].name, kills, px:player.x, py:player.y, alive:player.alive, zombies:zs,
-      coins, owned:owned.slice(), up:{speed:up.speed,fire:up.fire,coin:up.coin,life:up.life}, nextWeapon:nextWeaponIndex(), invuln,
-      shop:(phase==='shop'?shopLayout():null), lastFire };
-  }
   if(!postedReady){ postedReady=true; post({gs:'ready'}); }
   requestAnimationFrame(frame);
 }

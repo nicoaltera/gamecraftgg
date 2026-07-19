@@ -13,8 +13,13 @@ export async function POST(req: NextRequest) {
   const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
   if (!getGame(slug)) return NextResponse.json({ error: 'unknown game' }, { status: 404 });
 
-  const session = db().prepare('SELECT session_id FROM plays WHERE session_id = ? AND slug = ?').get(sessionId, slug);
+  const session = db().prepare('SELECT started_at FROM plays WHERE session_id = ? AND slug = ?').get(sessionId, slug) as
+    | { started_at: number }
+    | undefined;
   if (!session) return NextResponse.json({ error: 'play it before reporting it' }, { status: 403 });
+  // a report only counts from a session that actually spent time in the game —
+  // raises the bar on the auto-unlist so it can't be driven by freshly-minted sessions
+  if (Date.now() - session.started_at < 20_000) return NextResponse.json({ error: 'play it a bit first' }, { status: 403 });
 
   const already = db().prepare('SELECT 1 FROM reports WHERE slug = ? AND session_id = ?').get(slug, sessionId);
   if (already) return NextResponse.json({ ok: true, deduped: true });

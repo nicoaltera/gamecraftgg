@@ -48,6 +48,9 @@ export default function GameStage({ slug, title, boards }: Props) {
   // keyboard to the framed document (element focus alone doesn't), then restore
   // the parent scroll position so focusing never jump-scrolls the page.
   const focusGame = useCallback(() => {
+    // don't steal focus while the player is typing their leaderboard name
+    const el = document.activeElement as HTMLElement | null;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
     const x = window.scrollX, y = window.scrollY;
     frameRef.current?.contentWindow?.focus();
     window.scrollTo(x, y);

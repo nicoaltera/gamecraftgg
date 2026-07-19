@@ -899,27 +899,6 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-
-// ---------- test hook (harness-only; harmless in normal play) ----------
-window.DEADEYE_TEST = {
-  state: () => state,
-  hits: () => hits,
-  time: () => scoreCs,
-  begin: () => { if (state !== 'live') startRun(); },
-  // returns the best hostile target to shoot, or null
-  aim: () => {
-    let bt = null, score2 = -1;
-    for (const t of targets) {
-      if (!t.alive || t.civ || t.raise < 0.6) continue;
-      const c = targetCenter(t);
-      const urgency = 1 - (t.rt / t.holdMax);
-      const s = (t.rState === 'hold' ? 2 : 1) + urgency;
-      if (s > score2) { score2 = s; bt = c; }
-    }
-    return bt;
-  },
-  shootAt: (x, y) => { initAudio && initAudio(); px = x; py = y; rx = x; ry = y; fire(); },
-};
 </script>
 </body>
 </html>

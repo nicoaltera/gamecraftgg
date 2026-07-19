@@ -13,7 +13,7 @@ export default function YoursLink() {
     const list = listCreations();
     if (list.length === 0) {
       setBuilding(0);
-      return;
+      return 0;
     }
     const states = await Promise.all(
       list.slice(0, 20).map(async (c) => {
@@ -26,17 +26,28 @@ export default function YoursLink() {
         }
       })
     );
-    setBuilding(states.filter((s) => s === 'running').length);
+    const n = states.filter((s) => s === 'running').length;
+    setBuilding(n);
+    return n;
   }, []);
 
   useEffect(() => {
-    check();
-    const onChange = () => check();
+    let iv: ReturnType<typeof setInterval> | null = null;
+    const tick = async () => {
+      const n = await check();
+      // only keep polling while something is actually building; stop when idle
+      if (n > 0 && !iv) iv = setInterval(check, 4000);
+      if (n === 0 && iv) {
+        clearInterval(iv);
+        iv = null;
+      }
+    };
+    tick();
+    const onChange = () => tick();
     window.addEventListener('gs:creations-changed', onChange);
-    const iv = setInterval(check, 4000);
     return () => {
       window.removeEventListener('gs:creations-changed', onChange);
-      clearInterval(iv);
+      if (iv) clearInterval(iv);
     };
   }, [check]);
 

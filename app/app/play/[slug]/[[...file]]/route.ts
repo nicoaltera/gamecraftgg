@@ -14,17 +14,28 @@ const TYPES: Record<string, string> = {
   '.json': 'application/json',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.wav': 'audio/wav',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
 };
 
+// The app frames games from its own origin (dev) or NEXT_PUBLIC_APP_ORIGIN (prod,
+// when games are served from a separate origin) — the child must allow both as
+// frame-ancestors or the iframe won't render cross-origin. Games still make no
+// network calls (connect-src 'none'); 'self' on media/font lets a game load
+// bundled audio/webfonts it ships in its own folder.
+const APP_ORIGIN = process.env.NEXT_PUBLIC_APP_ORIGIN?.trim() || '';
 const CSP = [
   "default-src 'none'",
   "script-src 'self' 'unsafe-inline'",
   "style-src 'unsafe-inline'",
   "img-src 'self' data: blob:",
-  "media-src data: blob:",
-  "font-src data:",
+  "media-src 'self' data: blob:",
+  "font-src 'self' data:",
   "connect-src 'none'",
-  "frame-ancestors 'self'",
+  `frame-ancestors 'self'${APP_ORIGIN ? ' ' + APP_ORIGIN : ''}`,
 ].join('; ');
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ slug: string; file?: string[] }> }) {

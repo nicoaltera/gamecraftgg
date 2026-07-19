@@ -1,6 +1,6 @@
 import { ImageResponse } from 'next/og';
 import { NextRequest } from 'next/server';
-import { getGame } from '@/lib/db';
+import { getGame, parseBoards } from '@/lib/db';
 
 // OG cards are a marketing surface (04-site-design-language.md): sketchbook
 // style — paper, ink, a highlighter swipe on the dare number.
@@ -10,6 +10,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ slug
   if (!game) return new Response('not found', { status: 404 });
   const c = req.nextUrl.searchParams.get('c');
   const challenge = c && /^\d+$/.test(c) ? Number(c) : null;
+  const dareLabel = parseBoards(game).find((b) => b.challenge)?.label ?? game.score_label;
 
   return new ImageResponse(
     (
@@ -45,7 +46,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ slug
               }}
             >
               {challenge.toLocaleString()}
-              {game.score_label ? ` ${game.score_label}` : ''}
+              {dareLabel ? ` ${dareLabel}` : ''}
             </span>
             <span style={{ display: 'flex' }}>— if you can</span>
           </div>

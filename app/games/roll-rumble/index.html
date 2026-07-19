@@ -224,7 +224,7 @@ function sfxStyle(n){ var b=520+n*90; tone(b,0.1,'triangle',0.18,b*1.5); setTime
 var STATE={SPLASH:0,PLAY:1,ROUNDWIN:2,GAMEOVER:3};
 var state=STATE.SPLASH;
 var round=1, wins=0, best=0;
-var playerDead=false, playerDeadTimer=0, winTimer=0, splashT=0, roundIntro=0;
+var playerDead=false, playerDeadTimer=0, winTimer=0, splashT=0, roundIntro=0, youTag=0;
 var shake=0, hitstop=0, slowmo=0, gameoverPosted=false;
 var style=0, comboKO=0, prevDanger=0, ooohCD=0;
 try{ best=parseInt(localStorage.getItem('gs_best:'+SLUG)||'0',10)||0; }catch(e){}
@@ -400,7 +400,7 @@ function setupRound(){
   tiltT=0; swayPhase=0; wobPhase=0; TX=0; TY=0; AR=0; AP=0;
   lurchTimer=1.6; lurchTele=0; lurchActive=0; quakeJx=0; quakeJy=0; quakeT=0; curR=DISK_R;
   tiltMode='sway'; modeName='sway'; quakeAnnounced=false; modeBanner=0;
-  playerDead=false; roundIntro=1.1; comboKO=0;
+  playerDead=false; roundIntro=1.1; youTag=1.6; comboKO=0;
   PW.length=0; PEELS.length=0; boulder=null; boulderCD=PW_FIRST; pwTimer=PW_FIRST;
   rrng=mulberry32(9137+round*7);
   var slots=[]; var a0=rrng()*6.283;
@@ -668,6 +668,7 @@ function update(dt){
 
   if(state===STATE.PLAY){
     if(roundIntro>0) roundIntro-=dt;
+    if(youTag>0) youTag-=dt;
     updateTilt(sdt);
     updatePW(sdt);
     updateBoulder(sdt);
@@ -944,6 +945,39 @@ function drawGuy(e){
     ctx.beginPath(); ctx.ellipse(sx, ballY+BALL_R*0.9*ds, BALL_R*0.95*ds, BALL_R*0.34*ds, 0, 0, 6.283); ctx.stroke();
   }
 }
+// start-of-round "YOU" callout: spotlight + tag with an arrow to the player, self-dismissing
+function drawYouCallout(){
+  if(youTag<=0 || state!==STATE.PLAY) return;
+  var e=E[0]; if(!e.alive) return;
+  var surf=project(e.px,e.py,0); var ds=depthScale(e.py);
+  var sx=surf.x, ballY=surf.y-BALL_R*ds;
+  var a=Math.min(1, youTag/0.45);          // hold, then fade over the last 0.45s
+  // soft warm spotlight glow around the player
+  var glowR=BALL_R*2.7*ds;
+  var rg=ctx.createRadialGradient(sx,ballY,0,sx,ballY,glowR);
+  rg.addColorStop(0,'rgba(255,222,120,'+(0.34*a)+')');
+  rg.addColorStop(1,'rgba(255,222,120,0)');
+  ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(sx,ballY,glowR,0,6.283); ctx.fill();
+  // lift the player above any rivals it spawned behind, so YOU is never occluded during the intro
+  drawGuy(e);
+  // pulsing ring hugging the player ball itself (unambiguous even when balls overlap)
+  var pr=BALL_R*(1.5+0.35*Math.sin(splashT*8))*ds;
+  ctx.globalAlpha=0.85*a; ctx.strokeStyle='#fff'; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.ellipse(sx,ballY,pr,pr*0.8,0,0,6.283); ctx.stroke();
+  ctx.globalAlpha=1;
+  // "YOU" tag with a downward arrow, bobbing above the crown
+  var ty=ballY-BALL_R*2.3*ds-26+Math.sin(splashT*6)*3;
+  ctx.font='900 22px '+FONT;
+  var pw=ctx.measureText('YOU').width+28;
+  ctx.globalAlpha=a;
+  ctx.fillStyle='#E5533D'; ctx.strokeStyle='#fff'; ctx.lineWidth=3;
+  rr(sx-pw/2,ty-17,pw,34,12); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('YOU',sx,ty+1);
+  ctx.fillStyle='#E5533D'; ctx.strokeStyle='#fff'; ctx.lineWidth=2.5;
+  ctx.beginPath(); ctx.moveTo(sx-9,ty+17); ctx.lineTo(sx+9,ty+17); ctx.lineTo(sx,ty+30); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.globalAlpha=1;
+}
 function drawTumble(e){
   ctx.save(); ctx.translate(e.tx, e.ty); ctx.rotate(e.trot); ctx.scale(e.tsc,e.tsc);
   drawBall(0,BALL_R+8,BALL_R*0.9,e.c,e.c2,e.trot*3);
@@ -1217,6 +1251,7 @@ function render(){
   for(var w2=0;w2<PW.length;w2++){ if(PW[w2].fall>8) drawPW(PW[w2]); }
   if(boulder && boulder.tele>0) drawBoulder(boulder);
 
+  drawYouCallout();
   drawParticles();
   drawVignette();
   drawHUD();
@@ -1292,16 +1327,6 @@ function relPtr(ev){
 canvas.addEventListener('pointerup',function(ev){ ev.preventDefault(); relPtr(ev); },{passive:false});
 canvas.addEventListener('pointercancel',function(ev){ relPtr(ev); });
 window.addEventListener('blur',function(){ keyL=keyR=keyU=keyD=false; touchPtr={}; joyId=null; joyVX=joyVY=0; });
-
-// ---- optional read-only telemetry for automated play-testing (?dbg=1) ----
-if(/[?&]dbg=1/.test(location.search)){
-  window.__rr={ st:function(){ var p=E[0]; return { state:state, alive:p.alive, px:p.px, py:p.py,
-    r:Math.hypot(p.px,p.py), lx:p.lx, ly:p.ly, TX:TX, TY:TY, mode:tiltMode, dashCD:p.dashCD,
-    round:round, wins:wins, aliveN:(E[0].alive+E[1].alive+E[2].alive+E[3].alive),
-    rivals:E.slice(1).filter(function(e){return e.alive;}).map(function(e){return {px:e.px,py:e.py};}),
-    pw:PW.filter(function(q){return q.fall<50;}).map(function(q){return {px:q.px,py:q.py,type:q.type};}),
-    boulder: boulder?{px:boulder.px,py:boulder.py,tele:boulder.tele}:null }; } };
-}
 
 // ================================================================ go
 requestAnimationFrame(frame);

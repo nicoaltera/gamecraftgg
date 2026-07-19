@@ -778,12 +778,6 @@ function drawUI() {
 }
 
 // ---------- main loop ----------
-// read-only hook for automated play-testing harnesses
-window.__gcdebug = function () {
-  caveAt(camX + FLYX, cvA);
-  return { y: flyY, top: cvA.top, bot: cvA.bot, dist: dist, glow: glow, state: state };
-};
-
 let last = performance.now();
 let postedReady = false;
 function frame(t) {

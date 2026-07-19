@@ -19,7 +19,8 @@ export default function YoursPage() {
       list.map(async (c) => {
         try {
           const r = await fetch(`/api/generation/${c.id}`);
-          if (!r.ok) return [c.id, null] as const;
+          // a 404 (stale localStorage id) is terminal — record it so polling can stop
+          if (!r.ok) return [c.id, { status: 'archived' as const, slug: null }] as const;
           const d = await r.json();
           return [c.id, { status: d.status, slug: d.slug }] as const;
         } catch {
@@ -37,11 +38,13 @@ export default function YoursPage() {
   useEffect(() => {
     if (!creations) return;
     refresh(creations);
-    // keep polling while anything is still building
+    // poll only while something is still building; every id resolves to a status
+    // (404s become 'archived'), so this stops once nothing is running.
     const iv = setInterval(() => {
-      if (Object.values(statuses).some((s) => s.status === 'running') || Object.keys(statuses).length < creations.length) {
-        refresh(creations);
-      }
+      const anyRunning = Object.values(statuses).some((s) => s.status === 'running');
+      const allResolved = creations.every((c) => statuses[c.id]);
+      if (anyRunning || !allResolved) refresh(creations);
+      else clearInterval(iv);
     }, 3000);
     return () => clearInterval(iv);
   }, [creations, refresh, statuses]);

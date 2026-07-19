@@ -1,0 +1,39 @@
+{
+  "title": "Waddlesworth Will Fly",
+  "slug": "waddlesworth",
+  "description": "Waddlesworth the penguin is done with swimming — strap on cardboard wings and flap your way to Puffin Rock, one glorious crash at a time.",
+  "verb": "flap to fly",
+  "dials": [
+    "progression",
+    "comedy"
+  ],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "m",
+  "scoreOrder": "desc",
+  "boards": [
+    {
+      "key": "migration",
+      "label": "flights",
+      "order": "asc",
+      "primary": true
+    },
+    {
+      "key": "distance",
+      "label": "m",
+      "order": "desc",
+      "challenge": true
+    }
+  ],
+  "palette": [
+    "#A5E3EF",
+    "#0E3A4C",
+    "#F7FBFD",
+    "#26343E",
+    "#F49B33",
+    "#FF6B57",
+    "#FFC94D",
+    "#FFD9A0"
+  ],
+  "author": "gamesight"
+}

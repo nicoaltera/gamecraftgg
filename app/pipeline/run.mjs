@@ -66,8 +66,12 @@ function setGen(fields) {
 // ---------- claude helper (streaming) ----------
 // Streams the agent's turns so the build page shows every thinking step, tool
 // call, and message live — instead of hanging on one blocking call. Returns the
-// concatenated assistant text for parsing. `cwd` scopes tool-enabled agents
-// (the judge's Read) so a prompt-injected brief can't read app secrets.
+// concatenated assistant text for parsing. `cwd` sets the judge's working dir to
+// the game folder for convenience, but is NOT a security boundary — Read can
+// still take absolute/`../` paths. The creator prompt is untrusted, so PRODUCTION
+// must run this pipeline inside the sandboxed build-worker container from
+// 05-architecture.md (filesystem-isolated), not on a host with app secrets.
+// TODO(prod): sandbox the judge; until then treat generation as trusted-operator.
 function short(s, n = 150) {
   const one = String(s).replace(/\s+/g, ' ').trim();
   return one.length > n ? one.slice(0, n) + '…' : one;
@@ -273,20 +277,29 @@ Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "crit
   }
 
   if (published) {
-    // registering in the DB happens via syncGamesFromDisk on next db() open in the app;
-    // do it here directly so the game page is live immediately.
+    // Publish authority = the DB insert here PLUS a published.json marker on disk
+    // (the marker is what lets syncGamesFromDisk surface it; without it, the built
+    // files stay invisible). Column set mirrors syncGamesFromDisk — including
+    // `boards` — so a multi-board game's leaderboard works immediately, not after
+    // the next 30s sync (M2).
     db.prepare(
-      `INSERT INTO games (slug, title, description, verb, dials, orientation, mode, score_label, score_order, palette, author, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(slug) DO UPDATE SET title=excluded.title, description=excluded.description, verb=excluded.verb`
+      `INSERT INTO games (slug, title, description, verb, dials, orientation, mode, score_label, score_order, boards, palette, author, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(slug) DO UPDATE SET title=excluded.title, description=excluded.description, verb=excluded.verb,
+         dials=excluded.dials, orientation=excluded.orientation, mode=excluded.mode,
+         score_label=excluded.score_label, score_order=excluded.score_order, boards=excluded.boards, palette=excluded.palette`
     ).run(
       meta.slug, meta.title, meta.description ?? '', meta.verb ?? '', JSON.stringify(meta.dials ?? []),
       meta.orientation ?? 'landscape', meta.mode ?? 'sp', meta.scoreLabel ?? '',
-      meta.scoreOrder === 'asc' ? 'asc' : 'desc', JSON.stringify(meta.palette ?? []), 'creator', Date.now()
+      meta.scoreOrder === 'asc' ? 'asc' : 'desc', JSON.stringify(Array.isArray(meta.boards) ? meta.boards : []),
+      JSON.stringify(meta.palette ?? []), 'creator', Date.now()
     );
+    fs.writeFileSync(path.join(gameDir, 'published.json'), JSON.stringify({ genId, at: Date.now() }));
     setGen({ status: 'published' });
     trace('publish', `Published: /g/${meta.slug}`);
   } else {
+    // Not vetted — remove the build so it can never be sync-published (C1).
+    try { fs.rmSync(gameDir, { recursive: true, force: true }); } catch { /* ignore */ }
     setGen({ status: 'failed' });
     trace('fail', 'Cycle budget exhausted — not published. The critique is available for a re-prompt.');
   }

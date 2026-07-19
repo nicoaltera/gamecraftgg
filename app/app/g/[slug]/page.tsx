@@ -16,8 +16,10 @@ export async function generateMetadata({ params, searchParams }: Params): Promis
   const game = getGame(slug);
   if (!game) return {};
   const challenge = c && /^\d+$/.test(c) ? c : undefined;
+  // the dare uses the challenge board — label the card with ITS unit, not the legacy score_label
+  const dareLabel = parseBoards(game).find((b) => b.challenge)?.label ?? game.score_label;
   const title = challenge
-    ? `Beat ${Number(challenge).toLocaleString()}${game.score_label ? ` ${game.score_label}` : ''} on ${game.title}`
+    ? `Beat ${Number(challenge).toLocaleString()}${dareLabel ? ` ${dareLabel}` : ''} on ${game.title}`
     : `${game.title} — play it now`;
   const ogUrl = `/api/og/${slug}${challenge ? `?c=${challenge}` : ''}`;
   return {

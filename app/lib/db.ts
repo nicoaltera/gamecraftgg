@@ -99,7 +99,7 @@ function migrate(d: Database.Database) {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_scores_slug ON scores(slug, quarantined, score);
+    CREATE INDEX IF NOT EXISTS idx_scores_slug ON scores(slug, board, quarantined, score);
     CREATE INDEX IF NOT EXISTS idx_plays_slug ON plays(slug, started_at);
     CREATE INDEX IF NOT EXISTS idx_edges_slug ON referral_edges(slug, kind);
   `);
@@ -169,6 +169,11 @@ function syncGamesFromDisk(d: Database.Database) {
   for (const slug of fs.readdirSync(GAMES_DIR)) {
     const metaPath = path.join(GAMES_DIR, slug, 'meta.json');
     const htmlPath = path.join(GAMES_DIR, slug, 'index.html');
+    // A game is only published once a `published.json` marker exists. The pipeline
+    // writes files during build/verify but only drops this marker after the judge
+    // PASSES — so mid-build and failed games never go live via disk sync. Seed
+    // games ship the marker. This makes the judge gate real, not decorative (C1).
+    if (!fs.existsSync(path.join(GAMES_DIR, slug, 'published.json'))) continue;
     if (!fs.existsSync(metaPath) || !fs.existsSync(htmlPath)) continue;
     try {
       const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
