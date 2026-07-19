@@ -27,6 +27,7 @@ Derived from the full flash canon research (`research/top-flash-games-dna.md`, `
 - U4. ⛔ Core verb learnable by doing within ~10 seconds, no text-wall tutorial. One verb, describable in ≤5 words.
 - U5. Time-to-fun: first meaningful interaction within seconds of load; no menus of substance before play.
 - U5a. Controls are legible immediately (how to move + the primary action are shown in-world, desktop and touch — no guessing the movement keys), and any action the player performs repeatedly supports **hold-to-repeat**, never click-spam. (Single-shot / single-aimed actions may stay discrete — this applies to continuous/repeated actions.)
+- U5b. **First-time clarity:** a new player understands the goal and every control they need on their first play — controls they can't discover by fiddling (charge, pitch, special, unlock) are shown by a simple in-world explainer scaled to the game's complexity (one line for one-button games; each control for multi-control games, revealed as it becomes relevant), minimal and self-dismissing, never a text wall. Interactive systems (shops/upgrades) state what each option does. The bar is "intuitive on the first try," not "figure-out-able." (A truly one-verb game satisfies this with a single hint.)
 
 **Failure is never boring**
 - U6. ⛔ Failure is cheap AND interesting per the brief's declared model: instant retry (mastery) / spectacle worth watching (comedy) / banked progress (progression). A failure that is slow, opaque, AND unrewarding is a critical fail regardless of archetype.
