@@ -40,9 +40,8 @@ export default function YoursLink() {
     };
   }, [check]);
 
-  const has = listCreations().length > 0 || building > 0;
-  if (!has) return null;
-
+  // Always visible so a creator can always find their games (the page shows an
+  // empty state if they haven't made one yet); the dot lights while any build runs.
   return (
     <Link href="/yours" className="yours-link">
       your games
