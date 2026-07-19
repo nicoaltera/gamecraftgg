@@ -1,7 +1,7 @@
 {
   "title": "Downhill",
   "slug": "downhill",
-  "description": "Draw a line down a snowy hill and let gravity ride your little sledder to the flag.",
+  "description": "Draw a track down 8 themed hills — springs, ice, snowballs & big air — and let gravity ride your little sledder to the flag.",
   "verb": "draw the path",
   "dials": ["mastery", "comedy"],
   "orientation": "landscape",
