@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8FE0FB"/>
+      <stop offset="1" stop-color="#C7F0FF"/>
+    </linearGradient>
+    <linearGradient id="grass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8AD65F"/>
+      <stop offset="1" stop-color="#5FA843"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFF6C8"/>
+      <stop offset="1" stop-color="#FFE07A"/>
+    </radialGradient>
+    <filter id="soft"><feDropShadow dx="0" dy="3" stdDeviation="0" flood-color="#3a2e4a" flood-opacity="0.28"/></filter>
+  </defs>
+
+  <!-- sky + sun -->
+  <rect width="640" height="400" fill="url(#sky)"/>
+  <circle cx="88" cy="78" r="46" fill="url(#sun)"/>
+  <circle cx="88" cy="78" r="46" fill="none" stroke="#FFCF5A" stroke-width="4" opacity="0.6"/>
+  <g fill="#FFFFFF" opacity="0.9">
+    <ellipse cx="500" cy="60" rx="46" ry="20"/><ellipse cx="530" cy="52" rx="34" ry="18"/><ellipse cx="470" cy="52" rx="30" ry="16"/>
+    <ellipse cx="250" cy="42" rx="34" ry="15"/><ellipse cx="278" cy="36" rx="26" ry="13"/>
+  </g>
+
+  <!-- ground -->
+  <rect y="150" width="640" height="250" fill="url(#grass)"/>
+  <!-- tile checker hint -->
+  <g fill="#82CE55" opacity="0.5">
+    <rect x="0" y="150" width="40" height="40"/><rect x="80" y="150" width="40" height="40"/><rect x="160" y="150" width="40" height="40"/><rect x="240" y="150" width="40" height="40"/><rect x="320" y="150" width="40" height="40"/><rect x="400" y="150" width="40" height="40"/><rect x="480" y="150" width="40" height="40"/><rect x="560" y="150" width="40" height="40"/>
+    <rect x="40" y="190" width="40" height="40"/><rect x="120" y="190" width="40" height="40"/><rect x="200" y="190" width="40" height="40"/><rect x="280" y="190" width="40" height="40"/><rect x="360" y="190" width="40" height="40"/><rect x="440" y="190" width="40" height="40"/><rect x="520" y="190" width="40" height="40"/><rect x="600" y="190" width="40" height="40"/>
+  </g>
+  <!-- sandy path -->
+  <path d="M250 400 L300 150 L340 150 L300 400 Z" fill="#EAD59A"/>
+  <path d="M250 400 L300 150 L340 150 L300 400 Z" fill="#F3E4B8" opacity="0.4"/>
+
+  <!-- town houses -->
+  <g filter="url(#soft)">
+    <rect x="470" y="120" width="90" height="70" rx="6" fill="#FBEFD0" stroke="#4A3B5C" stroke-width="3"/>
+    <path d="M462 122 L515 88 L568 122 Z" fill="#E8695C" stroke="#4A3B5C" stroke-width="3"/>
+    <rect x="500" y="150" width="26" height="40" rx="3" fill="#8FC0E8" stroke="#4A3B5C" stroke-width="3"/>
+    <rect x="40" y="128" width="74" height="62" rx="6" fill="#FBEFD0" stroke="#4A3B5C" stroke-width="3"/>
+    <path d="M33 130 L77 100 L121 130 Z" fill="#7BC98E" stroke="#4A3B5C" stroke-width="3"/>
+    <rect x="64" y="150" width="24" height="40" rx="3" fill="#F4C430" stroke="#4A3B5C" stroke-width="3"/>
+  </g>
+  <!-- trees -->
+  <g filter="url(#soft)">
+    <rect x="176" y="150" width="12" height="26" fill="#9B6B43"/><circle cx="182" cy="140" r="26" fill="#5FA843" stroke="#4A3B5C" stroke-width="3"/><circle cx="182" cy="140" r="26" fill="#7ECB5A" opacity="0.5"/>
+    <rect x="418" y="156" width="10" height="22" fill="#9B6B43"/><circle cx="423" cy="148" r="20" fill="#5FA843" stroke="#4A3B5C" stroke-width="3"/>
+  </g>
+
+  <!-- zombies (cute, menacing) -->
+  <g stroke="#4A3B5C" stroke-width="3" stroke-linejoin="round">
+    <g transform="translate(430,300)">
+      <ellipse cx="0" cy="34" rx="24" ry="8" fill="#3a2e4a" opacity="0.2" stroke="none"/>
+      <rect x="-18" y="-8" width="36" height="40" rx="12" fill="#8FC94B"/>
+      <circle cx="0" cy="-18" r="16" fill="#A6D96A"/>
+      <rect x="-6" y="-30" width="12" height="10" rx="3" fill="#8FC94B" stroke="none"/>
+      <path d="M-8 -20 l6 6 M-2 -20 l-6 6" stroke="#4A3B5C" stroke-width="2.5"/>
+      <path d="M6 -20 l6 6 M12 -20 l-6 6" stroke="#4A3B5C" stroke-width="2.5"/>
+      <rect x="-8" y="-8" width="16" height="4" rx="2" fill="#fff" stroke="none"/>
+    </g>
+    <g transform="translate(500,320) scale(0.85)">
+      <ellipse cx="0" cy="34" rx="22" ry="7" fill="#3a2e4a" opacity="0.2" stroke="none"/>
+      <rect x="-16" y="-6" width="32" height="36" rx="11" fill="#E9A23B"/>
+      <circle cx="0" cy="-16" r="14" fill="#F6BD5E"/>
+      <circle cx="-5" cy="-18" r="3" fill="#4A3B5C" stroke="none"/><circle cx="5" cy="-18" r="3" fill="#4A3B5C" stroke="none"/>
+      <path d="M-6 -8 q6 5 12 0" fill="none" stroke="#4A3B5C" stroke-width="2.5"/>
+    </g>
+    <g transform="translate(560,296) scale(1.25)">
+      <ellipse cx="0" cy="36" rx="28" ry="9" fill="#3a2e4a" opacity="0.2" stroke="none"/>
+      <rect x="-22" y="-6" width="44" height="44" rx="14" fill="#B07BD8"/>
+      <circle cx="0" cy="-18" r="18" fill="#C79BE8"/>
+      <path d="M-10 -20 l7 7 M-3 -20 l-7 7" stroke="#4A3B5C" stroke-width="3"/>
+      <path d="M4 -20 l7 7 M11 -20 l-7 7" stroke="#4A3B5C" stroke-width="3"/>
+    </g>
+  </g>
+
+  <!-- hero blasting -->
+  <g transform="translate(180,300)" filter="url(#soft)">
+    <ellipse cx="0" cy="36" rx="24" ry="8" fill="#3a2e4a" opacity="0.25"/>
+    <rect x="-16" y="-4" width="32" height="40" rx="12" fill="#3FA7E0" stroke="#4A3B5C" stroke-width="3"/>
+    <circle cx="0" cy="-18" r="16" fill="#FFD9A8" stroke="#4A3B5C" stroke-width="3"/>
+    <path d="M-17 -22 q17 -18 34 0 q-4 -8 -17 -8 q-13 0 -17 8 Z" fill="#E8695C" stroke="#4A3B5C" stroke-width="3"/>
+    <circle cx="-5" cy="-18" r="2.6" fill="#4A3B5C"/><circle cx="6" cy="-18" r="2.6" fill="#4A3B5C"/>
+    <!-- arm + gun to the right -->
+    <rect x="6" y="2" width="40" height="12" rx="4" fill="#4A3B5C"/>
+    <rect x="40" y="0" width="16" height="16" rx="3" fill="#6B5A7A" stroke="#4A3B5C" stroke-width="3"/>
+    <g stroke="none">
+      <circle cx="70" cy="8" r="16" fill="#FFF3C4"/><circle cx="70" cy="8" r="10" fill="#FFD84A"/><circle cx="70" cy="8" r="5" fill="#fff"/>
+      <path d="M86 8 l26 -6 -6 6 6 6 Z" fill="#FFD84A"/>
+    </g>
+  </g>
+  <circle cx="330" cy="308" r="5" fill="#FFE08A" stroke="#4A3B5C" stroke-width="2"/>
+  <circle cx="380" cy="309" r="5" fill="#FFE08A" stroke="#4A3B5C" stroke-width="2"/>
+
+  <!-- title -->
+  <g font-family="'Baloo 2','Comic Sans MS',sans-serif" font-weight="800" text-anchor="middle">
+    <text x="322" y="70" font-size="58" fill="#4A3B5C" opacity="0.35">POCKET</text>
+    <text x="320" y="68" font-size="58" fill="#FFF3C4" stroke="#4A3B5C" stroke-width="4" paint-order="stroke">POCKET</text>
+    <text x="322" y="120" font-size="48" fill="#4A3B5C" opacity="0.35">APOCALYPSE</text>
+    <text x="320" y="118" font-size="48" fill="#E8695C" stroke="#4A3B5C" stroke-width="4" paint-order="stroke">APOCALYPSE</text>
+  </g>
+
+  <!-- weapon ladder icons -->
+  <g transform="translate(0,372)">
+    <rect x="20" y="-16" width="320" height="30" rx="15" fill="#FFF3C4" stroke="#4A3B5C" stroke-width="3" opacity="0.92"/>
+    <g stroke="#4A3B5C" stroke-width="2.2">
+      <circle cx="42" cy="-1" r="7" fill="#B98A5A"/>
+      <rect x="66" y="-5" width="18" height="9" rx="2" fill="#FFD84A"/>
+      <path d="M96 -5 h20 l-4 9 h-16 z" fill="#FFC04A"/>
+      <rect x="126" y="-5" width="22" height="8" rx="2" fill="#FFD84A"/><rect x="128" y="3" width="6" height="6" fill="#6B5A7A"/>
+      <path d="M158 -6 l20 6 -20 6 4 -6 z" fill="#C7F06A"/>
+      <path d="M188 5 q10 -14 22 -8 q-8 -2 -14 4 q-6 6 -8 4" fill="#FF8A3A"/>
+      <rect x="216" y="-5" width="22" height="9" rx="4" fill="#E8695C"/><path d="M238 0 l8 0" stroke="#4A3B5C" stroke-width="3"/>
+      <circle cx="262" cy="0" r="8" fill="#B98CF0"/><rect x="270" y="-3" width="10" height="6" rx="2" fill="#B98CF0"/>
+    </g>
+    <text x="308" y="4" font-family="'Baloo 2',sans-serif" font-weight="800" font-size="15" fill="#4A3B5C" text-anchor="middle">→ RAY</text>
+  </g>
+</svg>

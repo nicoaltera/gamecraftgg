@@ -1,0 +1,17 @@
+{
+  "title": "Pocket Apocalypse",
+  "slug": "pocket-apocalypse",
+  "description": "A sunny little town overrun by goofy-cute zombies — run, kite the horde, and blast your way up a whole arsenal, one wave at a time.",
+  "verb": "run and blast",
+  "dials": ["mastery", "progression", "comedy"],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "waves",
+  "scoreOrder": "desc",
+  "boards": [
+    { "key": "waves", "label": "waves", "order": "desc", "primary": true },
+    { "key": "kills", "label": "kills", "order": "desc", "challenge": true }
+  ],
+  "palette": ["#7ECB5A", "#5FA843", "#EAD59A", "#FFF3C4", "#E8695C", "#7BD0EE", "#8FC94B", "#4A3B5C"],
+  "author": "gamesight"
+}

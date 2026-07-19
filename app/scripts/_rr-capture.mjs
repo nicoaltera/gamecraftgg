@@ -23,9 +23,9 @@ let shot=0;
 async function snap(tag){ await page.screenshot({path:`${out}/play-${String(shot).padStart(2,'0')}-${tag}.png`}); shot++; }
 
 const t0=Date.now();
-let lastSnap=0, lastMode='';
-let survived=0, maxRound=1;
-while(Date.now()-t0 < 40000){
+let lastSnap=0, lastMode='', lastState=1;
+let survived=0, maxRound=1, wins=0, roundWins=0;
+while(Date.now()-t0 < 120000){
   const s = await page.evaluate(()=> window.__rr ? window.__rr.st() : null);
   if(!s){ await page.waitForTimeout(50); continue; }
   if(s.state===3){ // GAMEOVER -> restart to keep exploring escalation
@@ -45,19 +45,17 @@ while(Date.now()-t0 < 40000){
     if(wx> 0.18) want.add('ArrowRight'); else if(wx<-0.18) want.add('ArrowLeft');
     if(wy> 0.18) want.add('ArrowUp');    else if(wy<-0.18) want.add('ArrowDown');
     await setKeys(want);
-    // aggressive: chase + dash the nearest rival that is closer to the rim than me
-    if(s.rivals.length){
-      let nr=s.rivals[0], bd=1e9; for(const rv of s.rivals){ const d=Math.hypot(rv.px-s.px,rv.py-s.py); if(d<bd){bd=d;nr=rv;} }
-      const nrR=Math.hypot(nr.px,nr.py);
-      if(s.r<0.5*300 && nrR>s.r-20){ // only press attack when I'm safe-ish and they're exposed
-        const ax=nr.px-s.px, ay=nr.py-s.py, ad=Math.hypot(ax,ay)||1;
-        if(bd<200){ if(ax/ad>0.3)want.add('ArrowRight'); else if(ax/ad<-0.3)want.add('ArrowLeft'); if(ay/ad>0.3)want.add('ArrowUp'); else if(ay/ad<-0.3)want.add('ArrowDown'); await setKeys(want); }
-        if(s.dashCD<=0 && bd<130){ await page.keyboard.press('Space'); }
-      }
+    // opportunistic dash only when a rival is right next to me and near the rim
+    if(s.dashCD<=0 && s.rivals.length && s.r<150){
+      let bd=1e9; for(const rv of s.rivals){ const d=Math.hypot(rv.px-s.px,rv.py-s.py); if(d<bd)bd=d; }
+      if(bd<110){ await page.keyboard.press('Space'); }
     }
   }
+  maxRound=Math.max(maxRound, s.round); wins=Math.max(wins, s.wins);
+  if(s.state===2 && lastState!==2){ roundWins++; await snap('WIN-r'+s.round+'-w'+s.wins); }
+  lastState=s.state;
   const now=(Date.now()-t0)/1000;
-  if((s.mode!==lastMode && s.state===1) || now-lastSnap>2.5){
+  if((s.mode!==lastMode && s.state===1) || now-lastSnap>3.5){
     await snap((s.state===1? (s.mode+'-r'+s.round+'-'+Math.round(now)) : 'x'));
     lastMode=s.mode; lastSnap=now;
   }
@@ -65,6 +63,6 @@ while(Date.now()-t0 < 40000){
 }
 await setKeys(new Set());
 console.log('errors', errs.length, errs.slice(0,5));
-console.log('maxRound', maxRound, 'lastSurvive~', survived.toFixed(1)+'s');
+console.log('maxRound', maxRound, 'wins', wins, 'roundWinsSeen', roundWins, 'lastSurvive~', survived.toFixed(1)+'s');
 console.log('msgs', (await page.evaluate(()=>window.__gs.msgs)).map(m=>m.gs+(m.score!=null?':'+m.score:'')).join(', '));
 await browser.close();
