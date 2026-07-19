@@ -107,11 +107,11 @@ const PAY_DIST = 0.14, PAY_AIR = 2.0;
 // hundreds of throws. Distance pays for itself: a 5000m run banks ~700+ stickers, so the
 // four-figure top tiers are earned by the very long throws they unlock.
 const SHOP = [
-  { key:'folds', name:'Airframe',   blurb:'shape & material', prices:[25, 55,110,210,380, 680,1150] },
-  { key:'band',  name:'Launcher',   blurb:'launch power',     prices:[35, 75,150,290,520, 900,1500] },
-  { key:'clip',  name:'Nose Gun',   blurb:'smash + laser',    prices:[55,120,240,440,780,1300,2100] },
-  { key:'thr',   name:'Thruster',   blurb:'hold to boost',    prices:[40, 95,200,380,680,1150,1900] },
-  { key:'fuel',  name:'Fuel Tank',  blurb:'more boost gas',   prices:[30, 70,145,275,500, 860,1400] },
+  { key:'folds', name:'Airframe',   blurb:'glides farther',        prices:[25, 55,110,210,380, 680,1150] },
+  { key:'band',  name:'Launcher',   blurb:'throws harder',         prices:[35, 75,150,290,520, 900,1500] },
+  { key:'clip',  name:'Nose Gun',   blurb:'smash stuff · laser@T4',prices:[55,120,240,440,780,1300,2100] },
+  { key:'thr',   name:'Thruster',   blurb:'hold to boost mid-air', prices:[40, 95,200,380,680,1150,1900] },
+  { key:'fuel',  name:'Fuel Tank',  blurb:'more boost gas',        prices:[30, 70,145,275,500, 860,1400] },
 ];
 const MAXTIER = 7;
 // Evocative per-tier names (index 0 = the bare starting craft). Shown on the shop cards.
@@ -166,7 +166,7 @@ let boil=0;                                     // hand-drawn "boil" phase (upda
 function jit(n){const s=Math.sin(n*127.1+boil*311.7)*43758.5453;return (s-Math.floor(s))-0.5;}
 
 // ---------- save / best ----------
-let save = { st:0, up:{folds:0,band:0,clip:0,thr:0,fuel:0}, throws:0, delivered:false, delThrows:0 };
+let save = { st:0, up:{folds:0,band:0,clip:0,thr:0,fuel:0}, throws:0, delivered:false, delThrows:0, coachDone:{aim:false,pitch:false,boost:false,laser:false} };
 let best = 0;
 try{
   const s = localStorage.getItem('gs_save:'+SLUG);
@@ -178,6 +178,8 @@ try{
       if(typeof j.throws==='number' && isFinite(j.throws)) save.throws=Math.max(0,j.throws);
       if(j.delivered) save.delivered=true;
       if(typeof j.delThrows==='number') save.delThrows=j.delThrows;
+      // first-time coaching "seen it" flags (persist so returning players aren't nagged)
+      if(j.coachDone && typeof j.coachDone==='object'){ for(const k in save.coachDone){ if(j.coachDone[k]) save.coachDone[k]=true; } }
       // clamp 0..7 (tracks are now 7 tiers deep). Old <=5 saves stay valid.
       const o=j.up||{}, cl=n=>Math.max(0,Math.min(MAXTIER,(typeof n==='number'&&isFinite(n))?Math.floor(n):0));
       save.up.folds=cl(o.folds); save.up.band=cl(o.band); save.up.clip=cl(o.clip);
@@ -185,9 +187,13 @@ try{
       save.up.fuel= cl(typeof o.fuel==='number'? o.fuel: o.gum);  // old Gum track -> Fuel Tank
     }
   }
+  // a player who's already reached the mailbox has clearly learned the basics — skip the intro coaching
+  if(save.delivered){ save.coachDone.aim=save.coachDone.pitch=save.coachDone.boost=true; }
   best = Math.max(0, parseInt(localStorage.getItem('gs_best:'+SLUG)||'0',10)||0);
 }catch(e){}
 function persist(){ try{ localStorage.setItem('gs_save:'+SLUG, JSON.stringify(save)); localStorage.setItem('gs_best:'+SLUG, String(best)); }catch(e){} }
+// mark a first-time coaching callout as seen (once the player uses that control) so it never nags again
+function markCoach(k){ if(save.coachDone && !save.coachDone[k]){ save.coachDone[k]=true; persist(); } }
 
 // ---------- challenge param ----------
 let challenge = 0, challengeBeaten = false;
@@ -269,13 +275,14 @@ let laserHeld=false;             // keyboard laser-fire input (F held during fli
 let laserWasOn=false;            // edge-detect for the fire-start sfx
 let plane={x:LAUNCH.x,y:LAUNCH.y,vx:0,vy:0,rot:-0.5};
 let cam={x:-170,y:0,zoom:1,shake:0};
-let run={dist:0,air:0,tricks:0,trickN:0,gas:0,boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0,laserOn:false,laserE:1,stalling:false,stallHang:0,stallWarn:0};
+let run={dist:0,air:0,tricks:0,trickN:0,gas:0,boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0,laserOn:false,laserE:1,stalling:false,stallHang:0,stallWarn:0,usedPitch:false,usedBoost:false,usedLaser:false};
 let settleT=0, tallyT=0, sel=-1, lastScorePost=0, cardShake=0, cardShakeI=-1;
 let dragging=false, dragStart={x:0,y:0}, dragCur={x:0,y:0};
 // mid-flight pitch input: keyboard flags + touch (left-zone drag). Read only while flying.
 let pitchHeld={up:false,down:false};
 const pointers=new Map();        // active flight pointers -> {role:'pitch'|'boost', sy}
 let touchPitch=0, touchPitchActive=false, isTouch=false;
+const touchCapable = (('ontouchstart' in window) || (navigator.maxTouchPoints||0) > 0);
 function pitchInput(){
   let v=0;
   if(pitchHeld.up)   v+=1;       // +1 = nose UP (climb)
@@ -352,7 +359,7 @@ function beginThrow(pow, ang){
   plane.x=LAUNCH.x; plane.y=LAUNCH.y;
   plane.vx=Math.cos(ang)*pow; plane.vy=Math.sin(ang)*pow;
   plane.rot=ang;
-  run={dist:0,air:0,tricks:0,trickN:0,gas:gasMax(),boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0,laserOn:false,laserE:1,stalling:false,stallHang:0,stallWarn:0};
+  run={dist:0,air:0,tricks:0,trickN:0,gas:gasMax(),boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0,laserOn:false,laserE:1,stalling:false,stallHang:0,stallWarn:0,usedPitch:false,usedBoost:false,usedLaser:false};
   boosting=false;                     // never carry a held-boost into a fresh throw
   laserHeld=false; laserWasOn=false;  // never carry a held laser into a fresh throw
   pointers.clear(); touchPitchActive=false; touchPitch=0;  // never carry a touch pitch/boost/fire into a fresh throw
@@ -464,6 +471,7 @@ function stepFly(dt){
     if(Math.random()<0.7) spawn('puff', p.x-16-Math.random()*8, p.y+3+(Math.random()-0.5)*8, -150-Math.random()*90, (Math.random()-0.5)*40, 0.28, 2+Math.random()*2);
     spawn('speed', p.x-22, p.y+(Math.random()-0.5)*10, -170, 0, 0.18, 1);
   }
+  if(run.boostOn && !run.usedBoost){ run.usedBoost=true; markCoach('boost'); } // learned the boost verb → stop coaching it
   // ---- LASER (Nose Gun T4+): a rationed forward beam. Metered charge (run.laserE)
   //      drains while firing, recharges while idle — the "ration it" gauge, like gas. ----
   run.laserOn=false;
@@ -478,9 +486,11 @@ function stepFly(dt){
     run.laserE=Math.min(1, run.laserE + LASER_CHARGE*dt);
   }
   laserWasOn = run.laserOn;
+  if(run.laserOn && !run.usedLaser){ run.usedLaser=true; markCoach('laser'); } // fired the laser → stop coaching it
   // ---- PITCH & ENERGY: active glide. Lean the nose, bank the velocity toward it over
   //      time, trade height<->speed. This is the skill layer over the ballistic arc. ----
   const pin = pitchInput();                                  // -1..1  (+1 nose up / climb)
+  if(pin!==0 && !run.usedPitch){ run.usedPitch=true; markCoach('pitch'); } // tilted the nose → stop coaching it
   // ---- AERODYNAMIC STALL: a wing needs airspeed. If the nose is held steeply UP while
   //      airspeed decays below STALL_SPD, lift dies and the plane noses over (recoverable). ----
   const airspeed = Math.hypot(p.vx, p.vy);
@@ -887,6 +897,7 @@ function render(){
   drawMailbox();
   drawTrail();
   if(dragging && state==='aim') drawAimPreview();
+  if(state==='aim' && !dragging && save.throws===0) drawAimGesture();   // first-timer: animated pull-back demo
   drawPlane();
   drawLaser();
   drawParts();
@@ -1201,6 +1212,38 @@ function drawAimPreview(){
   ctx.beginPath(); ctx.arc(LAUNCH.x, LAUNCH.y, 30, -Math.PI/2, -Math.PI/2+pct*5.5); ctx.stroke();
   txt(Math.round(pct*100)+'%', LAUNCH.x, LAUNCH.y-44, 15, pct>0.9?RED:INK,'center');
 }
+// first-timer only: a little hand grabs the plane, pulls back (down-left) and releases,
+// on a gentle loop — plus a pulsing arrow showing where the throw goes. Demonstrates the verb.
+function drawAimGesture(){
+  const px=LAUNCH.x, py=LAUNCH.y;
+  const loop=(T*0.42)%1;                        // ~2.4s cycle
+  const backX=px-40, backY=py+30;               // pulled-back anchor (down & left)
+  let hx=px, hy=py, pull=0, released=false;
+  if(loop<0.60){ const k=loop/0.60, e=k*k*(3-2*k); hx=px+(backX-px)*e; hy=py+(backY-py)*e; pull=e; }
+  else if(loop<0.72){ const k=(loop-0.60)/0.12; hx=backX+(px-backX)*k; hy=backY+(py-backY)*k; pull=1-k; released=k>0.5; }
+  ctx.save();
+  // the taut "pull" line from plane to hand
+  if(pull>0.03){
+    ctx.strokeStyle=RED; ctx.globalAlpha=0.35+0.4*pull; ctx.lineWidth=2;
+    ctx.setLineDash([5,4]); ctx.beginPath(); ctx.moveTo(px+2,py+2); ctx.lineTo(hx,hy); ctx.stroke(); ctx.setLineDash([]);
+  }
+  // forward flight-direction arrow (up & right), gently pulsing — "it'll fly this way"
+  ctx.globalAlpha=0.45+0.3*Math.abs(Math.sin(T*3));
+  ctx.strokeStyle=INK; ctx.lineWidth=2;
+  const ax=px+14, ay=py-6;
+  ctx.beginPath(); ctx.moveTo(ax,ay); ctx.quadraticCurveTo(ax+46,ay-40, ax+92,ay-46); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ax+92,ay-46); ctx.lineTo(ax+81,ay-51); ctx.moveTo(ax+92,ay-46); ctx.lineTo(ax+84,ay-37); ctx.stroke();
+  // the hand (a little biro fist with a thumb toward the plane)
+  ctx.globalAlpha=0.95;
+  ctx.save(); ctx.translate(hx,hy);
+  ctx.strokeStyle=INK; ctx.fillStyle=PAPER; ctx.lineWidth=2;
+  ctx.beginPath(); wcircle(0,4,6,7401); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(2,-1); ctx.lineTo(7,-6); ctx.stroke();
+  ctx.restore();
+  // release sparkle at the plane
+  if(released){ ctx.globalAlpha=0.7; ctx.fillStyle=RED; for(let s=0;s<3;s++){ ctx.beginPath(); ctx.arc(px+8+s*7, py-4-s*3, 2,0,7); ctx.fill(); } }
+  ctx.restore();
+}
 function drawPlane(){
   const p=plane;
   const foldT=Math.max(0,Math.min(MAXTIER,save.up.folds));
@@ -1395,6 +1438,7 @@ function nextUpgradeInfo(){
   return bi<0?null:{i:bi, price:bp, name:SHOP[bi].name};
 }
 function drawHUD(){
+  let mfBoostCoach=false;   // set when the boost callout is on screen, so laser coaching never stacks on it
   // distance (brag metric) — big, top-left, counts up
   const dm = state==='fly'||state==='settle'||state==='result' ? Math.max(0,Math.round((plane.x-LAUNCH.x)/PXM)) : 0;
   distShown += (dm-distShown)*0.3; if(Math.abs(dm-distShown)<1) distShown=dm;
@@ -1443,9 +1487,11 @@ function drawHUD(){
     txt(empty?'OUT OF GAS':DEVICE[save.up.thr], gx+10, gy+9, 13, empty?PENCIL:INK, 'left');
     txt(run.boostOn?'BOOSTING':'HOLD = boost', gx+gw-10, gy+9, 12, run.boostOn?RED:INK_SOFT, 'right');
     ctx.restore();
-    // first-throws coaching for the new held-boost verb
-    if(save.throws<=3 && run.gas>0 && !run.boostOn && plane.y<GROUND-30){
-      txt('HOLD to boost! ▲', W/2, H-92, 17, RED, 'center', 0.55+0.45*Math.abs(Math.sin(T*4)));
+    // first-time held-boost coaching — appears by the gas gauge the first time you own a thruster,
+    // fades the moment you boost (or after a few airborne seconds). Never nags a returning player.
+    if(!save.coachDone.boost && !run.usedBoost && run.gas>0 && run.air<8 && plane.y<GROUND-30){
+      mfBoostCoach=true;
+      txt(isTouch?'hold the ► side to BOOST (uses gas)':'hold SPACE to BOOST (uses gas)', W-24, (hasLaser()?H-98:H-62), 14, RED, 'right', 0.55+0.45*Math.abs(Math.sin(T*4)));
     }
   }
   // LASER charge gauge + FIRE button (Nose Gun T4+) — a rationed weapon, metered like gas
@@ -1472,24 +1518,39 @@ function drawHUD(){
       txt('FIRE', b.x, b.y+18, 11, low?PENCIL:INK, 'center', 0.9);
       ctx.restore();
     }
-    // first-laser coaching
-    if(save.throws<=6 && !run.laserOn && plane.y<GROUND-30){
-      txt(isTouch?'tap FIRE to zap pigeons! ⚡':'press F to fire the laser! ⚡', W/2, H-72, 15, col, 'center', 0.5+0.4*Math.abs(Math.sin(T*4)));
+    // first-time laser coaching — appears by its gauge / FIRE button the first time you own a laser,
+    // fades once you fire (or after a few airborne seconds). Won't stack on the boost callout.
+    if(!save.coachDone.laser && !run.usedLaser && !mfBoostCoach && run.air<8 && plane.y<GROUND-30){
+      txt(isTouch?'tap FIRE to zap pigeons':'press F to fire the laser', isTouch?W*0.5:lx+lw, isTouch?H-92:ly-14, 14, col, isTouch?'center':'right', 0.5+0.4*Math.abs(Math.sin(T*4)));
     }
   }
-  // mid-flight pitch coaching (first few throws) — teaches the new active-glide verb
-  if(state==='fly' && save.throws<=4 && plane.y<GROUND-30){
+  // pitch coaching — revealed the moment you're first airborne, anchored by the speed/alt meters
+  // (the readouts the climb/dive tradeoff drives). Fades the instant you tilt the nose.
+  if(state==='fly' && !save.coachDone.pitch && !run.usedPitch && run.air<8 && plane.y<GROUND-30){
+    const a=0.55+0.35*Math.abs(Math.sin(T*3));
     if(isTouch){
-      txt('◄ drag ▲▼ pitch', W*0.24, H-26, 14, INK_SOFT, 'center', 0.5+0.3*Math.abs(Math.sin(T*3)));
-      txt('hold boost ►', W*0.78, H-26, 13, INK_SOFT, 'center', 0.5);
+      txt('◄ drag ▲ / ▼ to tilt', W*0.26, H-32, 15, INK, 'center', a);
+      txt('climb to clear · dive for speed', W*0.26, H-14, 12, INK_SOFT, 'center', a*0.9);
     } else {
-      txt('↑ / ↓  pitch — climb to clear, dive to build speed', W/2, H-26, 14, INK_SOFT, 'center', 0.5+0.3*Math.abs(Math.sin(T*3)));
+      txt('↑ / ↓ tilt — climb to clear, dive for speed', 56, 139, 14, INK, 'left', a);
     }
   }
   // aim-state coaching + next-goal
   if(state==='aim'){
     const first = save.throws===0;
-    txt(charging?'release to throw!':(first?'pull back anywhere — release to throw!':'pull back to aim & throw  •  or hold Space'), W/2, H-26, first?20:16, INK, 'center', 0.75+0.25*Math.sin(T*3), -0.01);
+    if(first){
+      // one-time GOAL so a brand-new player instantly knows the objective
+      txt('get the letter to your pen pal — mailbox at 3000m →', W/2, 106, 17, INK, 'center', 0.8+0.2*Math.sin(T*2.4), -0.01);
+      // unmistakable throw instructions — BOTH methods shown clearly
+      if(charging){
+        txt('release to throw!', W/2, H-30, 22, RED, 'center', 0.8+0.2*Math.abs(Math.sin(T*5)), -0.01);
+      } else {
+        txt('PULL BACK the plane, then let go to throw', W/2, H-46, 20, INK, 'center', 0.8+0.2*Math.sin(T*3), -0.01);
+        if(!touchCapable) txt('· · · or HOLD  SPACE  to charge, release to fly', W/2, H-22, 15, INK_SOFT, 'center', 0.7+0.25*Math.sin(T*3+1));
+      }
+    } else {
+      txt(charging?'release to throw!':'pull back to aim & throw  •  or hold Space', W/2, H-26, 16, INK, 'center', 0.75+0.25*Math.sin(T*3), -0.01);
+    }
     if(charging){  // charge meter
       const bw=180, f=Math.min(1,chargeT);
       ctx.save(); ctx.strokeStyle=INK; ctx.lineWidth=2; ctx.fillStyle='rgba(252,249,240,0.9)';
@@ -1647,9 +1708,10 @@ function drawResult(){
     ctx.fillStyle= afford? 'rgba(217,72,43,0.06)' : 'rgba(36,71,214,0.03)';
     ctx.strokeStyle= sel===i? RED : INK; ctx.lineWidth= sel===i?3.4:2;
     ctx.beginPath(); wrect(0,0,r.w,r.h,1.8,5200+i*17); ctx.fill(); ctx.stroke();
-    txt(it.name, r.w/2, 20, 16.5, INK, 'center');
-    drawShopIcon(i, r.w/2, 56);
-    txt(cardBlurb(it,tier), r.w/2, 88, 11.5, INK_SOFT, 'center');
+    txt(it.name, r.w/2, 17, 16.5, INK, 'center');
+    txt(it.blurb, r.w/2, 35, 11.5, INK, 'center', 0.85);      // plain what-it-does line (self-explaining shop)
+    drawShopIcon(i, r.w/2, 60);
+    txt(cardBlurb(it,tier), r.w/2, 90, 11, INK_SOFT, 'center'); // aspirational: the next tier you unlock
     // tier pips (7 tiers)
     for(let p=0;p<MAXTIER;p++){
       const pipx=r.w/2-42+p*14;
