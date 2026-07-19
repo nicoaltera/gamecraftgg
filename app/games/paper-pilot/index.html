@@ -48,6 +48,22 @@ const DEVICE = ['(none)','Pocket Fan','Propeller','Drone','Rocket','Ion Thruster
 // maxed full-power + rationed boost throw ~2200m+ — mailbox delivery guaranteed by persistence.
 const DEFAULT_POW = 0.8, DEFAULT_ANG = -0.66; // quick-throw (space/tap): 80% power, ~38 deg up
 
+// ---- MID-FLIGHT PITCH & ENERGY (the active-glide skill) ----
+// Pitch input (↑/W = nose up, ↓/S = nose down; on touch: drag ▲▼ in the left zone)
+// LEANS the nose, and the velocity vector BANKS toward that nose over time — a turn
+// RATE, not an instant snap — so steering feels weighty, like weighting a real paper
+// plane. Energy trades naturally: climbing sheds forward speed for height, diving
+// trades height back into speed (gravity does the honest work; ENERGY_EXCH adds a
+// little arcade juice on top). A gentle PITCH_DRAG means hauling on the nose hard
+// bleeds a touch of energy, so smooth flying beats yanking. Tuned floaty, never twitchy.
+const PITCH_EASE   = 3.6;    // how fast the pitch COMMAND eases toward the raw input (/s)
+const PITCH_MAX    = 0.92;   // max bank of the velocity off the flight path (rad ≈ 53°)
+const TURN_RATE    = 2.3;    // how fast velocity chases the nose (/s) — this IS the "weight"
+const ENERGY_EXCH  = 200;    // extra px/s traded per unit climb/dive (arcade juice on gravity)
+const PITCH_DRAG   = 0.15;   // energy bled while actively banking hard (/s * |pitch|)
+const NOSE_LEAD    = 0.34;   // extra visible nose tilt beyond the flight path (rad) for readability
+const DIVE_TERM_BONUS = 2.4; // diving raises the terminal fall-cap so committed dives feel fast
+
 // ---------- TUNING CONSTANTS (economy) ----------
 // Stickers = dist_m*PAY_DIST + airtime_s*PAY_AIR + trick bonuses. Never < 1 (bank every run).
 // First throw pays ~28; cheapest tier-1 prices below = a buy on run 1, then next always ~1-3 runs out.
@@ -201,9 +217,20 @@ let charging=false, chargeT=0;   // keyboard charge-and-release throw
 let boosting=false;              // held-boost input state (pointer down / Space held during flight)
 let plane={x:LAUNCH.x,y:LAUNCH.y,vx:0,vy:0,rot:-0.5};
 let cam={x:-170,y:0,zoom:1,shake:0};
-let run={dist:0,air:0,tricks:0,trickN:0,gas:0,boostOn:false,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
+let run={dist:0,air:0,tricks:0,trickN:0,gas:0,boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
 let settleT=0, tallyT=0, sel=-1, lastScorePost=0, cardShake=0, cardShakeI=-1;
 let dragging=false, dragStart={x:0,y:0}, dragCur={x:0,y:0};
+// mid-flight pitch input: keyboard flags + touch (left-zone drag). Read only while flying.
+let pitchHeld={up:false,down:false};
+const pointers=new Map();        // active flight pointers -> {role:'pitch'|'boost', sy}
+let touchPitch=0, touchPitchActive=false, isTouch=false;
+function pitchInput(){
+  let v=0;
+  if(pitchHeld.up)   v+=1;       // +1 = nose UP (climb)
+  if(pitchHeld.down) v-=1;       // -1 = nose DOWN (dive)
+  if(v===0 && touchPitchActive) v=touchPitch;
+  return Math.max(-1,Math.min(1,v));
+}
 let banner=null, bannerT=0;             // {text, sub, col}
 let timeScale=1, slowT=0;
 let penpalWave=0;                        // >0: pen pal waving
@@ -270,8 +297,9 @@ function beginThrow(pow, ang){
   plane.x=LAUNCH.x; plane.y=LAUNCH.y;
   plane.vx=Math.cos(ang)*pow; plane.vy=Math.sin(ang)*pow;
   plane.rot=ang;
-  run={dist:0,air:0,tricks:0,trickN:0,gas:gasMax(),boostOn:false,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
+  run={dist:0,air:0,tricks:0,trickN:0,gas:gasMax(),boostOn:false,pitch:0,stickers:0,dPts:0,aPts:0,tPts:0,newBest:false,justDelivered:false,pageAt:0};
   boosting=false;                     // never carry a held-boost into a fresh throw
+  pointers.clear(); touchPitchActive=false; touchPitch=0;  // never carry a touch pitch/boost into a fresh throw
   save.throws++; persist();
   resetObs(); for(const f of floats) f.on=false;
   for(const tr of trail) tr.on=false; trailAcc=0;
@@ -339,15 +367,34 @@ function stepFly(dt){
     if(Math.random()<0.7) spawn('puff', p.x-16-Math.random()*8, p.y+3+(Math.random()-0.5)*8, -150-Math.random()*90, (Math.random()-0.5)*40, 0.28, 2+Math.random()*2);
     spawn('speed', p.x-22, p.y+(Math.random()-0.5)*10, -170, 0, 0.18, 1);
   }
+  // ---- PITCH & ENERGY: active glide. Lean the nose, bank the velocity toward it over
+  //      time, trade height<->speed. This is the skill layer over the ballistic arc. ----
+  const pin = pitchInput();                                  // -1..1  (+1 nose up / climb)
+  run.pitch += (pin - run.pitch)*Math.min(1, PITCH_EASE*dt); // eased command (weighty, no snap)
+  if(p.y < GROUND-8){                                         // steering only matters aloft; never fights the ground slide/settle
+    let spd = Math.hypot(p.vx, p.vy);
+    if(spd > 1){
+      let dir = Math.atan2(p.vy, p.vx);                      // current flight-path angle
+      const desired = dir - run.pitch*PITCH_MAX;             // bank the path toward the nose (up = -)
+      dir += (desired - dir)*Math.min(1, TURN_RATE*dt);      // finite turn rate = the "weight"
+      dir = Math.max(-1.3, Math.min(1.3, dir));              // never over-rotate past ~77° — stays graceful & forward
+      // energy juice ONLY while actively pitching (|pitch|): climb(sin<0) sheds / dive(sin>0) builds.
+      // Hands-off flight keeps the original ballistic glide untouched (so it still lands & settles).
+      spd += Math.sin(dir)*ENERGY_EXCH*Math.abs(run.pitch)*dt;
+      spd -= spd*PITCH_DRAG*Math.abs(run.pitch)*dt;          // hauling the nose hard bleeds a little
+      spd = Math.max(36, spd);
+      p.vx = Math.cos(dir)*spd; p.vy = Math.sin(dir)*spd;
+    }
+  }
   const dr=drag();
   p.vx -= p.vx*dr*dt;
   p.vy -= p.vy*dr*dt*0.5;
-  const tv=term();
+  const tv=term()*(run.pitch<0 ? 1 + (-run.pitch)*DIVE_TERM_BONUS : 1); // diving lifts the fall cap
   if(p.vy > tv) p.vy += (tv-p.vy)*Math.min(1, GLIDE*dt);
   p.x += p.vx*dt; p.y += p.vy*dt;
   const spd = Math.hypot(p.vx,p.vy);
-  // attitude follows velocity (banked, damped)
-  const target = Math.atan2(p.vy, Math.max(60,p.vx*1.15));
+  // attitude follows velocity (banked, damped), leaned extra by the pitch command for readability
+  const target = Math.atan2(p.vy, Math.max(60,p.vx*1.15)) - run.pitch*NOSE_LEAD;
   p.rot += (target-p.rot)*Math.min(1, 8*dt);
   if(p.y < GROUND-10) run.air += dt;
 
@@ -383,9 +430,16 @@ function stepFly(dt){
       const bx=o.x, bw=176, top=GROUND-66;
       if(p.x>bx-10 && p.x<bx+bw+10 && p.y>top-8){
         if(p.y < top+18 && p.vy > 0){                        // roof = trampoline
-          p.y=top-8; p.vy = -Math.max(Math.abs(p.vy)*1.22, 300); p.vx*= (0.98*(speedKeepHit()));
-          if(o.hit===0){ run.tricks+=TRICK.bus; run.trickN++; floatTxt('+'+TRICK.bus+' BUS BOING!', p.x, top-34, RED, 20); }
-          o.hit++; sfx.boing(1); puff(p.x,top,8,90); cam.shake=Math.max(cam.shake,4);
+          const diving = run.pitch < -0.3 && p.vy > 170;     // slam it mid-dive = a huge launch
+          p.y=top-8; p.vy = -Math.max(Math.abs(p.vy)*(diving?1.6:1.22), diving?480:300); p.vx*= (0.98*(speedKeepHit()));
+          if(o.hit===0){
+            run.tricks+=TRICK.bus; run.trickN++;
+            if(diving){ run.tricks+=TRICK.bus; run.trickN++; floatTxt('DIVE SLAM! +'+(TRICK.bus*2), p.x, top-38, RED, 23); }
+            else floatTxt('+'+TRICK.bus+' BUS BOING!', p.x, top-34, RED, 20);
+          }
+          o.hit++; sfx.boing(1);
+          if(diving){ sfx.smash(); for(let s=0;s<6;s++) spawn('star',p.x,top,(Math.random()-0.5)*220,-Math.random()*200,0.8,1); }
+          puff(p.x,top,diving?11:8,diving?120:90); cam.shake=Math.max(cam.shake,diving?6:4);
         } else if(p.y > top+18 && !o.hit){
           o.hit++;
           if(p.vx > 420){                                     // fast = smash straight through the windows
@@ -402,9 +456,14 @@ function stepFly(dt){
     } else if(o.t==='awn'){
       const ax=o.x, aw=112, top=GROUND-96;
       if(p.x>ax-6 && p.x<ax+aw+6 && p.y>top-10 && p.y<top+16 && p.vy>0){
-        p.y=top-10; p.vy = -(Math.abs(p.vy)*1.12 + 130); p.vx *= 0.96*speedKeepHit();
-        if(o.hit===0){ run.tricks+=TRICK.awning; run.trickN++; floatTxt('+'+TRICK.awning+' AWNING POP!', p.x, top-30, RED, 20); }
-        o.hit++; sfx.boing(0.7); puff(p.x,top,7,80);
+        const diving = run.pitch < -0.3 && p.vy > 150;       // dive into the canopy = a bigger pop
+        p.y=top-10; p.vy = -(Math.abs(p.vy)*(diving?1.4:1.12) + (diving?210:130)); p.vx *= 0.96*speedKeepHit();
+        if(o.hit===0){
+          run.tricks+=TRICK.awning; run.trickN++;
+          if(diving){ run.tricks+=TRICK.awning; run.trickN++; floatTxt('DIVE POP! +'+(TRICK.awning*2), p.x, top-30, RED, 22); }
+          else floatTxt('+'+TRICK.awning+' AWNING POP!', p.x, top-30, RED, 20);
+        }
+        o.hit++; sfx.boing(diving?0.9:0.7); puff(p.x,top,diving?9:7,diving?95:80);
       }
     } else if(o.t==='tree'){
       const cxr=o.x, cy=GROUND-118, r=58;
@@ -549,9 +608,15 @@ post({gs:'ready'});
 function toGame(e){ return { x:(e.clientX-offX)/scl, y:(e.clientY-offY)/scl }; }
 window.addEventListener('pointerdown', (e)=>{
   e.preventDefault(); audioInit();
+  if(e.pointerType==='touch') isTouch=true;
   const g=toGame(e);
+  if(state==='fly'){
+    // two thumb zones: LEFT = pitch (drag ▲▼), RIGHT = hold to boost.
+    if(g.x < W*0.46){ pointers.set(e.pointerId,{role:'pitch',sy:g.y}); touchPitchActive=true; touchPitch=0; }
+    else { pointers.set(e.pointerId,{role:'boost'}); startBoost(); }  // hold to fire the thruster
+    return;
+  }
   if(state==='aim'){ dragging=true; dragStart=g; dragCur=g; }
-  else if(state==='fly'){ startBoost(); }        // hold to fire the thruster
   else if(state==='settle'){ /* let it land */ }
   else if(state==='result'){
     const hit = resultHit(g);
@@ -559,9 +624,22 @@ window.addEventListener('pointerdown', (e)=>{
     else { toAim(); dragging=true; dragStart=g; dragCur=g; }   // one gesture: tap-drag straight into next throw
   }
 },{passive:false});
-window.addEventListener('pointermove',(e)=>{ if(dragging) dragCur=toGame(e); },{passive:false});
-window.addEventListener('pointerup',(e)=>{
-  boosting=false;                 // release always stops the held boost
+window.addEventListener('pointermove',(e)=>{
+  if(dragging) dragCur=toGame(e);
+  const pr=pointers.get(e.pointerId);
+  if(pr && pr.role==='pitch'){ const g=toGame(e); touchPitch=Math.max(-1,Math.min(1,(pr.sy-g.y)/70)); } // drag up = nose up
+},{passive:false});
+function endPointer(e){
+  const pr=pointers.get(e.pointerId);
+  if(pr){                          // a flight pointer lifted: recompute boost/pitch state
+    pointers.delete(e.pointerId);
+    let boostAny=false, pitchAny=false;
+    for(const v of pointers.values()){ if(v.role==='boost') boostAny=true; if(v.role==='pitch') pitchAny=true; }
+    if(!boostAny) boosting=false;                 // release always stops the held boost
+    if(!pitchAny){ touchPitchActive=false; touchPitch=0; }
+    return;
+  }
+  boosting=false;                  // safety: any stray release stops boost
   if(!dragging) return;
   dragging=false;
   const dx=dragStart.x-dragCur.x, dy=dragStart.y-dragCur.y;
@@ -573,7 +651,9 @@ window.addEventListener('pointerup',(e)=>{
   ang=Math.max(-1.45, Math.min(0.5, ang));                  // must go rightish
   const pw=Math.min(1, len/190)*power();
   if(state==='aim') beginThrow(Math.max(pw, power()*0.2), ang);
-},{passive:false});
+}
+window.addEventListener('pointerup', endPointer, {passive:false});
+window.addEventListener('pointercancel', endPointer, {passive:false});
 function releaseCharge(){
   if(state==='aim' && charging){
     const f=Math.min(1, chargeT);
@@ -591,11 +671,18 @@ window.addEventListener('keydown',(e)=>{
     else if(state==='result'){ if(sel>=0) buy(sel); else toAim(); }  // back to aim — you throw it yourself
   } else if(k==='Enter'){
     if(state==='result'){ if(sel>=0) buy(sel); else toAim(); }
-  } else if(k==='ArrowRight'||k==='d'){ if(state==='result'){ sel=(sel+1)%SHOP.length; sfx.pop(); } }
+  } else if(k==='ArrowUp'||k==='w'||k==='W'){ e.preventDefault(); pitchHeld.up=true; }    // mid-flight: nose UP
+  else if(k==='ArrowDown'||k==='s'||k==='S'){ e.preventDefault(); pitchHeld.down=true; }   // mid-flight: nose DOWN
+  else if(k==='ArrowRight'||k==='d'){ if(state==='result'){ sel=(sel+1)%SHOP.length; sfx.pop(); } }
   else if(k==='ArrowLeft'||k==='a'){ if(state==='result'){ sel=sel<=0?SHOP.length-1:sel-1; sfx.pop(); } }
   else if(k>='1'&&k<='5'){ if(state==='result') buy(+k-1); }
 });
-window.addEventListener('keyup',(e)=>{ if(e.key===' '||e.key==='Spacebar'){ e.preventDefault(); releaseCharge(); boosting=false; } });
+window.addEventListener('keyup',(e)=>{
+  const k=e.key;
+  if(k===' '||k==='Spacebar'){ e.preventDefault(); releaseCharge(); boosting=false; }
+  else if(k==='ArrowUp'||k==='w'||k==='W') pitchHeld.up=false;
+  else if(k==='ArrowDown'||k==='s'||k==='S') pitchHeld.down=false;
+});
 
 // ============================================================
 //  RENDERING — everything is wobbly biro ink on notebook paper
@@ -1084,6 +1171,8 @@ function drawHUD(){
   txt('m', 14+String(Math.round(distShown)).length*23, 6, 20, INK_SOFT, 'left');
   ctx.restore();
   txt('best '+best+'m', 28, 74, 16, RED, 'left', 0.9, -0.01);
+  // altitude + speed meters during flight (hand-ink, same readout family as distance)
+  if(state==='fly'||state==='settle') drawFlightMeters();
   // stickers top-right
   const sp=1+Math.max(0,hudStickerPulse)*0.25;
   ctx.save(); ctx.translate(W-30,40); ctx.scale(sp,sp);
@@ -1126,6 +1215,15 @@ function drawHUD(){
       txt('HOLD to boost! ▲', W/2, H-72, 17, RED, 'center', 0.55+0.45*Math.abs(Math.sin(T*4)));
     }
   }
+  // mid-flight pitch coaching (first few throws) — teaches the new active-glide verb
+  if(state==='fly' && save.throws<=4 && plane.y<GROUND-30){
+    if(isTouch){
+      txt('◄ drag ▲▼ pitch', W*0.24, H-26, 14, INK_SOFT, 'center', 0.5+0.3*Math.abs(Math.sin(T*3)));
+      txt('hold boost ►', W*0.78, H-26, 13, INK_SOFT, 'center', 0.5);
+    } else {
+      txt('↑ / ↓  pitch — climb to clear, dive to build speed', W/2, H-26, 14, INK_SOFT, 'center', 0.5+0.3*Math.abs(Math.sin(T*3)));
+    }
+  }
   // aim-state coaching + next-goal
   if(state==='aim'){
     const first = save.throws===0;
@@ -1143,6 +1241,39 @@ function drawHUD(){
       txt(afford? 'you can afford: '+nu.name+'!' : 'next: '+nu.name+' — '+(nu.price-save.st)+' more stickers', 28, H-52, 15, afford?RED:INK_SOFT, 'left', 0.9);
     }
   }
+}
+// altitude (vertical ink altimeter on the left edge) + speed (readout+bar) under the distance.
+// These make the pitch tradeoff legible: watch speed drop as you climb, rise as you dive.
+function drawFlightMeters(){
+  const alt = Math.max(0,(GROUND-6 - plane.y)/PXM);     // metres above the street
+  const spd = Math.hypot(plane.vx,plane.vy)/PXM;         // current speed (m/s in world scale)
+  // ---- SPEED: small labelled readout + bar under "best", matches distance ink style ----
+  const sbx=28, sby=118, sbw=132;
+  const SPD_REF=190, sf=Math.max(0,Math.min(1,spd/SPD_REF));
+  txt('spd', sbx, 100, 13, INK_SOFT, 'left', 0.9);
+  txt(Math.round(spd)+'', sbx+34, 100, 22, INK, 'left', 1, -0.01);
+  txt('m/s', sbx+34+String(Math.round(spd)).length*13+4, 104, 12, INK_SOFT, 'left', 0.85);
+  ctx.save();
+  ctx.strokeStyle=INK; ctx.lineWidth=1.8; ctx.fillStyle='rgba(252,249,240,0.85)';
+  ctx.beginPath(); wrect(sbx,sby,sbw,8,1.1,6100); ctx.fill(); ctx.stroke();
+  ctx.fillStyle= sf>0.82? RED : INK_SOFT;
+  ctx.fillRect(sbx+2, sby+2, (sbw-4)*sf, 4);
+  ctx.restore();
+  // ---- ALTITUDE: vertical altimeter tape on the far-left edge, fills from the ground up ----
+  const gx=18, gTop=150, gBot=H-108, gh=gBot-gTop, gw=13;
+  const ALT_REF=150, af=Math.max(0,Math.min(1,alt/ALT_REF));
+  ctx.save();
+  ctx.strokeStyle=INK; ctx.lineWidth=2; ctx.fillStyle='rgba(252,249,240,0.85)';
+  ctx.beginPath(); wrect(gx,gTop,gw,gh,1.3,6001); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=INK_SOFT;
+  ctx.fillRect(gx+3, gBot-3-(gh-6)*af, gw-6, (gh-6)*af);   // fill grows upward with altitude
+  ctx.strokeStyle='rgba(36,71,214,0.22)'; ctx.lineWidth=1;
+  for(let i=1;i<4;i++){ const ty=gBot-gh*i/4; ctx.beginPath(); ctx.moveTo(gx,ty); ctx.lineTo(gx+gw,ty); ctx.stroke(); }
+  const my=gBot-3-(gh-6)*af;                               // moving marker at the current altitude
+  ctx.fillStyle=RED; ctx.beginPath(); ctx.moveTo(gx+gw+1,my); ctx.lineTo(gx+gw+9,my-5); ctx.lineTo(gx+gw+9,my+5); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  txt('alt', gx+gw/2, gTop-12, 13, INK, 'center', 0.9);
+  txt(Math.round(alt)+'m', gx+gw+13, Math.max(gTop+4,Math.min(gBot-4,my)), 15, INK, 'left', 1);
 }
 function drawSticker(x,y,r){
   // a little red star sticker (the currency)
