@@ -67,6 +67,10 @@ parent.postMessage({ gs: 'challenge_beaten', score: 1234 }, '*');
 ```
 The platform page handles leaderboard submission, player names, and share UI. The game handles its own game-over screen and **instant retry** internally — the platform never interrupts play.
 
+## Keyboard
+
+Call `e.preventDefault()` on every key your game consumes (arrows, space, etc.) in your `keydown` handler so the browser never scrolls or page-jumps during play. The platform also focuses the game iframe on load/hover and guards page scroll on game-control keys, but preventing default in-game is required hygiene. On load, `window.focus()` in response to the first pointer interaction is a good extra safeguard (especially if you `preventDefault` on `pointerdown`, which can otherwise suppress focus).
+
 ## URL params the game must honor
 
 - `?c=<int>` — challenge target. Render a persistent, styled "TARGET: <n>" during play; celebrate visibly when beaten (and post `challenge_beaten`).

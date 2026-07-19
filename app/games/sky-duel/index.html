@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Sky Duel</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#20304C;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+/* ============================================================
+   SKY DUEL — a free-for-all barnstormer dogfight over the clouds.
+   You + 3 bot-piloted planes duel in a bounded sky. Shoot the
+   others down; be the last plane flying to win the round.
+   Pure Canvas2D + WebAudio. One file. No assets.
+   ============================================================ */
+
+const SLUG = 'sky-duel';
+const W = 960, H = 540;               // fixed virtual resolution (landscape)
+
+/* ---------- FLIGHT MODEL (momentum energy flight — the heart of it) ----------
+   The plane carries a real velocity vector. THRUST pushes along the nose,
+   GRAVITY always pulls down, DRAG bleeds speed, and a gentle ALIGN grips the
+   momentum toward the nose so turns redirect energy (weighty, not twitchy).
+   Climb with the nose up and you trade speed for height; point the nose down
+   and gravity trades that height back into speed (à la Luftrausers). No thrust
+   = you glide, slow, and sag. Tuned floaty-fun and controllable. */
+const TURN_RATE  = 2.75;   // rad/s the nose swings when you rotate (A/D · arrows)
+const THRUST     = 305;    // px/s^2 forward accel while thrusting (up / W / hold)
+const IDLE_PUSH  = 74;     // px/s^2 constant prop-wash so you always creep forward
+const GRAV       = 172;    // px/s^2 downward pull (the honest dive/climb trade)
+const DRAG       = 0.55;   // /s linear velocity damping (energy bleed)
+const ALIGN      = 2.25;   // /s momentum grips toward the nose (this IS the "weight")
+const MAX_SPEED  = 470;    // px/s speed cap (dive terminal)
+const BULLET_SPD = 560;    // px/s muzzle speed, added to the shooter's velocity
+const BULLET_LIFE= 1.05;   // s tracer lifetime
+const BANK_EASE  = 8.0;    // /s how fast the visible roll follows your turn input
+
+/* ---------- GUN HEAT (the metered resource — fire discipline) ----------
+   Hold the trigger and the barrel HEATS. Peg it and the gun JAMS (overheats)
+   until it cools back to the reset line — so you must burst-fire and let it
+   breathe. Rewards short, aimed bursts over spraying. */
+const FIRE_CD    = 0.085;  // s between player shots (rat-a-tat)
+const HEAT_SHOT  = 0.062;  // heat added per shot (~16 shots to peg)
+const HEAT_COOL  = 0.52;   // heat/s bled while not firing
+const HEAT_RESET = 0.34;   // must cool below this to un-jam after an overheat
+
+/* ---------- COMBAT ---------- */
+const PLANE_R    = 15;     // hit radius
+const PLAYER_HP  = 4;      // your health pips
+const BOT_HP     = 3;      // rival health pips
+const ARENA_PAD  = 26;     // soft-wall margin inside the 960x540 sky
+
+/* ---------- palette ---------- */
+const SKY_TOP='#63B7F0', SKY_MID='#8FD0F6', SKY_LOW='#CFEBFB',
+      CLOUD='#FFFFFF', CLOUD_WARM='#FFF3DC', CLOUD_SHADE='#D4E8F6',
+      YELLOW='#F4C430', RED='#E8553A', GREEN='#3AAE6B', PURPLE='#8A6BE0',
+      INK='#20304C', LETTERBOX='#16223A', HUD='#20304C', SUN='#FFF6DE';
+const FONT='"Fredoka","Baloo 2","Comic Neue","Chalkboard SE","Segoe Print",sans-serif';
+
+/* ---------- canvas / dpr / letterbox ---------- */
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let dpr=1, scl=1, offX=0, offY=0;
+function resize(){
+  dpr = Math.min(window.devicePixelRatio||1, 2.5);
+  const iw = window.innerWidth, ih = window.innerHeight;
+  cv.width = Math.round(iw*dpr); cv.height = Math.round(ih*dpr);
+  scl = Math.min(iw/W, ih/H);
+  offX = (iw - W*scl)/2; offY = (ih - H*scl)/2;
+}
+window.addEventListener('resize', resize); resize();
+
+/* ---------- deterministic RNG ---------- */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+let rng = mulberry32(0xC0FFEE);
+function rnd(a,b){ return a + (b-a)*rng(); }
+
+/* ---------- storage / best / challenge ---------- */
+let best = 0;
+try{ best = Math.max(0, parseInt(localStorage.getItem('gs_best:'+SLUG)||'0',10)||0); }catch(e){}
+function persist(){ try{ localStorage.setItem('gs_best:'+SLUG, String(best)); }catch(e){} }
+let challenge = 0, challengeBeaten = false;
+try{ const c = parseInt(new URLSearchParams(location.search).get('c')||'0',10); if(c>0) challenge=c; }catch(e){}
+
+/* ---------- bridge ---------- */
+function post(m){ try{ parent.postMessage(m, '*'); }catch(e){} }
+
+/* ---------- audio (WebAudio synth) ---------- */
+let AC=null, master=null, engOsc=null, engGain=null, engFilt=null;
+function audioInit(){
+  if(AC){ if(AC.state==='suspended') AC.resume(); return; }
+  try{
+    AC = new (window.AudioContext||window.webkitAudioContext)();
+    master = AC.createGain(); master.gain.value=0.42; master.connect(AC.destination);
+    // engine drone: sawtooth through a lowpass, pitch/gain modulated by thrust+speed
+    engOsc = AC.createOscillator(); engOsc.type='sawtooth'; engOsc.frequency.value=70;
+    engFilt = AC.createBiquadFilter(); engFilt.type='lowpass'; engFilt.frequency.value=520; engFilt.Q.value=6;
+    engGain = AC.createGain(); engGain.gain.value=0.0;
+    const sub = AC.createOscillator(); sub.type='sine'; sub.frequency.value=35;
+    engOsc.connect(engFilt); sub.connect(engFilt); engFilt.connect(engGain); engGain.connect(master);
+    engOsc.start(); sub.start();
+  }catch(e){}
+}
+function env(node, t0, a, peak, d){ const g=node.gain; g.cancelScheduledValues(t0); g.setValueAtTime(0.0001,t0); g.exponentialRampToValueAtTime(peak,t0+a); g.exponentialRampToValueAtTime(0.0001,t0+a+d); }
+function noiseBuf(dur){ const n=Math.floor(AC.sampleRate*dur), b=AC.createBuffer(1,n,AC.sampleRate), d=b.getChannelData(0); for(let i=0;i<n;i++) d[i]=Math.random()*2-1; return b; }
+function sfxGun(pitch){ if(!AC)return; const t=AC.currentTime; const o=AC.createOscillator(); o.type='square'; o.frequency.setValueAtTime(150*pitch,t); o.frequency.exponentialRampToValueAtTime(60*pitch,t+0.05);
+  const s=AC.createBufferSource(); s.buffer=noiseBuf(0.06); const hp=AC.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=900;
+  const g=AC.createGain(); g.gain.value=0.0; env(g,t,0.004,0.16,0.05); o.connect(g); s.connect(hp); hp.connect(g); g.connect(master); o.start(t); s.start(t); o.stop(t+0.08); s.stop(t+0.08); }
+function sfxHit(){ if(!AC)return; const t=AC.currentTime; const s=AC.createBufferSource(); s.buffer=noiseBuf(0.12); const bp=AC.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=1400; bp.Q.value=1.2; const g=AC.createGain(); g.gain.value=0; env(g,t,0.004,0.18,0.11); s.connect(bp); bp.connect(g); g.connect(master); s.start(t); s.stop(t+0.14); }
+function sfxWhoosh(){ if(!AC)return; const t=AC.currentTime; const s=AC.createBufferSource(); s.buffer=noiseBuf(0.3); const bp=AC.createBiquadFilter(); bp.type='bandpass'; bp.frequency.setValueAtTime(400,t); bp.frequency.exponentialRampToValueAtTime(1200,t+0.22); bp.Q.value=0.7; const g=AC.createGain(); g.gain.value=0; env(g,t,0.05,0.08,0.22); s.connect(bp); bp.connect(g); g.connect(master); s.start(t); s.stop(t+0.32); }
+function sfxBoom(){ if(!AC)return; const t=AC.currentTime;
+  const o=AC.createOscillator(); o.type='sine'; o.frequency.setValueAtTime(150,t); o.frequency.exponentialRampToValueAtTime(38,t+0.4);
+  const s=AC.createBufferSource(); s.buffer=noiseBuf(0.5); const lp=AC.createBiquadFilter(); lp.type='lowpass'; lp.frequency.setValueAtTime(1600,t); lp.frequency.exponentialRampToValueAtTime(200,t+0.4);
+  const g=AC.createGain(); g.gain.value=0; env(g,t,0.005,0.5,0.5); o.connect(g); s.connect(lp); lp.connect(g); g.connect(master); o.start(t); s.start(t); o.stop(t+0.55); s.stop(t+0.55);
+  // descending whine (the spiral)
+  const w=AC.createOscillator(); w.type='triangle'; w.frequency.setValueAtTime(1300,t+0.05); w.frequency.exponentialRampToValueAtTime(160,t+1.2); const wg=AC.createGain(); wg.gain.value=0; env(wg,t+0.05,0.05,0.12,1.1); w.connect(wg); wg.connect(master); w.start(t+0.05); w.stop(t+1.3); }
+function sfxCheer(){ if(!AC)return; const t=AC.currentTime; const notes=[523,659,784,1046]; notes.forEach((f,i)=>{ const o=AC.createOscillator(); o.type='triangle'; o.frequency.value=f; const g=AC.createGain(); g.gain.value=0; env(g,t+i*0.09,0.02,0.16,0.22); o.connect(g); g.connect(master); o.start(t+i*0.09); o.stop(t+i*0.09+0.28); }); }
+
+/* ---------- input ---------- */
+const keys = { left:false, right:false, thrust:false, fire:false };
+const ptrRole = new Map();   // pointerId -> 'L'|'R'|'T'|'F'
+let usingTouch = false;
+function role(k){ for(const v of ptrRole.values()) if(v===k) return true; return false; }
+function inL(){ return keys.left  || role('L'); }
+function inR(){ return keys.right || role('R'); }
+function inT(){ return keys.thrust|| role('T'); }
+function inF(){ return keys.fire  || role('F'); }
+
+addEventListener('keydown', (e)=>{
+  const k=e.key.toLowerCase();
+  if(k==='arrowleft'||k==='a'){ keys.left=true; }
+  else if(k==='arrowright'||k==='d'){ keys.right=true; }
+  else if(k==='arrowup'||k==='w'){ keys.thrust=true; e.preventDefault(); }
+  else if(k===' '||k==='spacebar'||e.code==='Space'){ keys.fire=true; e.preventDefault(); }
+  audioInit();
+  if(state==='title'){ startRun(); }
+  else if(state==='dead' && deadT>0.5){ startRun(); }
+}, {passive:false});
+addEventListener('keyup', (e)=>{
+  const k=e.key.toLowerCase();
+  if(k==='arrowleft'||k==='a') keys.left=false;
+  else if(k==='arrowright'||k==='d') keys.right=false;
+  else if(k==='arrowup'||k==='w') keys.thrust=false;
+  else if(k===' '||e.code==='Space') keys.fire=false;
+});
+
+// touch button geometry (virtual coords)
+const BTN = {
+  L:{x:66, y:474, r:44},
+  R:{x:170,y:474, r:44},
+  T:{x:894,y:474, r:50},
+  F:{x:790,y:474, r:46},
+};
+function screenToVirt(cx,cy){ return { x:(cx-offX)/scl, y:(cy-offY)/scl }; }
+function hit(v,b){ return (v.x-b.x)*(v.x-b.x)+(v.y-b.y)*(v.y-b.y) <= (b.r*1.25)*(b.r*1.25); }
+function classify(v, touch){
+  if(hit(v,BTN.L)) return 'L';
+  if(hit(v,BTN.R)) return 'R';
+  if(hit(v,BTN.T)) return 'T';
+  if(hit(v,BTN.F)) return 'F';
+  // any other touch = fire (tap the sky to shoot); mouse also fires anywhere
+  return 'F';
+}
+addEventListener('pointerdown', (e)=>{
+  audioInit();
+  if(e.pointerType==='touch') usingTouch=true;
+  if(state==='title'){ startRun(); return; }
+  if(state==='dead'){ if(deadT>0.5) startRun(); return; }
+  const v=screenToVirt(e.clientX, e.clientY);
+  ptrRole.set(e.pointerId, classify(v, e.pointerType==='touch'));
+}, {passive:false});
+addEventListener('pointermove', (e)=>{
+  if(!ptrRole.has(e.pointerId)) return;
+  const v=screenToVirt(e.clientX, e.clientY);
+  ptrRole.set(e.pointerId, classify(v, e.pointerType==='touch'));
+});
+function relPtr(e){ ptrRole.delete(e.pointerId); }
+addEventListener('pointerup', relPtr);
+addEventListener('pointercancel', relPtr);
+addEventListener('blur', ()=>{ ptrRole.clear(); keys.left=keys.right=keys.thrust=keys.fire=false; });
+
+/* ---------- entities ---------- */
+const PLANE_DEFS = [
+  { name:'You',    color:YELLOW },
+  { name:'Rojo',   color:RED    },
+  { name:'Vera',   color:GREEN  },
+  { name:'Byte',   color:PURPLE },
+];
+
+let planes=[], wrecks=[];
+// pools
+const bullets=[]; const BMAX=160;
+for(let i=0;i<BMAX;i++) bullets.push({on:false,x:0,y:0,vx:0,vy:0,life:0,owner:0,color:'#fff'});
+const parts=[]; const PMAX=340;
+for(let i=0;i<PMAX;i++) parts.push({on:false});
+let clouds=[];
+
+function makePlane(i, x, y, ang){
+  const d=PLANE_DEFS[i];
+  return {
+    id:i, isPlayer:i===0, name:d.name, color:d.color,
+    x, y, ang, vx:Math.cos(ang)*140, vy:Math.sin(ang)*140,
+    hp:i===0?PLAYER_HP:BOT_HP, maxHp:i===0?PLAYER_HP:BOT_HP, alive:true,
+    turn:0, thrusting:false, bank:0, prop:0,
+    heat:0, jam:false, fireCd:0,
+    ai:{ target:-1, retgt:0, react:0, evade:0, jink:0, aggro:0 },
+    contrail:0, hitFlash:0,
+  };
+}
+
+function spawnClouds(){
+  clouds=[];
+  const layers=[{n:5,sp:6, s:1.5, a:0.9, y:[40,180]},{n:5,sp:12,s:1.0,a:0.85,y:[120,360]},{n:6,sp:22,s:0.66,a:0.8,y:[220,470]}];
+  layers.forEach((L,li)=>{ for(let i=0;i<L.n;i++){ clouds.push({ x:rnd(-60,W+60), y:rnd(L.y[0],L.y[1]), s:L.s*rnd(0.8,1.25), sp:L.sp*rnd(0.8,1.2), a:L.a, seed:Math.floor(rnd(1,9999)), layer:li }); } });
+  clouds.sort((a,b)=>a.layer-b.layer);
+}
+
+/* ---------- run / round state ---------- */
+let state='title';      // title | play | roundwin | dead
+let round=1, roundsWon=0, kills=0;
+let winT=0, deadT=0, introT=0, titleT=0;
+let shake=0, flashV=0, hitStop=0;
+let killFeed=[]; // {txt,t,color}
+let scorePulse=0;
+
+function difficulty(){
+  // scales with rounds cleared. Kept beatable: reaction delay + aim jitter stay meaningful.
+  const r = round-1;
+  return {
+    turn:   2.02 + r*0.11,                   // player (2.75) out-turns early bots — turning fights pay
+    thrust: 228 + r*13,
+    idle:   62 + r*3,
+    range:  270 + r*24,
+    lead:   Math.min(0.9, 0.40 + r*0.06),    // fraction of true lead applied
+    aimErr: Math.max(0.045, 0.245 - r*0.022),// radians of aim jitter (round1 ~14deg)
+    react:  Math.max(0.10, 0.40 - r*0.03),   // s target/aim reaction delay
+    fireGap:Math.max(0.52, 1.32 - r*0.075),  // s between bursts
+    burst:  3 + Math.min(4, Math.floor(r/2)),
+    aggro:  Math.min(0.42, 0.20 + r*0.03),   // chance a bot locks onto YOU specifically
+  };
+}
+
+function placeRing(){
+  // spread planes around the arena facing inward-ish
+  const cx=W/2, cy=H/2-10, rad=190;
+  const order=[0,1,2,3];
+  for(let i=0;i<order.length;i++){
+    const a = (i/4)*Math.PI*2 + Math.PI/4;
+    const x=cx+Math.cos(a)*rad, y=cy+Math.sin(a)*rad*0.72;
+    const face=Math.atan2(cy-y, cx-x);
+    const idx=order[i];
+    if(!planes[idx]){ planes[idx]=makePlane(idx,x,y,face); }
+    else { const p=planes[idx]; p.x=x;p.y=y;p.ang=face; p.vx=Math.cos(face)*150; p.vy=Math.sin(face)*150; p.alive=true; p.heat=0; p.jam=false; p.fireCd=0; p.hitFlash=0;
+      p.hp = idx===0 ? PLAYER_HP : BOT_HP; p.maxHp=p.hp; }
+  }
+}
+
+function startRun(){
+  rng = mulberry32(0xC0FFEE);
+  round=1; roundsWon=0; kills=0; challengeBeaten=false;
+  planes=[]; wrecks.length=0; killFeed_clear();
+  for(const b of bullets) b.on=false; for(const p of parts) p.on=false;
+  spawnClouds(); placeRing();
+  state='play'; introT=1.1; winT=0; deadT=0; shake=0; flashV=0; scorePulse=0;
+  post({gs:'score', score:0});
+}
+function nextRound(){
+  round++; roundsWon = round-1;
+  wrecks.length=0; for(const b of bullets) b.on=false;
+  placeRing(); introT=1.0; state='play';
+}
+function killFeed_clear(){ killFeed=[]; }
+
+/* ---------- particles ---------- */
+function spawnPart(o){ for(let i=0;i<PMAX;i++){ const p=parts[i]; if(!p.on){ Object.assign(p,o); p.on=true; return p; } } }
+function puff(x,y,col,n,spd,size,life){ for(let i=0;i<n;i++){ const a=rng()*Math.PI*2, s=spd*rnd(0.3,1); spawnPart({type:'smoke',x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-8,life:life*rnd(0.7,1.2),max:life,size:size*rnd(0.7,1.3),col}); } }
+function explode(x,y,col){
+  flashV=Math.min(1,flashV+0.7); shake=Math.min(16,shake+11); hitStop=0.06;
+  for(let i=0;i<3;i++) spawnPart({type:'ring',x,y,vx:0,vy:0,life:0.5,max:0.5,size:6+i*4,col:'#fff'});
+  for(let i=0;i<22;i++){ const a=rng()*Math.PI*2, s=rnd(60,320); spawnPart({type:'debris',x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rnd(0.5,1.1),max:1.1,size:rnd(2,5),col:i%3?col:'#3a2c1e',spin:rnd(-12,12),rot:rng()*6}); }
+  for(let i=0;i<14;i++){ const a=rng()*Math.PI*2, s=rnd(20,120); spawnPart({type:'smoke',x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-20,life:rnd(0.6,1.4),max:1.4,size:rnd(10,20),col:'#3a3a3a'}); }
+  for(let i=0;i<10;i++){ const a=rng()*Math.PI*2, s=rnd(120,360); spawnPart({type:'spark',x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rnd(0.2,0.5),max:0.5,size:rnd(1.5,3),col:'#FFDf7a'}); }
+}
+
+/* ---------- firing ---------- */
+function fireBullet(p, spread){
+  for(let i=0;i<BMAX;i++){ const b=bullets[i]; if(!b.on){
+    const a=p.ang + (spread||0);
+    const mx=p.x+Math.cos(p.ang)*18, my=p.y+Math.sin(p.ang)*18;
+    b.on=true; b.x=mx; b.y=my; b.vx=p.vx+Math.cos(a)*BULLET_SPD; b.vy=p.vy+Math.sin(a)*BULLET_SPD; b.life=BULLET_LIFE; b.owner=p.id; b.color=p.color; return;
+  }}
+}
+
+/* ---------- update ---------- */
+function clampArena(p, dt){
+  const l=ARENA_PAD, r=W-ARENA_PAD, t=ARENA_PAD, bo=H-ARENA_PAD-58;
+  const K=520;
+  if(p.x<l){ p.vx+=(l-p.x)*K*dt*0.016+40*dt*10; if(p.vx<0)p.vx*=0.6; p.x+=(l-p.x)*0.12; }
+  if(p.x>r){ p.vx-=(p.x-r)*K*dt*0.016+40*dt*10; if(p.vx>0)p.vx*=0.6; p.x-=(p.x-r)*0.12; }
+  if(p.y<t){ p.vy+=(t-p.y)*K*dt*0.016+40*dt*10; if(p.vy<0)p.vy*=0.6; p.y+=(t-p.y)*0.12; }
+  if(p.y>bo){ p.vy-=(p.y-bo)*K*dt*0.016+40*dt*10; if(p.vy>0)p.vy*=0.6; p.y-=(p.y-bo)*0.12; }
+}
+
+function updatePlane(p, dt){
+  if(!p.alive) return;
+  // --- rotate nose ---
+  const tr = p.isPlayer ? TURN_RATE : difficulty().turn;
+  p.ang += p.turn * tr * dt;
+  // --- accel: idle push + thrust along nose, gravity down ---
+  const idle = p.isPlayer ? IDLE_PUSH : difficulty().idle;
+  const thr  = p.isPlayer ? THRUST    : difficulty().thrust;
+  let ax=Math.cos(p.ang)*idle, ay=Math.sin(p.ang)*idle;
+  if(p.thrusting){ ax+=Math.cos(p.ang)*thr; ay+=Math.sin(p.ang)*thr; }
+  ay += GRAV;
+  p.vx+=ax*dt; p.vy+=ay*dt;
+  // --- drag ---
+  const dmp = Math.max(0, 1-DRAG*dt);
+  p.vx*=dmp; p.vy*=dmp;
+  // --- ALIGN: grip momentum toward the nose (redirect energy, weighty turns) ---
+  const sp=Math.hypot(p.vx,p.vy);
+  if(sp>1){
+    const nx=Math.cos(p.ang), ny=Math.sin(p.ang);
+    const g=Math.min(1, ALIGN*dt);
+    p.vx += (nx*sp - p.vx)*g; p.vy += (ny*sp - p.vy)*g;
+  }
+  // --- speed cap ---
+  const s2=Math.hypot(p.vx,p.vy);
+  if(s2>MAX_SPEED){ const k=MAX_SPEED/s2; p.vx*=k; p.vy*=k; }
+  // --- integrate ---
+  p.x+=p.vx*dt; p.y+=p.vy*dt;
+  clampArena(p, dt);
+  // --- bank visual + prop ---
+  p.bank += ((p.turn* -0.85) - p.bank) * Math.min(1, BANK_EASE*dt);
+  p.prop += (0.3 + (p.thrusting?1:0.35))*dt*34;
+  // --- gun heat ---
+  const firing = p.wantFire;
+  if(p.jam){ p.heat -= HEAT_COOL*0.85*dt; if(p.heat<=HEAT_RESET){ p.heat=Math.max(0,p.heat); p.jam=false; } }
+  else if(firing){ /* heat handled on shot */ p.heat = Math.max(0, p.heat - HEAT_COOL*0.15*dt); }
+  else { p.heat = Math.max(0, p.heat - HEAT_COOL*dt); }
+  p.fireCd -= dt;
+  if(firing && !p.jam && p.fireCd<=0){
+    fireBullet(p, p.isPlayer?0:(rng()-0.5)*0.03);
+    p.fireCd = p.isPlayer?FIRE_CD:0.075;
+    p.heat += HEAT_SHOT;
+    sfxGun(p.isPlayer?rnd(0.94,1.06):rnd(0.8,0.92));
+    if(p.heat>=1){ p.heat=1; p.jam=true; if(p.isPlayer) sfxWhoosh(); }
+  }
+  // --- contrail / engine smoke when thrusting hard ---
+  p.contrail-=dt;
+  if(p.thrusting && p.contrail<=0){ p.contrail=0.05; const bx=p.x-Math.cos(p.ang)*16, by=p.y-Math.sin(p.ang)*16;
+    spawnPart({type:'trail',x:bx,y:by,vx:p.vx*0.2,vy:p.vy*0.2,life:0.55,max:0.55,size:rnd(3,5),col:'rgba(255,255,255,0.55)'}); }
+  if(p.hitFlash>0) p.hitFlash-=dt*4;
+}
+
+/* ---------- bot AI ---------- */
+function nearestTarget(p){
+  let bi=-1, bd=1e9;
+  for(const q of planes){ if(!q.alive||q.id===p.id) continue; const d=(q.x-p.x)**2+(q.y-p.y)**2; if(d<bd){bd=d;bi=q.id;} }
+  return bi;
+}
+function beingTailed(p){
+  // someone behind me, roughly pointing at me, within range?
+  for(const q of planes){ if(!q.alive||q.id===p.id) continue;
+    const dx=p.x-q.x, dy=p.y-q.y, dist=Math.hypot(dx,dy); if(dist>260) continue;
+    const toMe=Math.atan2(dy,dx); const aim=Math.abs(angdiff(toMe,q.ang)); if(aim<0.5) return q;
+  }
+  return null;
+}
+function angdiff(a,b){ let d=a-b; while(d>Math.PI)d-=Math.PI*2; while(d<-Math.PI)d+=Math.PI*2; return d; }
+function botThink(p, dt){
+  if(!p.alive) return;
+  const D=difficulty();
+  const ai=p.ai;
+  ai.retgt-=dt; ai.react-=dt; ai.evade-=dt; ai.jink-=dt;
+  if(ai.target<0 || ai.retgt<=0 || !planes[ai.target] || !planes[ai.target].alive){
+    // occasionally lock onto the player specifically for pressure (scales with round)
+    if(rng()<D.aggro && planes[0].alive && p.id!==0) ai.target=0; else ai.target=nearestTarget(p);
+    ai.retgt=rnd(1.4,2.8);
+  }
+  const tgt=planes[ai.target];
+  if(!tgt||!tgt.alive){ p.turn=0.2; p.thrusting=true; p.wantFire=false; return; }
+  // evade if tailed
+  const tail=beingTailed(p);
+  if(tail && ai.evade<=0){ ai.evade=rnd(0.5,1.0); ai.jinkDir=(rng()<0.5?-1:1); sfxWhoosh_maybe(p); }
+  let desired;
+  if(ai.evade>0){
+    // break turn hard away from the tailer, thrust to build energy
+    const away=Math.atan2(p.y-tail?.y||0, p.x-(tail?tail.x:0));
+    desired = p.ang + (ai.jinkDir||1)*1.2;
+    p.thrusting=true;
+  } else {
+    // pursue with lead
+    const dx=tgt.x-p.x, dy=tgt.y-p.y, dist=Math.hypot(dx,dy);
+    const lt=Math.min(0.8, dist/BULLET_SPD)*D.lead;
+    const lx=tgt.x+tgt.vx*lt, ly=tgt.y+tgt.vy*lt;
+    desired=Math.atan2(ly-p.y, lx-p.x);
+    // manage energy: thrust to close, ease when very close to avoid overshoot
+    p.thrusting = dist>150 || Math.hypot(p.vx,p.vy)<130;
+  }
+  // reaction-delayed steering + jitter
+  const err=angdiff(desired, p.ang);
+  const jitter=(rng()-0.5)*D.aimErr*2;
+  const steer=Math.max(-1,Math.min(1,(err+jitter)*2.2));
+  // smooth toward steer (reaction feel)
+  p.turn += (steer - p.turn)*Math.min(1, dt* (ai.react>0? 3: 8));
+  // firing decision
+  const dx=tgt.x-p.x, dy=tgt.y-p.y, dist=Math.hypot(dx,dy);
+  const aimErr=Math.abs(angdiff(Math.atan2(dy,dx), p.ang));
+  ai.fireTimer=(ai.fireTimer||0)-dt;
+  ai.burstLeft=ai.burstLeft||0;
+  if(!p.jam && ai.evade<=0 && dist<D.range && aimErr<0.16 && ai.fireTimer<=0){
+    ai.burstLeft=D.burst; ai.fireTimer=D.fireGap;
+  }
+  if(ai.burstLeft>0 && !p.jam){ p.wantFire=true; if(p.fireCd<=0) ai.burstLeft--; }
+  else p.wantFire=false;
+}
+function sfxWhoosh_maybe(p){ /* keep audio sparse: only near player */ if(Math.hypot(p.x-planes[0].x,p.y-planes[0].y)<220) sfxWhoosh(); }
+
+/* ---------- bullets ---------- */
+function updateBullets(dt){
+  for(let i=0;i<BMAX;i++){ const b=bullets[i]; if(!b.on) continue;
+    b.x+=b.vx*dt; b.y+=b.vy*dt; b.life-=dt;
+    if(b.life<=0 || b.x<-20||b.x>W+20||b.y<-20||b.y>H+20){ b.on=false; continue; }
+    for(const p of planes){ if(!p.alive||p.id===b.owner) continue;
+      if((p.x-b.x)**2+(p.y-b.y)**2 < (PLANE_R+3)**2){
+        b.on=false; hitPlane(p, b.owner, b.x, b.y); break;
+      }
+    }
+  }
+}
+function hitPlane(p, ownerId, hx, hy){
+  p.hp--; p.hitFlash=1;
+  puff(hx,hy,'#5a5a5a',5,90,7,0.5);
+  for(let i=0;i<4;i++){ const a=rng()*Math.PI*2,s=rnd(40,140); spawnPart({type:'spark',x:hx,y:hy,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rnd(0.15,0.35),max:0.35,size:rnd(1,2.5),col:'#FFD86a'}); }
+  sfxHit();
+  shake=Math.min(10,shake+3);
+  if(p.hp<=0){ downPlane(p, ownerId); }
+}
+function downPlane(p, ownerId){
+  p.alive=false;
+  explode(p.x,p.y,p.color); sfxBoom();
+  // spiraling wreck + comedic parachute
+  wrecks.push({ x:p.x, y:p.y, vx:p.vx*0.4, vy:p.vy*0.3, ang:p.ang, spin:rnd(-8,8), color:p.color, t:0, life:2.4, para:{on:false} });
+  // parachute pilot pops out
+  wrecks[wrecks.length-1].para={ on:true, x:p.x, y:p.y-4, vx:rnd(-20,20), vy:-30, sway:rng()*6, t:0, color:p.color };
+  if(ownerId===0 && p.id!==0){ kills++; scorePulse=1; killFeed.push({txt:'DOWNED '+p.name.toUpperCase()+'!', t:2.0, color:p.color}); post({gs:'score', score:kills});
+    if(challenge>0 && kills>challenge && !challengeBeaten){ challengeBeaten=true; post({gs:'challenge_beaten', score:kills}); } }
+  else if(p.id!==0){ killFeed.push({txt:p.name+' went down', t:1.6, color:'#dfe8f2'}); }
+  checkOutcome();
+}
+function checkOutcome(){
+  const player=planes[0];
+  const aliveRivals=planes.filter(q=>q.id!==0 && q.alive).length;
+  if(!player.alive){ // run ends
+    if(state==='play'){ endRun(); }
+  } else if(aliveRivals===0 && state==='play'){
+    state='roundwin'; winT=2.1; sfxCheer(); flashV=Math.min(1,flashV+0.4);
+    // heal player for the next round (reward + escalation clarity)
+    player.hp=PLAYER_HP; player.maxHp=PLAYER_HP; player.heat=0; player.jam=false;
+    if(round>best){ /* best is rounds WON; update after increment */ }
+    if(roundsWon+1>best){ best=roundsWon+1; persist(); }
+  }
+}
+function endRun(){
+  state='dead'; deadT=0; shake=Math.min(16,shake+8); flashV=Math.min(1,flashV+0.5);
+  if(roundsWon>best){ best=roundsWon; persist(); }
+  post({gs:'gameover', scores:{ rounds:roundsWon, kills:kills }});
+}
+
+/* ---------- wrecks / particles update ---------- */
+function updateWrecks(dt){
+  for(let i=wrecks.length-1;i>=0;i--){ const w=wrecks[i]; w.t+=dt;
+    w.vy+=GRAV*0.9*dt; w.vx*=0.99; w.ang+=w.spin*dt; w.x+=w.vx*dt; w.y+=w.vy*dt;
+    if((i+Math.floor(w.t*40))%2===0) spawnPart({type:'smoke',x:w.x,y:w.y,vx:rnd(-15,15),vy:rnd(-25,-5),life:rnd(0.6,1.1),max:1.1,size:rnd(7,13),col:'#4a4a4a'});
+    const pa=w.para;
+    if(pa&&pa.on){ pa.t+=dt; pa.vy += (pa.vy<40? 30*dt : 0); if(pa.vy>40)pa.vy=40; pa.vx += Math.sin(pa.t*1.6+pa.sway)*10*dt; pa.x+=pa.vx*dt; pa.y+=pa.vy*dt; }
+    if(w.t>w.life && w.y>H+40 && (!pa.on||pa.y>H+30)) wrecks.splice(i,1);
+    else if(w.t>w.life+3) wrecks.splice(i,1);
+  }
+}
+function updateParts(dt){
+  for(let i=0;i<PMAX;i++){ const p=parts[i]; if(!p.on) continue;
+    p.life-=dt; if(p.life<=0){ p.on=false; continue; }
+    p.x+=p.vx*dt; p.y+=p.vy*dt;
+    if(p.type==='smoke'||p.type==='trail'){ p.vx*=0.94; p.vy=p.vy*0.94-6*dt; p.size+=14*dt; }
+    else if(p.type==='debris'){ p.vy+=GRAV*dt; p.vx*=0.99; p.rot+=p.spin*dt; }
+    else if(p.type==='spark'){ p.vy+=GRAV*0.4*dt; p.vx*=0.9; p.vy*=0.9; }
+    else if(p.type==='ring'){ p.size+=180*dt; }
+  }
+}
+
+/* ---------- clouds ---------- */
+function updateClouds(dt){ for(const c of clouds){ c.x-=c.sp*dt; if(c.x< -120){ c.x=W+rnd(40,140); c.y=rnd(30,470); } } }
+
+/* ---------- draw helpers ---------- */
+function shade(hex, amt){ // amt -100..100
+  const n=parseInt(hex.slice(1),16); let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  const f=amt/100; if(f<0){ r*=1+f; g*=1+f; b*=1+f; } else { r+=(255-r)*f; g+=(255-g)*f; b+=(255-b)*f; }
+  return 'rgb('+(r|0)+','+(g|0)+','+(b|0)+')';
+}
+
+function drawCloud(c){
+  ctx.save(); ctx.translate(c.x,c.y); ctx.scale(c.s,c.s); ctx.globalAlpha=c.a;
+  const R=mulberry32(c.seed);
+  // soft shadow underside
+  ctx.fillStyle=CLOUD_SHADE;
+  for(let i=0;i<5;i++){ const bx=(i-2)*26+R()*8, by=10+R()*6, br=22+R()*14; ctx.beginPath(); ctx.arc(bx,by,br,0,7); ctx.fill(); }
+  ctx.fillStyle=CLOUD;
+  for(let i=0;i<6;i++){ const bx=(i-2.5)*24+R()*8, by=R()*8, br=24+R()*16; ctx.beginPath(); ctx.arc(bx,by,br,0,7); ctx.fill(); }
+  // warm top catch-light
+  ctx.fillStyle=CLOUD_WARM; ctx.globalAlpha=c.a*0.6;
+  for(let i=0;i<3;i++){ const bx=(i-1)*22+R()*6, by=-10+R()*4, br=16+R()*8; ctx.beginPath(); ctx.arc(bx,by,br,0,7); ctx.fill(); }
+  ctx.restore();
+}
+
+function drawPlane(p){
+  const s=Math.hypot(p.vx,p.vy);
+  ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.ang);
+  // bank = roll around the fuselage (heading) axis -> foreshorten wingspan
+  const roll=p.bank; const wingScale=0.45+0.55*Math.cos(roll);
+  ctx.save(); ctx.scale(1, wingScale);
+  const col=p.color, dk=shade(col,-26), lt=shade(col,28);
+  // shadow
+  ctx.fillStyle='rgba(20,40,70,0.14)'; ctx.beginPath(); ctx.ellipse(0,7/wingScale,20,7,0,0,7); ctx.fill();
+  // lower wing
+  ctx.fillStyle=dk; ctx.beginPath();
+  ctx.moveTo(-2,-19); ctx.lineTo(7,-15); ctx.lineTo(9,15); ctx.lineTo(-2,19);
+  ctx.lineTo(-6,15); ctx.lineTo(-6,-15); ctx.closePath(); ctx.fill();
+  // tail plane
+  ctx.fillStyle=dk; ctx.beginPath(); ctx.moveTo(-16,-9); ctx.lineTo(-9,-5); ctx.lineTo(-9,5); ctx.lineTo(-16,9); ctx.closePath(); ctx.fill();
+  // fuselage
+  ctx.fillStyle=col; roundRect(-16,-6,34,12,6); ctx.fill();
+  // nose cone / cowl
+  ctx.fillStyle=shade(col,-10); ctx.beginPath(); ctx.moveTo(14,-6); ctx.lineTo(21,0); ctx.lineTo(14,6); ctx.closePath(); ctx.fill();
+  // upper wing highlight
+  ctx.fillStyle=lt; ctx.beginPath(); ctx.moveTo(-1,-17); ctx.lineTo(6,-14); ctx.lineTo(6,-2); ctx.lineTo(-4,-2); ctx.closePath(); ctx.fill();
+  // cockpit
+  ctx.fillStyle='#26364f'; ctx.beginPath(); ctx.ellipse(2,0,4.5,3.5,0,0,7); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.ellipse(3,-1,2,1.3,0,0,7); ctx.fill();
+  ctx.restore();
+  // spinning prop disc at the nose
+  ctx.strokeStyle='rgba(40,50,70,0.5)'; ctx.lineWidth=1.4;
+  ctx.beginPath(); ctx.moveTo(20,-7*wingScale); ctx.lineTo(20,7*wingScale); ctx.stroke();
+  ctx.globalAlpha=0.25; ctx.beginPath(); ctx.ellipse(20,0,2.5,7*wingScale,0,0,7); ctx.stroke(); ctx.globalAlpha=1;
+  // hit flash
+  if(p.hitFlash>0){ ctx.globalAlpha=p.hitFlash*0.7; ctx.fillStyle='#fff'; roundRect(-16,-7,36,14,6); ctx.fill(); ctx.globalAlpha=1; }
+  ctx.restore();
+  // player marker: bright chevron + ring so you always find yourself
+  if(p.isPlayer){
+    ctx.save(); ctx.translate(p.x,p.y);
+    ctx.strokeStyle='rgba(255,255,255,0.9)'; ctx.lineWidth=2;
+    const cy=-26-Math.sin(perfNow*4)*1.5;
+    ctx.beginPath(); ctx.moveTo(-6,cy-5); ctx.lineTo(0,cy+1); ctx.lineTo(6,cy-5); ctx.stroke();
+    ctx.restore();
+  }
+  // HP pips floating above each plane
+  drawPips(p);
+}
+function drawPips(p){
+  const n=p.maxHp, w=6, gap=3, tot=n*w+(n-1)*gap;
+  ctx.save(); ctx.translate(p.x-tot/2, p.y-34);
+  for(let i=0;i<n;i++){ ctx.fillStyle = i<p.hp ? p.color : 'rgba(255,255,255,0.28)'; roundRect(i*(w+gap),0,w,4,2); ctx.fill();
+    ctx.strokeStyle='rgba(20,40,70,0.25)'; ctx.lineWidth=0.75; roundRect(i*(w+gap),0,w,4,2); ctx.stroke(); }
+  ctx.restore();
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+function drawWreck(w){
+  const col=w.color;
+  ctx.save(); ctx.translate(w.x,w.y); ctx.rotate(w.ang);
+  ctx.fillStyle=shade(col,-30); roundRect(-14,-5,26,10,5); ctx.fill();
+  ctx.fillStyle=col; ctx.beginPath(); ctx.moveTo(-2,-16); ctx.lineTo(6,16); ctx.lineTo(-4,12); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  const pa=w.para;
+  if(pa&&pa.on){
+    ctx.save(); ctx.translate(pa.x,pa.y);
+    // canopy
+    ctx.fillStyle=shade(col,20); ctx.beginPath(); ctx.arc(0,-16,16,Math.PI,0); ctx.lineTo(14,-16); ctx.lineTo(0,-14); ctx.lineTo(-14,-16); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle='rgba(40,50,70,0.5)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(-14,-16); ctx.lineTo(-3,-2); ctx.moveTo(14,-16); ctx.lineTo(3,-2); ctx.moveTo(0,-16); ctx.lineTo(0,-2); ctx.stroke();
+    // dangling pilot (comedy)
+    ctx.fillStyle='#e9c58a'; ctx.beginPath(); ctx.arc(0,1,3,0,7); ctx.fill();
+    ctx.fillStyle='#3a4a66'; roundRect(-3,3,6,7,2); ctx.fill();
+    ctx.strokeStyle='#3a4a66'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(-3,5); ctx.lineTo(-6,9+Math.sin(pa.t*8)*2); ctx.moveTo(3,5); ctx.lineTo(6,9+Math.cos(pa.t*8)*2); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawPart(p){
+  const a=Math.max(0,p.life/p.max);
+  if(p.type==='smoke'||p.type==='trail'){ ctx.globalAlpha=a*(p.type==='trail'?0.5:0.6); ctx.fillStyle=p.col; ctx.beginPath(); ctx.arc(p.x,p.y,p.size,0,7); ctx.fill(); }
+  else if(p.type==='debris'){ ctx.globalAlpha=a; ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.rot||0); ctx.fillStyle=p.col; ctx.fillRect(-p.size/2,-p.size/2,p.size,p.size); ctx.restore(); }
+  else if(p.type==='spark'){ ctx.globalAlpha=a; ctx.fillStyle=p.col; ctx.beginPath(); ctx.arc(p.x,p.y,p.size,0,7); ctx.fill(); }
+  else if(p.type==='ring'){ ctx.globalAlpha=a*0.8; ctx.strokeStyle=p.col; ctx.lineWidth=3*a+0.5; ctx.beginPath(); ctx.arc(p.x,p.y,p.size,0,7); ctx.stroke(); }
+  ctx.globalAlpha=1;
+}
+
+/* ---------- HUD ---------- */
+function drawHUD(){
+  ctx.textBaseline='alphabetic';
+  // round (top-left)
+  ctx.font='700 22px '+FONT; ctx.fillStyle=HUD; ctx.textAlign='left';
+  ctx.fillText('ROUND '+round, 16, 30);
+  // rivals remaining icons
+  const rivals=planes.filter(q=>q.id!==0);
+  ctx.font='600 13px '+FONT; ctx.fillStyle='rgba(32,48,76,0.7)'; ctx.fillText('RIVALS', 16, 50);
+  for(let i=0;i<rivals.length;i++){ const q=rivals[i]; ctx.save(); ctx.translate(84+i*22, 46); ctx.globalAlpha=q.alive?1:0.25;
+    ctx.fillStyle=q.color; ctx.beginPath(); ctx.moveTo(8,0); ctx.lineTo(-6,-5); ctx.lineTo(-3,0); ctx.lineTo(-6,5); ctx.closePath(); ctx.fill();
+    if(!q.alive){ ctx.strokeStyle='#c0392b'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(-7,-6); ctx.lineTo(9,6); ctx.moveTo(9,-6); ctx.lineTo(-7,6); ctx.stroke(); }
+    ctx.restore(); }
+  // kills (top-right brag) + best
+  ctx.textAlign='right';
+  const kp=1+scorePulse*0.4;
+  ctx.save(); ctx.translate(W-16,32); ctx.scale(kp,kp);
+  ctx.font='800 26px '+FONT; ctx.fillStyle=RED; ctx.fillText(kills+'', 0,0);
+  ctx.restore();
+  ctx.font='600 12px '+FONT; ctx.fillStyle='rgba(32,48,76,0.7)'; ctx.fillText('KILLS', W-16, 46);
+  ctx.font='600 13px '+FONT; ctx.fillStyle=HUD; ctx.fillText('BEST '+best+' wins', W-16, 62);
+  // challenge target
+  if(challenge>0){ ctx.textAlign='center'; ctx.font='700 15px '+FONT;
+    ctx.fillStyle=challengeBeaten?GREEN:'#c86a1e'; ctx.fillText(challengeBeaten?'TARGET SMASHED! '+challenge+' kills':'TARGET: '+challenge+' kills', W/2, 26); }
+  // heat gauge (bottom-center)
+  const player=planes[0];
+  const gw=220, gh=12, gx=W/2-gw/2, gy=H-30;
+  ctx.fillStyle='rgba(32,48,76,0.18)'; roundRect(gx-3,gy-3,gw+6,gh+6,7); ctx.fill();
+  const h=player?player.heat:0;
+  const hc = player&&player.jam ? '#c0392b' : (h>0.75? shade(RED,10) : (h>0.45? YELLOW : GREEN));
+  ctx.fillStyle=hc; roundRect(gx,gy,gw*h,gh,5); ctx.fill();
+  ctx.strokeStyle='rgba(32,48,76,0.35)'; ctx.lineWidth=1.5; roundRect(gx,gy,gw,gh,5); ctx.stroke();
+  ctx.fillStyle=HUD; ctx.font='700 11px '+FONT; ctx.textAlign='center';
+  ctx.fillText(player&&player.jam?'GUN JAMMED — COOLING':'GUN HEAT', W/2, gy-6);
+  // kill feed (center-ish)
+  ctx.textAlign='center';
+  for(let i=0;i<killFeed.length;i++){ const f=killFeed[i]; const a=Math.min(1,f.t); const big=f.txt.indexOf('DOWNED')===0;
+    ctx.globalAlpha=a; ctx.font=(big?'800 26px ':'600 16px ')+FONT; ctx.fillStyle= big?f.color:'rgba(32,48,76,0.85)';
+    ctx.fillText(f.txt, W/2, 120+i*26); ctx.globalAlpha=1; }
+  // touch controls
+  if(usingTouch) drawTouch();
+}
+function touchBtn(b, label, active, col){
+  ctx.globalAlpha=active?0.9:0.5;
+  ctx.fillStyle='rgba(255,255,255,0.55)'; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,7); ctx.fill();
+  ctx.strokeStyle=col||'rgba(32,48,76,0.6)'; ctx.lineWidth=active?4:2.5; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,7); ctx.stroke();
+  ctx.fillStyle=col||HUD; ctx.font='800 18px '+FONT; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(label, b.x, b.y); ctx.textBaseline='alphabetic'; ctx.globalAlpha=1;
+}
+function drawTouch(){
+  touchBtn(BTN.L,'‹', inL(), HUD);
+  touchBtn(BTN.R,'›', inR(), HUD);
+  touchBtn(BTN.F,'FIRE', inF(), RED);
+  touchBtn(BTN.T,'THRUST', inT(), GREEN);
+}
+
+/* ---------- overlays ---------- */
+function drawIntro(){
+  if(introT<=0) return;
+  const a=Math.min(1,introT*1.6);
+  ctx.globalAlpha=a; ctx.textAlign='center'; ctx.fillStyle=HUD;
+  ctx.font='800 46px '+FONT;
+  ctx.fillText(round===1?'SCRAMBLE!':'ROUND '+round, W/2, H/2-6);
+  ctx.font='600 18px '+FONT; ctx.fillStyle='rgba(32,48,76,0.8)';
+  ctx.fillText(round===1?'last plane flying wins':'faster · deadlier rivals', W/2, H/2+24);
+  ctx.globalAlpha=1;
+}
+function drawWinBanner(){
+  ctx.textAlign='center';
+  ctx.fillStyle=GREEN; ctx.font='800 52px '+FONT; ctx.fillText('ROUND '+round+' WON!', W/2, H/2-10);
+  ctx.fillStyle=HUD; ctx.font='600 20px '+FONT; ctx.fillText('next: tougher skies', W/2, H/2+24);
+}
+function drawTitle(){
+  // banner
+  const t=titleT;
+  ctx.textAlign='center';
+  ctx.save(); ctx.translate(W/2, H/2-70+Math.sin(t*1.6)*4);
+  ctx.fillStyle=INK; ctx.font='900 78px '+FONT;
+  ctx.fillText('SKY DUEL', 2, 4); // shadow-ish via draw twice
+  ctx.fillStyle=YELLOW; ctx.fillText('SKY DUEL', 0, 0);
+  ctx.restore();
+  ctx.fillStyle=HUD; ctx.font='600 22px '+FONT;
+  ctx.fillText('you vs 3 rival planes — be the last one flying', W/2, H/2+2);
+  // control hint
+  ctx.font='600 16px '+FONT; ctx.fillStyle='rgba(32,48,76,0.85)';
+  const hint = usingTouch ? 'steer ‹ › · THRUST · FIRE' : 'A / D or ← → turn · W / ↑ thrust · SPACE / click fire';
+  ctx.fillText(hint, W/2, H/2+34);
+  // pulsing prompt
+  const pa=0.55+0.45*Math.sin(t*4);
+  ctx.globalAlpha=pa; ctx.fillStyle=RED; ctx.font='800 26px '+FONT;
+  ctx.fillText(usingTouch?'TAP TO SCRAMBLE':'PRESS ANY KEY TO SCRAMBLE', W/2, H/2+78); ctx.globalAlpha=1;
+  ctx.fillStyle='rgba(32,48,76,0.7)'; ctx.font='600 14px '+FONT;
+  ctx.fillText('best: '+best+' wins', W/2, H/2+108);
+}
+function drawDead(){
+  ctx.fillStyle='rgba(22,34,58,0.55)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#fff'; ctx.font='900 60px '+FONT; ctx.fillText('SHOT DOWN', W/2, H/2-56);
+  ctx.font='700 26px '+FONT; ctx.fillStyle=YELLOW;
+  ctx.fillText(roundsWon+' round'+(roundsWon===1?'':'s')+' won · '+kills+' kill'+(kills===1?'':'s'), W/2, H/2-14);
+  ctx.font='600 18px '+FONT; ctx.fillStyle='rgba(255,255,255,0.85)';
+  ctx.fillText('best: '+best+' wins', W/2, H/2+16);
+  const pa=0.55+0.45*Math.sin(perfNow*4);
+  ctx.globalAlpha=Math.min(1, deadT*1.5)*pa; ctx.fillStyle=GREEN; ctx.font='800 30px '+FONT;
+  ctx.fillText(usingTouch?'TAP TO SCRAMBLE AGAIN':'PRESS ANY KEY — SCRAMBLE AGAIN', W/2, H/2+64);
+  ctx.globalAlpha=1;
+}
+
+/* ---------- master render ---------- */
+let perfNow=0;
+function render(){
+  // letterbox fill
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle=LETTERBOX; ctx.fillRect(0,0,cv.width,cv.height);
+  // shake
+  let sx=0,sy=0; if(shake>0){ sx=(rng()-0.5)*shake; sy=(rng()-0.5)*shake; }
+  ctx.setTransform(dpr*scl,0,0,dpr*scl, dpr*(offX+sx), dpr*(offY+sy));
+  ctx.save(); ctx.beginPath(); ctx.rect(0,0,W,H); ctx.clip();
+  // sky gradient
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,SKY_TOP); g.addColorStop(0.55,SKY_MID); g.addColorStop(1,SKY_LOW);
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  // soft sun glow top-right
+  const sg=ctx.createRadialGradient(W-140,90,10,W-140,90,220); sg.addColorStop(0,'rgba(255,246,222,0.9)'); sg.addColorStop(1,'rgba(255,246,222,0)');
+  ctx.fillStyle=sg; ctx.fillRect(0,0,W,H);
+  // clouds
+  for(const c of clouds) drawCloud(c);
+  // ground haze band at bottom (arena floor cue)
+  const fg=ctx.createLinearGradient(0,H-70,0,H); fg.addColorStop(0,'rgba(207,235,251,0)'); fg.addColorStop(1,'rgba(255,243,220,0.55)');
+  ctx.fillStyle=fg; ctx.fillRect(0,H-70,W,70);
+
+  // particles behind
+  for(let i=0;i<PMAX;i++){ const p=parts[i]; if(p.on&&(p.type==='smoke'||p.type==='trail')) drawPart(p); }
+  // wrecks
+  for(const w of wrecks) drawWreck(w);
+  // bullets (tracers)
+  for(let i=0;i<BMAX;i++){ const b=bullets[i]; if(!b.on) continue;
+    const len=Math.min(1,b.life/BULLET_LIFE);
+    ctx.strokeStyle=b.color; ctx.globalAlpha=0.9; ctx.lineWidth=2.6;
+    ctx.beginPath(); ctx.moveTo(b.x,b.y); ctx.lineTo(b.x-b.vx*0.016, b.y-b.vy*0.016); ctx.stroke();
+    ctx.globalAlpha=1; ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(b.x,b.y,1.8,0,7); ctx.fill();
+  }
+  // planes
+  for(const p of planes) if(p.alive) drawPlane(p);
+  // foreground particles (sparks, debris, rings)
+  for(let i=0;i<PMAX;i++){ const p=parts[i]; if(p.on&&p.type!=='smoke'&&p.type!=='trail') drawPart(p); }
+  // white flash
+  if(flashV>0){ ctx.globalAlpha=flashV*0.5; ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H); ctx.globalAlpha=1; }
+
+  // overlays
+  if(state==='play'||state==='roundwin'){ drawHUD(); drawIntro(); if(state==='roundwin') drawWinBanner(); }
+  else if(state==='title'){ drawTitle(); if(usingTouch) drawTouch(); }
+  else if(state==='dead'){ drawHUD(); drawDead(); }
+
+  ctx.restore();
+}
+
+/* ---------- main loop ---------- */
+let last=performance.now(), acc=0; const STEP=1/120;
+function frame(now){
+  perfNow=now/1000;
+  let dt=(now-last)/1000; last=now; if(dt>0.1) dt=0.1;
+  perfNow=now/1000;
+  titleT+=dt;
+  // decay fx
+  shake=Math.max(0, shake-dt*36); flashV=Math.max(0, flashV-dt*2.2); scorePulse=Math.max(0,scorePulse-dt*2.5);
+  if(introT>0) introT-=dt;
+  // kill feed timers
+  for(let i=killFeed.length-1;i>=0;i--){ killFeed[i].t-=dt; if(killFeed[i].t<=0) killFeed.splice(i,1); }
+
+  if(state==='play'){
+    // apply player input
+    const player=planes[0];
+    if(player&&player.alive){ player.turn=(inR()?1:0)-(inL()?1:0); player.thrusting=inT(); player.wantFire=inF(); }
+    // sim substeps for stable momentum
+    acc+=dt; let guard=0;
+    while(acc>=STEP && guard<8){ stepSim(STEP); acc-=STEP; guard++; }
+    if(guard>=8) acc=0;
+    updateBullets(dt); updateWrecks(dt); updateParts(dt); updateClouds(dt);
+    updateEngine(player);
+  } else {
+    // idle worlds still breathe
+    updateWrecks(dt); updateParts(dt); updateClouds(dt);
+    if(state==='roundwin'){ winT-=dt; if(winT<=0){ nextRound(); } }
+    if(state==='dead'){ deadT+=dt; }
+    if(engGain) engGain.gain.value += (0 - engGain.gain.value)*Math.min(1,dt*4);
+  }
+  render();
+  requestAnimationFrame(frame);
+}
+function stepSim(dt){
+  for(const p of planes){ if(p.isPlayer) updatePlane(p,dt); else { botThink(p,dt); updatePlane(p,dt); } }
+}
+function updateEngine(player){
+  if(!engGain||!player) return;
+  const sp=Math.hypot(player.vx,player.vy)/MAX_SPEED;
+  const targetG = player.alive ? (0.05+ (player.thrusting?0.11:0.03)) : 0;
+  engGain.gain.value += (targetG - engGain.gain.value)*Math.min(1, 0.12);
+  const f = 60 + sp*90 + (player.thrusting?40:0);
+  engOsc.frequency.value += (f - engOsc.frequency.value)*0.15;
+  engFilt.frequency.value = 420 + sp*700 + (player.thrusting?300:0);
+}
+
+/* ---------- boot ---------- */
+requestAnimationFrame(frame);
+post({gs:'ready'});
+</script>
+</body>
+</html>

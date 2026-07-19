@@ -44,6 +44,35 @@ export default function GameStage({ slug, title, boards }: Props) {
   const better = (order: 'asc' | 'desc', a: number, b: number | undefined) =>
     b == null ? true : order === 'asc' ? a < b : a > b;
 
+  // Route keys into the game. contentWindow.focus() is what actually delivers
+  // keyboard to the framed document (element focus alone doesn't), then restore
+  // the parent scroll position so focusing never jump-scrolls the page.
+  const focusGame = useCallback(() => {
+    const x = window.scrollX, y = window.scrollY;
+    frameRef.current?.contentWindow?.focus();
+    window.scrollTo(x, y);
+  }, []);
+
+  // Keyboard focus / page-scroll guard. Games receive keys only when the iframe
+  // has focus; a game that preventDefaults pointerdown can keep the click from
+  // handing over focus, so arrow/space would scroll the PAGE instead of playing.
+  // We focus the game on load and, as a safety net, swallow the browser's
+  // scroll on game-control keys and re-hand focus to the game — unless the user
+  // is typing their leaderboard name.
+  useEffect(() => {
+    const scrollKeys = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Spacebar', 'PageUp', 'PageDown']);
+    function onKey(e: KeyboardEvent) {
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (scrollKeys.has(e.key)) {
+        e.preventDefault();
+        focusGame();
+      }
+    }
+    window.addEventListener('keydown', onKey, { capture: true, passive: false });
+    return () => window.removeEventListener('keydown', onKey, { capture: true } as EventListenerOptions);
+  }, [focusGame]);
+
   // session + heartbeat
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -205,6 +234,8 @@ export default function GameStage({ slug, title, boards }: Props) {
           sandbox="allow-scripts allow-same-origin"
           allow="autoplay"
           title={title}
+          onLoad={focusGame}
+          onMouseEnter={focusGame}
         />
       </div>
       <div className="stage-actions">
