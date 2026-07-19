@@ -45,9 +45,15 @@ while(Date.now()-t0 < 40000){
     if(wx> 0.18) want.add('ArrowRight'); else if(wx<-0.18) want.add('ArrowLeft');
     if(wy> 0.18) want.add('ArrowUp');    else if(wy<-0.18) want.add('ArrowDown');
     await setKeys(want);
-    if(s.dashCD<=0 && s.r<180 && s.rivals.length){
-      let bd=1e9; for(const rv of s.rivals){ const d=Math.hypot(rv.px-s.px,rv.py-s.py); if(d<bd){bd=d;} }
-      if(bd<150){ await page.keyboard.press('Space'); }
+    // aggressive: chase + dash the nearest rival that is closer to the rim than me
+    if(s.rivals.length){
+      let nr=s.rivals[0], bd=1e9; for(const rv of s.rivals){ const d=Math.hypot(rv.px-s.px,rv.py-s.py); if(d<bd){bd=d;nr=rv;} }
+      const nrR=Math.hypot(nr.px,nr.py);
+      if(s.r<0.5*300 && nrR>s.r-20){ // only press attack when I'm safe-ish and they're exposed
+        const ax=nr.px-s.px, ay=nr.py-s.py, ad=Math.hypot(ax,ay)||1;
+        if(bd<200){ if(ax/ad>0.3)want.add('ArrowRight'); else if(ax/ad<-0.3)want.add('ArrowLeft'); if(ay/ad>0.3)want.add('ArrowUp'); else if(ay/ad<-0.3)want.add('ArrowDown'); await setKeys(want); }
+        if(s.dashCD<=0 && bd<130){ await page.keyboard.press('Space'); }
+      }
     }
   }
   const now=(Date.now()-t0)/1000;
