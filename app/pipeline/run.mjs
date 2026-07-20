@@ -35,6 +35,11 @@ if (!prompt) {
 const db = new Database(path.join(APP, 'data', 'gamesight.db'));
 db.pragma('journal_mode = WAL');
 db.pragma('busy_timeout = 5000'); // shares the WAL db with the running app server
+// The pipeline is a separate process from the app, so it can run against a DB
+// whose schema predates a column it writes. Ensure the one column it owns.
+if (!db.prepare('PRAGMA table_info(generations)').all().some((c) => c.name === 'cost')) {
+  db.exec("ALTER TABLE generations ADD COLUMN cost TEXT DEFAULT '{}'");
+}
 db.prepare(
   `INSERT INTO generations (id, prompt, status, created_at, updated_at) VALUES (?, ?, 'running', ?, ?)
    ON CONFLICT(id) DO UPDATE SET status='running', updated_at=excluded.updated_at`
@@ -101,9 +106,19 @@ function short(s, n = 150) {
   const one = String(s).replace(/\s+/g, ' ').trim();
   return one.length > n ? one.slice(0, n) + '…' : one;
 }
+// Cost per game is dominated by model choice, so pin it per role rather than
+// inheriting whatever the CLI defaults to (that default is not stable, which
+// makes spend unpredictable in production). Override per role via env.
+const MODELS = {
+  designer: process.env.GS_MODEL_DESIGNER || 'claude-sonnet-5',
+  builder: process.env.GS_MODEL_BUILDER || 'claude-sonnet-5',
+  judge: process.env.GS_MODEL_JUDGE || 'claude-sonnet-5',
+};
+
 function claude(rolePrompt, { tools, timeoutMin = 15, cwd = APP, phase = 'agent' } = {}) {
   return new Promise((resolve, reject) => {
     const cliArgs = ['-p', rolePrompt, '--output-format', 'stream-json', '--verbose'];
+    if (MODELS[phase]) cliArgs.push('--model', MODELS[phase]);
     if (tools) cliArgs.push('--allowedTools', tools, '--permission-mode', 'acceptEdits');
     const child = spawn('claude', cliArgs, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
 
@@ -142,11 +157,15 @@ function claude(rolePrompt, { tools, timeoutMin = 15, cwd = APP, phase = 'agent'
         const line = buf.slice(0, nl).trim();
         buf = buf.slice(nl + 1);
         if (!line) continue;
+        let parsed;
         try {
-          handleEvent(JSON.parse(line));
+          parsed = JSON.parse(line);
         } catch {
-          /* ignore non-JSON lines */
+          continue; // non-JSON line from the CLI — ignore
         }
+        // NOT inside the parse try: a bug in our own handler must surface, not
+        // masquerade as an unparseable line.
+        handleEvent(parsed);
       }
     });
     child.stderr.on('data', (c) => (stderr += c.toString()));
@@ -270,19 +289,25 @@ ${conventions}
 DESIGN BRIEF:
 ${brief}
 
-${cycle > 1 ? `PREVIOUS ATTEMPT FAILED VERIFICATION. The current index.html is at games/${meta.slug}/index.html. Judge critique to fix (fix ALL of it, change nothing that already works):\n${critique}\n` : ''}
-Also produce cover.svg: a 640x400 SVG cover in the game's own art language.
+${cycle > 1 ? `PREVIOUS ATTEMPT FAILED VERIFICATION. index.html already exists in your working directory. Judge critique to fix (fix ALL of it, change nothing that already works). Use Edit to patch it — do NOT rewrite the whole file:\n${critique}\n` : ''}
+Write your work DIRECTLY TO DISK in your working directory (it is the game folder):
+- \`index.html\` — the complete game (use the Write tool; never paste the file into a message)
+- \`cover.svg\` — a 640x400 SVG cover in the game's own art language
 
-Output format: complete index.html inside a \`\`\`html fence, then cover.svg inside a \`\`\`xml fence. No commentary.`,
-      { timeoutMin: 40, phase: 'builder' }
+A game is 40-70KB, which does not fit in a chat message — that is why you must use Write/Edit.
+When both files are on disk, reply with only: DONE`,
+      // The builder needs real write access: emitting a 70KB file through one
+      // message hits the output limit, and on fix cycles Edit patches in place
+      // instead of re-emitting everything (much cheaper). cwd IS the game dir.
+      { tools: 'Read,Write,Edit,Bash', cwd: gameDir, timeoutMin: 40, phase: 'builder' }
     );
-    const html = extractBlock(builderOut, 'html');
-    const cover = extractBlock(builderOut, 'xml') ?? extractBlock(builderOut, 'svg');
-    if (!html) throw new Error('builder produced no index.html');
-    fs.writeFileSync(path.join(gameDir, 'index.html'), html);
-    if (cover) fs.writeFileSync(path.join(gameDir, 'cover.svg'), cover);
+    // Disk is the contract now, not the transcript.
+    const htmlPath = path.join(gameDir, 'index.html');
+    if (!fs.existsSync(htmlPath) || fs.statSync(htmlPath).size < 500) {
+      throw new Error(`builder produced no index.html (said: ${short(builderOut, 200)})`);
+    }
     fs.writeFileSync(path.join(gameDir, 'meta.json'), JSON.stringify(meta, null, 2));
-    trace('builder', `index.html written (${(html.length / 1024).toFixed(0)} KB)`);
+    trace('builder', `index.html written (${(fs.statSync(htmlPath).size / 1024).toFixed(0)} KB)`);
 
     // play-tester harness
     trace('playtest', 'Play-testing on desktop + mobile…');
@@ -357,7 +382,7 @@ Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "crit
       meta.slug, meta.title, meta.description ?? '', meta.verb ?? '', JSON.stringify(meta.dials ?? []),
       meta.orientation ?? 'landscape', meta.mode ?? 'sp', meta.scoreLabel ?? '',
       meta.scoreOrder === 'asc' ? 'asc' : 'desc', JSON.stringify(Array.isArray(meta.boards) ? meta.boards : []),
-      JSON.stringify(meta.palette ?? []), creatorRef, Date.now()
+      JSON.stringify(meta.palette ?? []), meta.author ?? 'gamesight', creatorRef, Date.now()
     );
     fs.writeFileSync(path.join(gameDir, 'published.json'), JSON.stringify({ genId, at: Date.now() }));
     setGen({ status: 'published' });   // generation status (done), not game visibility
