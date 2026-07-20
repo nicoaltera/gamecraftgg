@@ -1,0 +1,70 @@
+{
+  "slug": "rattlesnake-noon",
+  "title": "Rattlesnake Noon",
+  "description": "Spaghetti-western quick-draw gauntlet: out-draw ten named gunslingers — or lean out of the bullet's path in slow motion and counter-kill. Foul the draw and you'll fumble; hold your nerve and showboat for double bounty.",
+  "prompt": "western themed quick draw game me vs a series of progressively stronger gunslingers. i can lean out of way of bullet.",
+  "mode": "single-player",
+  "renderer": "canvas2d",
+  "orientation": "landscape",
+  "sessionLengthSec": [
+    30,
+    300
+  ],
+  "score": {
+    "key": "bounty",
+    "label": "Bounty",
+    "unit": "$",
+    "sort": "desc"
+  },
+  "secondaryBrag": {
+    "key": "bestDrawMs",
+    "label": "Best Draw",
+    "unit": "ms",
+    "sort": "asc"
+  },
+  "funDials": {
+    "mastery": 0.6,
+    "comedy": 0.25,
+    "progression": 0.15
+  },
+  "controls": {
+    "desktop": {
+      "fire": [
+        "Space",
+        "MouseLeft"
+      ],
+      "leanLeft": [
+        "ArrowLeft",
+        "KeyA"
+      ],
+      "leanRight": [
+        "ArrowRight",
+        "KeyD"
+      ],
+      "retry": [
+        "KeyR"
+      ]
+    },
+    "touch": {
+      "fire": "tap-anywhere (standoff/draw phase)",
+      "lean": "left/right half-screen zones (slow-mo phase only)",
+      "retry": "AGAIN button, bottom-center"
+    }
+  },
+  "libraries": {
+    "audio": "howler"
+  },
+  "challengeParam": true,
+  "seededRng": true,
+  "tags": [
+    "western",
+    "reaction",
+    "duel",
+    "quick-draw",
+    "gauntlet",
+    "slow-motion"
+  ],
+  "dials": [
+    "mastery"
+  ]
+}

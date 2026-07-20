@@ -48,7 +48,7 @@ export default async function GamePage({ params }: Params) {
       </div>
       <div className="game-columns">
         <div>
-          <GameStage slug={game.slug} title={game.title} boards={boards} />
+          <GameStage slug={game.slug} title={game.title} boards={boards} status={game.status} creatorRef={game.creator_ref} />
           <GameActions slug={game.slug} title={game.title} status={game.status} creatorRef={game.creator_ref} parentSlug={game.parent_slug} />
           <p className="about-game">{game.description}</p>
           {isPublished && <ReportButton slug={game.slug} />}

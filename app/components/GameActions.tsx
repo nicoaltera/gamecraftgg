@@ -62,19 +62,6 @@ export default function GameActions({
     } else setNote(d.error ?? 'Could not start that edit.');
   }
 
-  async function remix() {
-    setBusy(true);
-    const res = await fetch('/api/remix', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ slug, ref: getRef() }),
-    });
-    const d = await res.json();
-    setBusy(false);
-    if (res.ok && d.slug) router.push(`/g/${d.slug}`);
-    else setNote(d.error ?? 'Could not remix.');
-  }
-
   return (
     <div className="game-actions-bar">
       {parentSlug && (
@@ -117,11 +104,6 @@ export default function GameActions({
         </div>
       )}
 
-      {!mine && state === 'published' && (
-        <button className="btn" onClick={remix} disabled={busy}>
-          {busy ? 'remixing…' : 'Remix this game'}
-        </button>
-      )}
       {note && <span className="actions-note">{note}</span>}
     </div>
   );

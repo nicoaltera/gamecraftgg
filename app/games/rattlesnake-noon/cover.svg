@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFD07B"/>
+      <stop offset=".55" stop-color="#F18F01"/>
+      <stop offset="1" stop-color="#C73E1D"/>
+    </linearGradient>
+    <g id="slinger" fill="#2A1A14" stroke="#2A1A14" stroke-linecap="round">
+      <path d="M-5,-52 Q-20,-27 -16,-3 M7,-52 Q23,-27 17,-3" fill="none" stroke-width="10"/>
+      <rect x="-24" y="-6" width="15" height="6"/>
+      <rect x="12" y="-6" width="16" height="6"/>
+      <path d="M-13,-100 L11,-101 L19,-47 L13,-40 L-17,-40 L-21,-47 Z"/>
+      <circle cx="1" cy="-111" r="10"/>
+      <ellipse cx="1" cy="-119" rx="24" ry="5"/>
+      <rect x="-10" y="-136" width="22" height="17"/>
+      <ellipse cx="1" cy="-136" rx="11" ry="3.5"/>
+      <path d="M7,-92 L35,-92" fill="none" stroke-width="9"/>
+      <rect x="32" y="-98" width="10" height="9"/>
+      <rect x="41" y="-97" width="15" height="4"/>
+    </g>
+  </defs>
+  <rect width="640" height="312" fill="url(#sky)"/>
+  <circle cx="320" cy="296" r="88" fill="#FFF8D6" opacity=".9"/>
+  <g fill="#2A1A14">
+    <rect x="0" y="212" width="88" height="100"/>
+    <rect x="-4" y="204" width="96" height="10"/>
+    <rect x="96" y="242" width="60" height="70"/>
+    <path d="M96,242 L126,224 L156,242 Z"/>
+    <rect x="560" y="232" width="80" height="80"/>
+    <rect x="556" y="224" width="88" height="10"/>
+    <rect x="500" y="258" width="44" height="54"/>
+    <rect x="252" y="268" width="6" height="44"/>
+    <rect x="242" y="276" width="10" height="5"/>
+    <rect x="242" y="266" width="5" height="12"/>
+    <rect x="384" y="278" width="6" height="34"/>
+    <rect x="390" y="284" width="10" height="5"/>
+    <rect x="395" y="274" width="5" height="12"/>
+  </g>
+  <rect y="312" width="640" height="88" fill="#5C3A28"/>
+  <rect y="312" width="640" height="4" fill="#2A1A14" opacity=".3"/>
+  <line x1="262" y1="230" x2="404" y2="230" stroke="#FFF8D6" stroke-width="4" stroke-dasharray="14 10" opacity=".9"/>
+  <circle cx="258" cy="230" r="4" fill="#FFF8D6"/>
+  <use href="#slinger" transform="translate(180,314)"/>
+  <rect x="167" y="181" width="24" height="4" fill="#FFF3E0"/>
+  <path d="M175,206 L191,206 L183,219 Z" fill="#B3271E"/>
+  <use href="#slinger" transform="translate(462,314) scale(-1,1)"/>
+  <g font-family="Rockwell,'Courier Bold',Georgia,serif" font-weight="900" text-anchor="middle">
+    <text x="322" y="78" font-size="52" letter-spacing="6" fill="#2A1A14" opacity=".85">RATTLESNAKE NOON</text>
+    <text x="320" y="76" font-size="52" letter-spacing="6" fill="#FFF3E0">RATTLESNAKE NOON</text>
+    <text x="320" y="110" font-size="17" letter-spacing="4" fill="#B3271E">OUT-DRAW OR LEAN-DODGE</text>
+    <text x="320" y="382" font-size="15" letter-spacing="3" fill="#FFF3E0" opacity=".85">WANTED &#8226; DEAD OR ALIVE &#8226; $6,000</text>
+  </g>
+</svg>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import HandFrame from './HandFrame';
 import type { Board } from '@/lib/db';
 
@@ -8,6 +9,8 @@ type Props = {
   slug: string;
   title: string;
   boards: Board[];
+  status: string;
+  creatorRef: string;
 };
 
 // Set NEXT_PUBLIC_GAME_ORIGIN to a distinct host in production so untrusted
@@ -23,7 +26,9 @@ function playerRef(): string {
   return r;
 }
 
-export default function GameStage({ slug, title, boards }: Props) {
+export default function GameStage({ slug, title, boards, status, creatorRef }: Props) {
+  const router = useRouter();
+  const [remixing, setRemixing] = useState(false);
   const primaryBoard = boards.find((b) => b.primary) ?? boards[0];
   // the per-run "dare" uses the challenge board (a game's endless metric makes a
   // better single-run dare than a cross-session completion metric)
@@ -183,6 +188,23 @@ export default function GameStage({ slug, title, boards }: Props) {
     setTimeout(() => setShareNote(null), 2500);
   }
 
+  async function remixThis() {
+    if (remixing) return;
+    setRemixing(true);
+    const res = await fetch('/api/remix', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slug, ref: playerRef() }),
+    });
+    const d = await res.json();
+    setRemixing(false);
+    if (res.ok && d.slug) router.push(`/g/${d.slug}`);
+    else {
+      setShareNote(d.error ?? 'Could not remix.');
+      setTimeout(() => setShareNote(null), 3000);
+    }
+  }
+
   async function submitScores() {
     if (!lastScores || !name.trim() || !sessionRef.current) return;
     const res = await fetch('/api/score', {
@@ -274,8 +296,13 @@ export default function GameStage({ slug, title, boards }: Props) {
       </div>
       <div className="stage-actions">
         <button className="btn btn-biro" onClick={shareChallenge} disabled={bestByBoard.current[dareBoard.key] == null && !lastScores}>
-          Dare a friend
+          Send to a friend
         </button>
+        {status === 'published' && creatorRef !== playerRef() && (
+          <button className="btn" onClick={remixThis} disabled={remixing}>
+            {remixing ? 'remixing…' : 'Remix this game'}
+          </button>
+        )}
         {lastScores && !posted && (
           <span className="name-pop">
             <span className="mono">{runSummary}</span>
