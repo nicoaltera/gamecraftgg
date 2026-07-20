@@ -65,6 +65,29 @@ function setGen(fields) {
   db.prepare(`UPDATE generations SET ${sets}, updated_at = ? WHERE id = ?`).run(...Object.values(fields), Date.now(), genId);
 }
 
+// ---------- agent spend (the input to credit pricing) ----------
+// Every `claude -p` run ends with a `result` event carrying total_cost_usd and
+// token usage, so the CLI does the price math for us. We accumulate per phase
+// because the phase breakdown is what tells us which stage to make cheaper.
+const _cost = { total: 0, calls: 0, byPhase: {}, tokens: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 }, models: {} };
+let _cycles = 0;
+function recordCost(phase, ev) {
+  const usd = typeof ev.total_cost_usd === 'number' ? ev.total_cost_usd : 0;
+  const u = ev.usage ?? {};
+  _cost.total += usd;
+  _cost.calls += 1;
+  const p = (_cost.byPhase[phase] ??= { usd: 0, calls: 0 });
+  p.usd += usd;
+  p.calls += 1;
+  _cost.tokens.in += u.input_tokens ?? 0;
+  _cost.tokens.out += u.output_tokens ?? 0;
+  _cost.tokens.cacheRead += u.cache_read_input_tokens ?? 0;
+  _cost.tokens.cacheWrite += u.cache_creation_input_tokens ?? 0;
+  for (const m of Object.keys(ev.modelUsage ?? {})) _cost.models[m] = (_cost.models[m] ?? 0) + 1;
+  setGen({ cost: JSON.stringify(_cost) });
+  trace(phase, `spend: $${usd.toFixed(3)} (run total $${_cost.total.toFixed(2)})`, 'tool');
+}
+
 // ---------- claude helper (streaming) ----------
 // Streams the agent's turns so the build page shows every thinking step, tool
 // call, and message live — instead of hanging on one blocking call. Returns the
@@ -94,6 +117,7 @@ function claude(rolePrompt, { tools, timeoutMin = 15, cwd = APP, phase = 'agent'
 
     function handleEvent(ev) {
       if (!ev || typeof ev !== 'object') return;
+      if (ev.type === 'result') recordCost(phase, ev);
       if (ev.type === 'assistant' && ev.message?.content) {
         for (const b of ev.message.content) {
           if (b.type === 'text' && b.text) {
@@ -234,6 +258,7 @@ Output format: the brief inside a \`\`\`markdown fence, then the meta inside a \
   let critique = '';
   let published = false;
   for (let cycle = 1; cycle <= MAX_CYCLES; cycle++) {
+    _cycles = cycle;
     setGen({ cycles: cycle });
     trace('builder', cycle === 1 ? 'Writing the game…' : `Fixing per critique (cycle ${cycle})…`);
     const builderOut = await claude(
@@ -350,8 +375,14 @@ Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "crit
     setGen({ status: 'failed' });
     trace('fail', 'Cycle budget exhausted — not published. The critique is available for a re-prompt.');
   }
+  const byPhase = Object.entries(_cost.byPhase)
+    .sort((a, b) => b[1].usd - a[1].usd)
+    .map(([k, v]) => `${k} $${v.usd.toFixed(2)}(${v.calls})`)
+    .join('  ');
+  console.log(`\nCOST id=${genId} total=$${_cost.total.toFixed(3)} calls=${_cost.calls} cycles=${_cycles} phases: ${byPhase}`);
 } catch (err) {
   setGen({ status: 'failed' });
   trace('error', err.message ?? String(err));
+  console.log(`\nCOST id=${genId} total=$${_cost.total.toFixed(3)} calls=${_cost.calls} status=error`);
   process.exit(1);
 }

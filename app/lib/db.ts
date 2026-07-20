@@ -121,6 +121,9 @@ function migrate(d: Database.Database) {
   if (!scoreCols.includes('board')) d.exec("ALTER TABLE scores ADD COLUMN board TEXT NOT NULL DEFAULT ''");
   if (!gameCols.includes('creator_ref')) d.exec("ALTER TABLE games ADD COLUMN creator_ref TEXT DEFAULT ''");
   if (!gameCols.includes('parent_slug')) d.exec("ALTER TABLE games ADD COLUMN parent_slug TEXT DEFAULT ''");
+  // per-generation agent spend: {total, byPhase:{...}, calls, model} — the input to credit pricing
+  const genCols = (d.prepare('PRAGMA table_info(generations)').all() as { name: string }[]).map((c) => c.name);
+  if (!genCols.includes('cost')) d.exec("ALTER TABLE generations ADD COLUMN cost TEXT DEFAULT '{}'");
   // index goes AFTER the column exists (the column is ALTER-added for old DBs)
   d.exec('CREATE INDEX IF NOT EXISTS idx_games_creator ON games(creator_ref)');
 }
