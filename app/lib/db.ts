@@ -171,6 +171,7 @@ export type GameMeta = {
 
 function syncGamesFromDisk(d: Database.Database) {
   if (!fs.existsSync(GAMES_DIR)) return;
+  const dirEntries = fs.readdirSync(GAMES_DIR);
   const upsert = d.prepare(`
     INSERT INTO games (slug, title, description, verb, dials, orientation, mode, score_label, score_order, boards, palette, author, created_at)
     VALUES (@slug, @title, @description, @verb, @dials, @orientation, @mode, @scoreLabel, @scoreOrder, @boards, @palette, @author, @createdAt)
@@ -179,7 +180,7 @@ function syncGamesFromDisk(d: Database.Database) {
       dials=excluded.dials, orientation=excluded.orientation, mode=excluded.mode,
       score_label=excluded.score_label, score_order=excluded.score_order, boards=excluded.boards, palette=excluded.palette
   `);
-  for (const slug of fs.readdirSync(GAMES_DIR)) {
+  for (const slug of dirEntries) {
     const metaPath = path.join(GAMES_DIR, slug, 'meta.json');
     const htmlPath = path.join(GAMES_DIR, slug, 'index.html');
     // A game is only published once a `published.json` marker exists. The pipeline
@@ -207,6 +208,17 @@ function syncGamesFromDisk(d: Database.Database) {
       });
     } catch {
       // a malformed meta.json never takes the site down; the game just stays unlisted
+    }
+  }
+  // Reconcile: a game folder is the source of truth (the /play route serves from disk),
+  // so a DB row whose folder no longer exists is a ghost that would 404 in the feed. Drop
+  // those. Guard on a non-empty listing so a transient read never wipes the table. Drafts
+  // keep their folder (the pipeline writes it), so this only removes truly-deleted games.
+  if (dirEntries.length > 0) {
+    const onDisk = new Set(dirEntries);
+    const del = d.prepare('DELETE FROM games WHERE slug = ?');
+    for (const { slug } of d.prepare('SELECT slug FROM games').all() as { slug: string }[]) {
+      if (!onDisk.has(slug)) del.run(slug);
     }
   }
 }
