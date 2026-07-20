@@ -1,0 +1,40 @@
+{
+  "slug": "standstill-firefight",
+  "title": "STANDSTILL",
+  "description": "Stick-figure gunfight where time only moves when you do — thread frozen bullet lattices, unlock bigger guns each wave (pistol to rocket), steal weapons off the dead, and outfight rushers, tanks, and snipers.",
+  "mode": "single",
+  "renderer": "canvas2d",
+  "orientation": "landscape",
+  "session_minutes": [
+    1,
+    4
+  ],
+  "score": {
+    "label": "SCORE",
+    "direction": "higher_is_better",
+    "challenge_param": true
+  },
+  "controls": {
+    "desktop": "WASD move · mouse aim · click fire · F throw empty gun · R retry",
+    "touch": "left stick move (deflection = time speed) · right drag aim, release to fire · throw button when empty"
+  },
+  "fun_dials": {
+    "mastery": 0.5,
+    "comedy": 0.2,
+    "progression": 0.3
+  },
+  "tags": [
+    "bullet-time",
+    "stick-figure",
+    "shooter",
+    "arena",
+    "weapons",
+    "progression",
+    "mastery"
+  ],
+  "version": 2,
+  "dials": [
+    "mastery",
+    "progression"
+  ]
+}
