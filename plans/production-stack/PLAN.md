@@ -1,80 +1,107 @@
-# GameSight — Production Serving Plan (cleanest minimal stack)
+# GameSight — Production Plan
 
-_Written 2026-07-19. Synthesizes three research passes (see `research/`). Goal: get GameSight
-publicly served with real auth, a credits + subscription model, and **no upfront payment** — using
-free tiers and startup credits — while keeping the stack minimal and operable by a tiny team (or one agent)._
+_Final. 2026-07-20. One developer. Cheap, safe, survives virality, deploys in three commands._
 
-The founder's goals, restated as requirements:
-1. **Serve it** publicly and cheaply (the app + the untrusted game bundles).
-2. **Auth** — real accounts (Google sign-in; Apple later).
-3. **Deploy the frontend cheaply, no card** — free tiers / free credits.
-4. **Credits** — generating a game costs credits; new users get free credits; fund early usage with free **Anthropic** credits.
-5. **Subscription** — buy more credits.
-6. **Playing is free.**
-7. **Minimal and very doable.** No over-engineering.
+Option matrices and citations live in `research/`. This document is the decision.
 
 ---
 
-## The recommended stack (one coherent, all-free-to-start set)
+## The stack
 
-| Concern | Choice | Why (tied to the goals) | Free to start / no card? |
+| Layer | Choice | Why this one |
+|---|---|---|
+| **App** | **Vercel** (Next.js 16, native) | Best Next deploy there is: `git push`, preview per branch, instant rollback. Iteration speed is the scarcest resource for a solo dev. Pro ($20/mo) — Hobby forbids commercial use. |
+| **State** | **Turso** (libSQL) | Same SQLite dialect as today, so the schema ports nearly verbatim. Host-agnostic HTTP, so it never welds us to a host. |
+| **Games + game origin** | **Cloudflare R2** on its own domain | One choice solves four problems: object storage for generated bundles, a genuinely separate origin, **$0 egress**, and CDN-scale serving. |
+| **Generation** | **Modal** | `.spawn()` is a durable job queue *and* a container runtime in one. A throwaway container per job also contains the tool-using build agent. $30/mo free credits. |
+| **Identity** | **Better Auth** + Google | Library, not a vendor bill. `user.id` lives in our DB, so billing attaches with a plain foreign key. |
+| **Money** | **Polar** | Native prepaid-credits + subscription, and Merchant-of-Record — it remits worldwide VAT so a solo dev never registers for tax. |
+| **Ping** | **Resend** | "Your game is ready." One API call from the worker. |
+
+Six pieces. Each does exactly one job, and none can be removed without losing a required property.
+
+---
+
+## Why this survives virality
+
+The insight: **the three kinds of load have wildly different costs, so route each to the cheapest thing that can serve it.**
+
+| Load | Volume under virality | Where it goes | Marginal cost |
 |---|---|---|---|
-| **App host** | **Cloudflare Workers** (Next.js 16 via OpenNext) | Only host with **unlimited free bandwidth + commercial use + no credit card** — the decisive property for a free-to-play viral site that could spike | ✅ no card |
-| **Database** | **Turso (libSQL)** | Near **drop-in for `better-sqlite3`** (same SQLite dialect; schema migrates almost verbatim; only change is queries become async). Host-agnostic (HTTP), so it isn't locked to Cloudflare | ✅ no card |
-| **Auth** | **Better Auth** (self-hosted in the app, Turso-backed) | **$0, no MAU ceiling**, owns the `user.id` in *your* DB so billing attaches with a plain foreign key; Google + Apple are drop-in; first-class Next.js 16 | ✅ no card |
-| **Game origin** (untrusted bundles) | **Separate Cloudflare Pages project or R2 bucket** on a **distinct domain** | Genuine cross-origin isolation for machine-generated code; strict CSP via a `_headers` file; `iframe sandbox` without `allow-same-origin`; R2 has **$0 egress** | ✅ no card |
-| **Generation worker** | **Modal** | The one option that is a **long-running container (browser + real filesystem) *and* a durable async job queue** in one, with **$30/mo free credits, no card**. Per-15-min job compute ≈ $0.03–0.05 (noise vs Claude tokens) | ✅ no card |
-| **Queue + "leave & come back"** | **Modal `.spawn()` + one `generations` DB row** as source of truth | Job lives on Modal, not the browser → survives tab-close. No separate queue product needed | ✅ |
-| **Billing (credits + subscription)** | **Polar** (Merchant of Record) | Native **prepaid-credits + subscription** primitives; **remits worldwide VAT/sales tax for you** (the real hidden cost for a small team); no monthly fee; official Better Auth plugin | ✅ no card |
-| **Fund early generation** | **Anthropic — Claude for Startups** (up to ~$25k credits) + $5 new-account trial | Directly funds the token cost of generation while you find price | ✅ |
-| **Notify on done** | **Resend** (email) + later web-push (service worker + VAPID) | "We'll ping you when it's ready." The in-app cooking tray already does browser notifications while a tab is open | ✅ |
+| Playing games (bandwidth) | Enormous | R2 static bundles via CDN | **$0** (R2 has no egress fee) |
+| Feed + leaderboards (reads) | High | Cached Next routes (revalidate 30–60s) | ~1 query per interval, not per visitor |
+| Score writes | Modest | Turso | Cheap, indexed |
+| Generation (LLM tokens) | Self-limiting | Modal, gated by credits | Paid for by the user |
 
-**The only things that cost money up front:** a domain (~$12/yr) and — *only if you add Apple sign-in* — the Apple Developer Program ($99/yr, deferrable). Everything else starts at $0 with no card.
-
-**Runner-up stack (if you prefer DX over free-bandwidth):** Vercel (best Next.js DX) + Turso + a second Vercel project for games + Fly.io/Railway worker + Stripe. Accept: Vercel Hobby is **non-commercial-only** and its **100 GB cap pauses your site**, so a monetized/viral site moves to **$20/mo Pro** quickly; Fly/Railway need a card; Stripe is ~2 points cheaper but you own worldwide tax.
+The expensive path is free, the metered path is cached, and the genuinely costly path is behind a paywall. A viral spike is a bandwidth event, and bandwidth is the one thing we've made free. Nothing about a 100× traffic day requires a human to intervene.
 
 ---
 
-## How it maps onto today's code
+## Safety model
 
-Today: Next.js 16 app, `better-sqlite3` local file, self-contained game bundles served through a Next route with CSP, `pipeline/run.mjs` spawned locally (uses the `claude` CLI + Playwright), ownership via a localStorage "ref", no billing.
+Four boundaries, in order of importance:
 
-Changes, smallest-to-largest:
+1. **Untrusted game code can't touch the app.** Games are machine-generated JS running in every player's browser. They're served from a **distinct registrable domain** (R2), embedded with `iframe sandbox` *without* `allow-same-origin`, under a strict CSP (`connect-src 'none'` — a game makes no network calls at all). Cross-origin is the boundary; the CSP is defence in depth. _Already built; needs the second domain._
+2. **The build agent can't touch production.** The real risk isn't the game, it's the builder/judge agents holding filesystem and shell access. They run in a **fresh Modal container per job**, never on the box serving traffic. Blast radius is one disposable container.
+3. **Generation can't be abused into a bill.** Sign-in required, credits debited before the job starts, hard per-account daily cap. Cost is bounded by design, not by monitoring.
+4. **Existing hardening stays.** Session-gated score submission, anti-cheat quarantine, size-bounded request bodies, play-time-gated reporting, owner-only publish. _Already built._
 
-1. **DB: `better-sqlite3` → `@libsql/client` (Turso).** *Required regardless of host* — `better-sqlite3` is a native module and serverless filesystems are ephemeral, so a local `.sqlite` can't persist. The schema is already portable SQL. The real work is making DB calls **async** in `lib/db.ts` and its callers. Keep a `file:` libSQL URL for local dev.
-2. **Game origin:** deploy the `games/` bundles to a separate Cloudflare Pages project / R2 on a distinct domain; set `NEXT_PUBLIC_GAME_ORIGIN` (already referenced in the code) + the strict CSP there. This closes the "separate origin" launch gap already documented in the app README.
-3. **Auth: add Better Auth** (Google provider first). Create the `user` row on first sign-in and **link the existing localStorage `ref`'s owned games to `user.id`** in one transaction. Replace `getRef()`-based ownership with the session user id.
-4. **Generation → Modal.** Package `run.mjs` + `claude` CLI + Playwright/Chromium into a Modal image with a Volume for the working dir; the generate route calls `.spawn()`, writes the `generations` row (already exists), and returns immediately. The worker writes the terminal state + uploads the bundle + triggers the ping. The **cooking tray** and `/build/[id]` already poll that row, so the UI needs no change to support durable leave.
-5. **Billing: add Polar.** A subscription product grants N credits/cycle; a `game_generated` meter burns the balance; new users get a starter grant. Gate the generate route on `balance > 0`. Fund the Anthropic key with startup credits.
-
----
-
-## Phased rollout (each phase independently shippable)
-
-- **Phase 0 — Serve it (no auth, no billing).** DB → Turso; deploy app to Cloudflare (OpenNext); deploy game bundles to the separate origin with CSP. Outcome: the site is public and free to play, $0, no card. _Ownership still localStorage for now._
-- **Phase 1 — Accounts.** Better Auth + Google sign-in; migrate ownership from the localStorage ref to real user ids. Outcome: durable "your games", ready for billing to attach.
-- **Phase 2 — Durable generation.** Move `run.mjs` to a Modal worker; wire the tray's "ping" to real email (Resend). Outcome: "leave, we'll ping you" is truly tab-close-safe.
-- **Phase 3 — Credits + subscription.** Polar products (credit packs + subscription); meter generations; grant free starter credits; gate generation on balance; apply Anthropic startup credits. Outcome: the business model is live; playing stays free.
-- **Later:** Apple sign-in ($99), true web-push (service worker + VAPID), scale tuning (Cloudflare Workers Paid $5/mo if you outgrow free CPU/bundle; Modal beyond $30/mo).
+Secrets live in Vercel and Modal env only. No key ever reaches a game bundle.
 
 ---
 
-## Honest pushback (where the ask should bend)
+## Deploying it
 
-1. **Apple sign-in is not free.** It *requires* the Apple Developer Program ($99/yr) and a client-secret JWT that silently expires every 6 months. **Launch Google-only** (covers the vast majority of web users, free), add Apple once revenue justifies it. Highest-leverage simplification.
-2. **Don't stack a queue product on Modal.** `.spawn()` + a `generations` DB row *is* the queue-and-notify system. Inngest/Trigger.dev/QStash are redundant here (QStash's 60 s timeout literally can't run a 15-min job). This is the biggest over-engineering trap in the brief.
-3. **Don't launch on Vercel Hobby.** It's non-commercial-only and its 100 GB cap *pauses* the site — exactly the wrong failure mode for "viral + free to play". Cloudflare avoids both.
-4. **`better-sqlite3` can't come along** — this migration is mandatory, not optional, the moment you leave a single always-on box. Turso makes it a near-drop-in; do it first.
-5. **Pay the Merchant-of-Record premium (Polar ~5%) early.** It buys away worldwide VAT/sales-tax registration and filing — a real ongoing liability for a tiny team. Migrate to Stripe (~2.9%) later if volume justifies owning tax ops.
-6. **Cost-per-game is dominated by Claude tokens, not infra** (~$0.03–0.05 compute vs potentially dollars of tokens, ×up-to-3 verify cycles). **Benchmark real token spend per game before pricing a credit.** This remains the true go/no-go, and it's independent of every vendor choice above.
-7. **Keep it all-Cloudflare where you can** (app + game origin in one dashboard) but keep **Turso over D1** so the DB stays portable rather than welded to Workers.
+```
+git push                    # → Vercel builds + deploys the app (preview per branch)
+modal deploy worker.py      # → the generation worker
+npm run push-games          # → sync game bundles to R2
+```
+
+Three idempotent commands, no CI to babysit, no containers to orchestrate, no servers to patch.
 
 ---
 
-## Cost trajectory
+## Rollout
 
-- **Launch:** ~$0 + a domain (~$12/yr). Anthropic startup credits absorb generation token cost.
-- **Growing:** Cloudflare Workers Paid ~$5/mo (only if you outgrow free CPU/bundle); Modal beyond its $30/mo free credits; Polar takes ~5% of revenue (tax included).
-- **The number that decides viability:** measured Claude-token cost per published game × margin → price per user credit, with enough free starter credits for ~1–3 games so the funnel works.
+Each phase is independently shippable and useful on its own.
 
-See `research/hosting-db.md`, `research/auth.md`, `research/compute-billing.md` for the full option matrices and citations.
+**Phase 0 — Public and playable.** Port `lib/db.ts` to `@libsql/client` (18 files, 12 `prepare()` calls — mechanical, the only real friction in this plan). Push the 16 seed games to R2 behind its own domain with the CSP. Deploy to Vercel. **Ship with creation turned off** — launch as a games site. This is deliberate: it removes auth, billing, and hosted generation from the critical path, so nothing gates going live.
+
+**Phase 1 — Accounts.** Better Auth + Google. On first sign-in, adopt the browser's existing localStorage games into the new `user.id` in one transaction.
+
+**Phase 2 — Hosted generation.** Modal image (`run.mjs` + `claude` CLI + Playwright/Chromium, volume for the workdir). The generate route `.spawn()`s and returns immediately; the worker uploads to R2, writes the terminal state, and emails the ping. The cooking tray and `/build/[id]` already poll that row, so **the UI needs no change** to support leaving.
+
+**Phase 3 — Credits.** Polar: a subscription granting N credits per cycle, a `game_generated` meter, free starter credits for new accounts. Gate generation on `balance > 0`. Turn creation on.
+
+**Deferred on purpose:** Apple sign-in (needs $99/yr + a secret that silently expires every 6 months), web push (email is enough), party/multiplayer rooms.
+
+---
+
+## Cost
+
+| Stage | Monthly |
+|---|---|
+| Launch (Phase 0) | **$20** Vercel Pro + ~$1 domain. Turso, R2, Modal, Polar all free-tier. |
+| Creation live | **$20–30** + Claude tokens, initially covered by **Anthropic Claude for Startups** credits (~$25k). |
+| Viral (1M plays/day) | **~$50–200.** Bandwidth stays $0; the growth is Vercel invocations and Turso reads. |
+
+**The one number that decides the business:** measured Claude-token cost per published game (design → build → play-test → judge, up to 3 cycles). Benchmark it before pricing a credit. It's independent of every choice above, and it's the real go/no-go.
+
+---
+
+## What we deliberately did not build
+
+Elegance here is mostly subtraction:
+
+- **No queue service.** Modal's `.spawn()` + one `generations` row is the queue. (Inngest/Trigger.dev are redundant; QStash's 60s timeout can't even run the job.)
+- **No Redis/cache layer.** Next's built-in caching covers the read-heavy paths.
+- **No container orchestration.** Vercel and Modal each own their own runtime.
+- **No tax engine.** Polar is Merchant-of-Record.
+- **No self-hosted anything.** A solo dev should patch zero servers.
+- **No Cloudflare Workers for the app.** Considered and rejected: OpenNext is an adapter layer with a 3 MiB bundle ceiling, and its win was free bandwidth we get from R2 anyway — without giving up Vercel's preview deploys.
+
+## Open decisions
+
+- Domain names (app + game origin).
+- Credits per game, and how many free credits a new account gets — both blocked on the token benchmark.
