@@ -27,9 +27,17 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: 'could not create remix' }, { status: 500 });
   }
-  for (const f of ['index.html', 'cover.svg', 'DESIGN_BRIEF.md']) {
+  for (const f of ['cover.svg', 'DESIGN_BRIEF.md']) {
     const s = path.join(srcDir, f);
     if (fs.existsSync(s)) fs.copyFileSync(s, path.join(dstDir, f));
+  }
+  // index.html: rewrite any hardcoded references to the source slug (localStorage
+  // keys like gs_best:<slug> / gs_save:<slug>) to the new slug, so a remix keeps
+  // its OWN saved data instead of colliding with the original's (the remix bug).
+  const srcHtml = path.join(srcDir, 'index.html');
+  if (fs.existsSync(srcHtml)) {
+    const html = fs.readFileSync(srcHtml, 'utf8').split(srcSlug).join(newSlug);
+    fs.writeFileSync(path.join(dstDir, 'index.html'), html);
   }
   // rewrite meta for the fork
   let meta: Record<string, unknown> = {};
