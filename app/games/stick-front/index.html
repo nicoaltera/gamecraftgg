@@ -25,7 +25,8 @@ const HANDFONT = '"Comic Neue","Chalkboard SE","Segoe Print","Bradley Hand",curs
 
 // ---------- geometry / world ----------
 // The battlefield is far WIDER than the 960 viewport (~2.7x): the two forts are
-// far apart, so you cannot see both at once — a camera follows the frontline.
+// far apart, so you cannot see both at once. The camera is PLAYER-DRIVEN ONLY —
+// it never scrolls on its own; you drag / arrow / A-D / minimap / Q-E to look.
 const GY = 410;                 // ground line (feet)
 const YOU = 0, FOE = 1;
 const WORLD_W = 2560;           // full battlefield width in world px
@@ -60,12 +61,12 @@ function resize() {
 window.addEventListener('resize', resize); resize();
 const toV = (cx, cy) => ({ x: (cx - ox) / scale, y: (cy - oy) / scale });
 
-// ---------- camera ----------
+// ---------- camera (player-driven only; NEVER auto-scrolls) ----------
 // camX = world x drawn at the left edge of the 960-wide viewport.
-let camX = 0, camManual = 0;              // camManual>0 pauses auto-follow (player panning)
+let camX = 0;                             // moved ONLY by player input (drag / keys / minimap)
 let camDragging = false, camDragLast = 0, camDragMoved = 0;
 const CAM_MAX = () => WORLD_W - W;
-function panCam(nx, hold) { camX = clamp(nx, 0, CAM_MAX()); camManual = hold != null ? hold : 2.4; }
+function panCam(nx) { camX = clamp(nx, 0, CAM_MAX()); }
 // minimap (screen space, under the HUD)
 const MM_W = 300, MM_X = (W - MM_W) / 2, MM_Y = 92, MM_H = 12;
 const inMinimap = (vx, vy) => vx >= MM_X - 6 && vx <= MM_X + MM_W + 6 && vy >= MM_Y - 8 && vy <= MM_Y + MM_H + 8;
@@ -186,6 +187,18 @@ const TURRET = { // tiers: 0 = none. cost to reach tier i (buy=1).
   range:[0, 360, 400, 450, 520],
   max: 4,
 };
+// ---------- MINER ECONOMY ----------
+// Gold income = a small flat trickle + a per-miner rate. Miners work BEHIND your
+// fort; buying one costs gold now and pays back over time by raising your coin
+// rate (a compounding economy). Warriors, by contrast, spend gold on immediate
+// military. THE core allocation tradeoff: miners (bigger army later) vs warriors
+// (pressure now, flat income). One clean track, escalating cost, sensible cap.
+const MINER_MAX = 8;
+const MINER_INC = 3.6;                                    // gold/s added per miner
+const MINER_COST = [45, 65, 90, 120, 155, 195, 245, 310]; // cost of the (count+1)th miner
+function goldBase() { return 5 + age * 1.3; }             // flat trickle (small age bump)
+function goldRate() { return goldBase() + miners * MINER_INC; }
+function minerCost(count) { return count >= MINER_MAX ? -1 : MINER_COST[count]; }
 
 // ============================================================
 //  STATE
@@ -204,18 +217,18 @@ let VLOG = false; try { VLOG = new URLSearchParams(location.search).get('v') ===
 let vAcc = 0;
 
 function post(m) { try { parent.postMessage(m, '*'); } catch (e) {} }
-function saveRun() { try { localStorage.setItem('gs_save:' + SLUG, JSON.stringify({ battle, age, turretTier, gold: Math.round(gold), xp: Math.round(xp), won: battlesWon })); } catch (e) {} }
+function saveRun() { try { localStorage.setItem('gs_save:' + SLUG, JSON.stringify({ battle, age, turretTier, miners, gold: Math.round(gold), xp: Math.round(xp), won: battlesWon })); } catch (e) {} }
 function clearSave() { try { localStorage.removeItem('gs_save:' + SLUG); } catch (e) {} }
 
 // run/campaign state
 let battle = 1, battlesWon = 0;
-let gold = 160, xp = 0, age = 0, turretTier = 0;
+let gold = 160, xp = 0, age = 0, turretTier = 0, miners = 0;
 // enemy state
-let eGold = 0, eXp = 0, eAge = 0, eTurret = 0, eAgeCap = 0, ePopCap = 6, eInc = 7, eDecT = 0;
+let eGold = 0, eXp = 0, eAge = 0, eTurret = 0, eAgeCap = 0, ePopCap = 6, eInc = 7, eDecT = 0, eMiners = 0, eMinerTarget = 0;
 // forts
 const fort = [{ hp: 720, max: 720, shake: 0 }, { hp: 380, max: 380, shake: 0 }];
 // timers / juice
-let battleTime = 0, shake = 0, siege = 0, drumInt = 1.4, drumClock = 0;
+let battleTime = 0, shake = 0, siege = 0, drumInt = 1.4, drumClock = 0, minerFxT = 0;
 let ageFlash = [0, 0], flashCol = null, flashPop = 0;
 let ageWaveT = 0, ageWaveSide = YOU;   // expanding shockwave for the age-up moment
 let banner = null, bannerT = 0;      // {txt, sub, col}
@@ -405,11 +418,12 @@ function startBattle(n, resume) {
   // enemy scales with battle number
   fort[FOE].max = Math.round(380 + (n - 1) * 175); fort[FOE].hp = fort[FOE].max; fort[FOE].shake = 0;
   eGold = 90 + n * 28; eXp = 0; eAge = 0; eTurret = 0; eDecT = 0;
+  eMiners = 0; eMinerTarget = clamp(1 + n, 2, 6);   // foe also races an economy
   eAgeCap = clamp(n - 1, 0, 4);
   ePopCap = Math.min(16, 5 + n * 2);
-  eInc = 6.5 + (n - 1) * 3.1;
+  eInc = 5 + (n - 1) * 1.5;                          // foe flat trickle (miners supplement)
   drumInt = 1.4; drumClock = 0;
-  camX = 0; camManual = 0; camDragging = false;   // start looking at your fort
+  camX = 0; camDragging = false;   // opening view sits at YOUR fort (far left)
   if (!resume) { /* keep gold/xp/age/turret across battles within run */ }
   state = ST.BATTLE;
   saveRun();
@@ -445,6 +459,20 @@ function buyTurret(side) {
   if (side === YOU) { if (turretTier >= TURRET.max) return false; const cost = TURRET.cost[turretTier + 1];
     if (gold < cost) return false; gold -= cost; turretTier++; ageFlash[YOU] = 0.6; flashPop = 0.6; flashCol = ACC[YOU]; floater(YOU_CTR, TURRET_Y - 30, 'TURRET T' + turretTier, ACC[YOU], 15); sFanfare(); saveRun(); return true; }
   else { if (eTurret >= TURRET.max) return; const cost = TURRET.cost[eTurret + 1]; if (eGold < cost) return; eGold -= cost; eTurret++; }
+}
+function buyMiner(side) {
+  if (side === YOU) {
+    if (miners >= MINER_MAX) return false;
+    const cost = MINER_COST[miners]; if (gold < cost) return false;
+    gold -= cost; miners++;
+    // flourish: a new miner trots in behind the fort at a gold vein
+    const mx = 128 - (miners - 1) * 13;
+    floater(mx, GY - 40, '+MINER', GOLDC, 15); pop(mx, GY - 20, GOLDC);
+    inkSplat(mx, GY - 16, GOLDC, 4); sCoin();
+    saveRun(); return true;
+  } else {
+    if (eMiners >= MINER_MAX) return; const cost = MINER_COST[eMiners]; if (eGold < cost) return; eGold -= cost; eMiners++;
+  }
 }
 // turret fire
 let turretT = [0, 0];
@@ -483,10 +511,13 @@ function counterPick() {
   return r < 0.5 ? 0 : (r < 0.8 ? 2 : 1);   // default mix, favor cheap
 }
 function updateAI(dt) {
-  eGold += (eInc + AGES[eAge].inc * 0.5) * dt; eXp += 5 * dt;
+  // foe income mirrors the player's: flat trickle + per-miner rate
+  eGold += (eInc + eAge * 1.3 + eMiners * MINER_INC) * dt; eXp += 5 * dt;
   eDecT -= dt; if (eDecT > 0) return; eDecT = 0.35;
   // age up when affordable and profitable to bank a bit
   if (eAge < eAgeCap && eXp >= AGE_XP[eAge] && rng() < 0.5) { enemyAgeUp(); return; }
+  // invest in economy: buy miners toward the target before over-committing to army
+  if (eMiners < eMinerTarget && eGold >= MINER_COST[eMiners] && rng() < 0.55) { buyMiner(FOE); return; }
   // buy/upgrade turret sometimes (battle 2+)
   if (battle >= 2 && eTurret < TURRET.max && eGold > TURRET.cost[eTurret + 1] + 60 && rng() < 0.14) { buyTurret(FOE); return; }
   // spawn if we have units and room
@@ -514,7 +545,7 @@ function update(dt) {
   if (ageFlash[YOU] > 0) ageFlash[YOU] -= dt * 1.5; if (ageFlash[FOE] > 0) ageFlash[FOE] -= dt * 1.5;
   if (flashPop > 0) flashPop -= dt * 2;
   if (ageWaveT > 0) ageWaveT = Math.max(0, ageWaveT - dt * 1.6);
-  if (state === ST.BATTLE || state === ST.INTERLUDE) updateCamera(dt);
+  // NOTE: no camera update here — camX moves ONLY on player input (drag/keys/minimap).
   if (shake > 0) shake = Math.max(0, shake - dt * 22);
   fort[YOU].shake = Math.max(0, fort[YOU].shake - dt * 26); fort[FOE].shake = Math.max(0, fort[FOE].shake - dt * 26);
   if (explainerT > 0) explainerT -= dt; if (sideCalloutT > 0) sideCalloutT -= dt;
@@ -522,8 +553,10 @@ function update(dt) {
   if (state !== ST.BATTLE) { if (state === ST.INTERLUDE) { updateUnits(dt); updateProjs(dt); } return; }
 
   battleTime += dt;
-  // income
-  gold += AGES[age].inc * dt; xp += 3 * dt;
+  // income — flat trickle + per-miner rate (miner vs warrior tradeoff)
+  gold += goldRate() * dt; xp += 3 * dt;
+  // miners visibly "working": occasional gold sparkle at the vein
+  if (miners > 0) { minerFxT -= dt; if (minerFxT <= 0) { minerFxT = 0.9 / Math.max(1, miners * 0.5); const mi = randi(0, miners - 1); pop(128 - mi * 13, GY - 18, GOLDC); } }
   // hold-to-repeat spawns
   handleHold(dt);
   // AI
@@ -543,23 +576,7 @@ function update(dt) {
   const total = countUnits(YOU) + countUnits(FOE);
   drumInt = clamp(1.4 - total * 0.05, 0.42, 1.4);
   drumClock += dt; if (drumClock >= drumInt) { drumClock = 0; sDrum(clamp(0.04 + total * 0.006, 0.05, 0.16)); }
-  if (VLOG) { vAcc += dt; if (vAcc >= 0.4) { vAcc = 0; console.log('SFV ' + JSON.stringify({ t: +battleTime.toFixed(1), st: state, age: age, gold: Math.floor(gold), xp: Math.floor(xp), foeHP: Math.round(fort[FOE].hp), foeMax: fort[FOE].max, youHP: Math.round(fort[YOU].hp), foeAge: eAge, pop: countUnits(YOU), cam: Math.round(camX), won: battlesWon })); } }
-}
-
-// ---------- camera follow ----------
-function updateCamera(dt) {
-  if (camManual > 0) { camManual -= dt; return; }   // player is panning — leave camX alone
-  let fY = null, fF = null;
-  for (let i = 0; i < MAXU; i++) { const u = units[i]; if (!u.active || u.dying) continue;
-    if (u.side === YOU) { if (fY === null || u.x > fY) fY = u.x; }
-    else { if (fF === null || u.x < fF) fF = u.x; } }
-  let focus;
-  if (fY === null && fF === null) focus = YOU_CTR + W * 0.34;   // pre-clash: your fort + field
-  else if (fF === null) focus = fY + 150;                      // you are pushing forward
-  else if (fY === null) focus = fF - 150;                      // enemy pushing toward you
-  else focus = (fY + fF) / 2;                                  // center the clash / frontline
-  const target = clamp(focus - W / 2, 0, CAM_MAX());
-  camX += (target - camX) * Math.min(1, dt * 3.4);
+  if (VLOG) { vAcc += dt; if (vAcc >= 0.4) { vAcc = 0; console.log('SFV ' + JSON.stringify({ t: +battleTime.toFixed(1), st: state, age: age, gold: Math.floor(gold), xp: Math.floor(xp), rate: +goldRate().toFixed(1), miners: miners, eMiners: eMiners, foeHP: Math.round(fort[FOE].hp), foeMax: fort[FOE].max, youHP: Math.round(fort[YOU].hp), foeAge: eAge, pop: countUnits(YOU), cam: Math.round(camX), won: battlesWon })); } }
 }
 
 // ============================================================
@@ -570,14 +587,16 @@ let buttons = []; // {id, x,y,w,h, kind, ci}
 function layoutButtons() {
   buttons = [];
   const y = 452, h = 78;
-  const uw = 150, gap = 12; let x = 14;
-  for (let i = 0; i < 3; i++) { buttons.push({ id: 'u' + i, x: x, y: y, w: uw, h: h, kind: 'unit', ci: i, key: String(i + 1) }); x += uw + gap; }
-  buttons.push({ id: 'turret', x: 520, y: y, w: 196, h: h, kind: 'turret', key: '4' });
-  buttons.push({ id: 'age', x: 728, y: y, w: 218, h: h, kind: 'age', key: '5' });
+  const uw = 124; let x = 10;
+  for (let i = 0; i < 3; i++) { buttons.push({ id: 'u' + i, x: x, y: y, w: uw, h: h, kind: 'unit', ci: i, key: String(i + 1) }); x += uw + 8; }
+  buttons.push({ id: 'miner', x: x, y: y, w: 130, h: h, kind: 'miner', key: '4' }); x += 130 + 10;
+  buttons.push({ id: 'turret', x: x, y: y, w: 150, h: h, kind: 'turret', key: '5' }); x += 150 + 10;
+  buttons.push({ id: 'age', x: x, y: y, w: 950 - x, h: h, kind: 'age', key: '6' });
 }
 layoutButtons();
 function btnCost(b) {
   if (b.kind === 'unit') return Math.round(CLS[b.ci].cost * AGES[age].cost);
+  if (b.kind === 'miner') return minerCost(miners);
   if (b.kind === 'turret') return turretTier >= TURRET.max ? -1 : TURRET.cost[turretTier + 1];
   if (b.kind === 'age') return age >= 4 ? -1 : AGE_XP[age];
   return 0;
@@ -585,12 +604,14 @@ function btnCost(b) {
 function btnEnabled(b) {
   if (state !== ST.BATTLE) return false;
   if (b.kind === 'unit') return gold >= btnCost(b) && countUnits(YOU) < POP_YOU;
+  if (b.kind === 'miner') { const c = btnCost(b); return c >= 0 && gold >= c; }
   if (b.kind === 'turret') { const c = btnCost(b); return c >= 0 && gold >= c; }
   if (b.kind === 'age') { const c = btnCost(b); return c >= 0 && xp >= c; }
   return false;
 }
 function doButton(b) {
   if (b.kind === 'unit') return trySpawnPlayer(b.ci);
+  if (b.kind === 'miner') return buyMiner(YOU);
   if (b.kind === 'turret') return buyTurret(YOU);
   if (b.kind === 'age') return playerAgeUp();
 }
@@ -598,9 +619,9 @@ function doButton(b) {
 let held = null, heldT = 0;   // held button for repeat (units)
 const keyHeld = {};
 function handleHold(dt) {
-  if (held && held.kind === 'unit') { heldT -= dt; if (heldT <= 0) { if (btnEnabled(held)) doButton(held); heldT = SPAWN_CADENCE; } }
-  // keyboard held unit spawns
-  for (let i = 0; i < 3; i++) { const k = String(i + 1);
+  if (held && (held.kind === 'unit' || held.kind === 'miner')) { heldT -= dt; if (heldT <= 0) { if (btnEnabled(held)) doButton(held); heldT = SPAWN_CADENCE; } }
+  // keyboard held buys (1-3 warriors, 4 miner)
+  for (let i = 0; i < 4; i++) { const k = String(i + 1);
     if (keyHeld[k]) { keyHeld['_t' + k] = (keyHeld['_t' + k] || 0) - dt; if (keyHeld['_t' + k] <= 0) { const b = buttons[i]; if (btnEnabled(b)) doButton(b); keyHeld['_t' + k] = SPAWN_CADENCE; } } }
 }
 function hitButton(vx, vy) { for (const b of buttons) if (vx >= b.x && vx <= b.x + b.w && vy >= b.y && vy <= b.y + b.h) return b; return null; }
@@ -617,10 +638,10 @@ canvas.addEventListener('pointerdown', (e) => {
   const v = toV(e.clientX, e.clientY);
   if (state === ST.BATTLE) {
     const b = hitButton(v.x, v.y);
-    if (b) { const ok = doButton(b); if (b.kind === 'unit') { held = b; heldT = SPAWN_CADENCE; } if (!ok) { /* flash disabled handled visually */ } return; }
+    if (b) { const ok = doButton(b); if (b.kind === 'unit' || b.kind === 'miner') { held = b; heldT = SPAWN_CADENCE; } if (!ok) { /* flash disabled handled visually */ } return; }
     if (inMinimap(v.x, v.y)) { panCam((clamp((v.x - MM_X) / MM_W, 0, 1) * WORLD_W) - W / 2); return; }
-    // drag anywhere on the field to pan the camera and look toward either fort
-    if (v.y > 86 && v.y < 440) { camDragging = true; camDragLast = v.x; camDragMoved = 0; camManual = 2.4; return; }
+    // drag anywhere on the field to pan the camera (grab-pan) — the ONLY way it moves
+    if (v.y > 86 && v.y < 440) { camDragging = true; camDragLast = v.x; camDragMoved = 0; return; }
   }
   primaryTap();
 });
@@ -635,31 +656,33 @@ canvas.addEventListener('pointercancel', () => { held = null; camDragging = fals
 canvas.addEventListener('pointerleave', () => { held = null; camDragging = false; });
 window.addEventListener('keydown', (e) => {
   const k = e.key;
-  if (k === ' ' || k === 'Enter' || (k >= '1' && k <= '5') || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Home' || k === 'End') e.preventDefault();
+  if (k === ' ' || k === 'Enter' || (k >= '1' && k <= '6') || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Home' || k === 'End' || 'aAdDqQeEtT'.indexOf(k) >= 0) e.preventDefault();
   initAudio();
-  if (state === ST.SPLASH) { if (k === ' ' || k === 'Enter' || (k >= '1' && k <= '5')) beginRun(); return; }
+  if (state === ST.SPLASH) { if (k === ' ' || k === 'Enter' || (k >= '1' && k <= '6')) beginRun(); return; }
   if (state === ST.OVER) { if ((k === ' ' || k === 'Enter') && goT > 0.5) resetRun(); return; }
   if (state !== ST.BATTLE) return;
-  if (k >= '1' && k <= '3') { const i = +k - 1; if (!keyHeld[k]) { const b = buttons[i]; if (btnEnabled(b)) doButton(b); keyHeld[k] = true; keyHeld['_t' + k] = SPAWN_CADENCE; } }
-  else if (k === '4' || k === 't' || k === 'T') { buyTurret(YOU); }
-  else if (k === '5' || k === 'a' || k === 'A') { playerAgeUp(); }
-  else if (k === 'ArrowLeft') { panCam(camX - 260); }
-  else if (k === 'ArrowRight') { panCam(camX + 260); }
-  else if (k === 'Home' || k === 'q' || k === 'Q') { panCam(YOU_CTR - W / 2); }   // peek your fort
+  // buys: 1-3 spawn warriors, 4 buys a miner (all hold-to-repeat)
+  if (k >= '1' && k <= '4') { const i = +k - 1; if (!keyHeld[k]) { const b = buttons[i]; if (btnEnabled(b)) doButton(b); keyHeld[k] = true; keyHeld['_t' + k] = SPAWN_CADENCE; } }
+  else if (k === '5' || k === 't' || k === 'T') { buyTurret(YOU); }
+  else if (k === '6') { playerAgeUp(); }
+  // camera pan — PLAYER ONLY (arrows or A/D nudge; Q/E jump to a fort)
+  else if (k === 'ArrowLeft' || k === 'a' || k === 'A') { panCam(camX - 260); }
+  else if (k === 'ArrowRight' || k === 'd' || k === 'D') { panCam(camX + 260); }
+  else if (k === 'Home' || k === 'q' || k === 'Q') { panCam(YOU_CTR - W / 2); }   // jump to your fort
   else if (k === 'End' || k === 'e' || k === 'E') { panCam(FOE_CTR - W / 2); }     // peek foe fort
 });
-window.addEventListener('keyup', (e) => { const k = e.key; if (k >= '1' && k <= '3') keyHeld[k] = false; });
+window.addEventListener('keyup', (e) => { const k = e.key; if (k >= '1' && k <= '4') keyHeld[k] = false; });
 
 function beginRun() {
-  if (pendingResume) { battle = pendingResume.battle; age = pendingResume.age || 0; turretTier = pendingResume.turretTier || 0; gold = pendingResume.gold || 160; xp = pendingResume.xp || 0; battlesWon = pendingResume.won || 0; pendingResume = null; }
-  else { battle = 1; age = 0; turretTier = 0; gold = 160; xp = 0; battlesWon = 0; }
+  if (pendingResume) { battle = pendingResume.battle; age = pendingResume.age || 0; turretTier = pendingResume.turretTier || 0; miners = pendingResume.miners || 0; gold = pendingResume.gold || 160; xp = pendingResume.xp || 0; battlesWon = pendingResume.won || 0; pendingResume = null; }
+  else { battle = 1; age = 0; turretTier = 0; miners = 0; gold = 160; xp = 0; battlesWon = 0; }
   firstBattleEver = battle === 1 && battlesWon === 0;
   explainerT = firstBattleEver ? 8.5 : 0; sideCalloutT = 4.5;
   startBattle(battle);
 }
 function resetRun() {
   clearSave(); pendingResume = null;
-  battle = 1; age = 0; turretTier = 0; gold = 160; xp = 0; battlesWon = 0;
+  battle = 1; age = 0; turretTier = 0; miners = 0; gold = 160; xp = 0; battlesWon = 0;
   firstBattleEver = true; explainerT = 8.5; sideCalloutT = 4.5;
   startBattle(1);
 }
@@ -899,6 +922,52 @@ function drawFortHP(side, cx) {
   textSh(Math.ceil(f.hp) + ' / ' + f.max, cx, y + bh + 12, 13, INK, 'center', '700');
 }
 
+// ---- MINERS (economy made visible: little stick miners swinging picks at a gold
+//      vein BEHIND each fort). Drawn in world space, culled to the viewport. ----
+function drawGoldVein(x, side) {
+  ctx.save();
+  ctx.fillStyle = GOLDC; ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.moveTo(x - 15, GY + 2); ctx.quadraticCurveTo(x, GY - 24, x + 15, GY + 2); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = 'rgba(90,61,10,0.55)'; ctx.lineWidth = 1.4;
+  ctx.beginPath(); ctx.moveTo(x, GY - 22); ctx.lineTo(x - 6, GY + 1); ctx.moveTo(x, GY - 22); ctx.lineTo(x + 6, GY + 1); ctx.moveTo(x - 8, GY - 8); ctx.lineTo(x + 8, GY - 8); ctx.stroke();
+  const tw = 0.4 + 0.6 * Math.abs(Math.sin(performance.now() * 0.005 + (side === YOU ? 0 : 2.2)));
+  ctx.globalAlpha = tw; ctx.fillStyle = '#FFF7D0';
+  ctx.beginPath(); ctx.arc(x - 4, GY - 15, 1.8, 0, 6.28); ctx.fill();
+  ctx.beginPath(); ctx.arc(x + 5, GY - 9, 1.3, 0, 6.28); ctx.fill();
+  ctx.restore();
+}
+function drawMiner(x, side, phase) {
+  const col = COL[side], d = side === YOU ? -1 : 1;   // face toward the vein (away from battle)
+  const gy = GY, s = 0.64, swing = Math.sin(phase);
+  const hipY = gy - 18 * s, shY = gy - 32 * s, headY = gy - 41 * s, headR = 5 * s;
+  ctx.save();
+  ctx.globalAlpha = 0.12; ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(x, gy + 3, 8 * s, 2.4, 0, 0, 6.28); ctx.fill(); ctx.globalAlpha = 1;
+  ctx.strokeStyle = col; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  bow(x, hipY, x - 3 * s, gy, 2.8 * s, 0); bow(x, hipY, x + 3 * s, gy, 2.8 * s, 0);
+  const shX = x + d * 3 * s;
+  bow(x, hipY, shX, shY, 3.4 * s, 0);
+  ctx.lineWidth = 2.8 * s; ctx.beginPath(); ctx.arc(shX, headY, headR, 0, 6.28); ctx.stroke();
+  // arm + swinging pick
+  const handX = shX + d * 9 * s, handY = shY + 6 * s + swing * 5 * s;
+  bow(shX, shY + 3 * s, handX, handY, 2.6 * s, 0);
+  const pkx = handX + d * 11 * s, pky = handY - 9 * s + swing * 11 * s;
+  ctx.strokeStyle = INK; ctx.lineWidth = 2.2 * s; bow(handX, handY, pkx, pky, 2.2 * s, 0);
+  ctx.strokeStyle = '#9a9088'; ctx.lineWidth = 2 * s; bow(pkx - d * 5 * s, pky - 2 * s, pkx + d * 5 * s, pky + 2 * s, 2 * s, 0);
+  ctx.restore();
+}
+function drawMiners(side) {
+  const n = side === YOU ? miners : eMiners;
+  const veinX = side === YOU ? 24 : WORLD_W - 24;
+  const baseX = side === YOU ? 128 : FOE_CTR + 30;
+  const dir = side === YOU ? -1 : 1;
+  if (veinX - camX > -40 && veinX - camX < W + 40) drawGoldVein(veinX, side);
+  for (let i = 0; i < n; i++) {
+    const x = baseX + dir * i * 13;
+    if (x - camX < -40 || x - camX > W + 40) continue;
+    drawMiner(x, side, battleTime * 6 + i * 1.7);
+  }
+}
+
 function drawProj(p) {
   ctx.save();
   if (p.type === 0) { // arrow
@@ -947,7 +1016,7 @@ function drawHUD() {
   ctx.fillStyle = GOLDC; ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(30, 26, 11, 0, 6.28); ctx.fill(); ctx.stroke();
   textSh('$', 30, 26, 14, '#5a3d0a', 'center', '800');
   textSh(Math.floor(gold) + '', 48, 26, 26, INK, 'left', '800');
-  textSh('gold  +' + AGES[age].inc + '/s', 48, 46, 12, 'rgba(42,35,32,0.6)', 'left', '700');
+  textSh('+' + goldRate().toFixed(1) + ' gold/s · ' + miners + ' miner' + (miners === 1 ? '' : 's'), 48, 46, 12, 'rgba(42,35,32,0.62)', 'left', '700');
   // age + xp bar
   const ax = 210;
   textSh('AGE  ' + AGES[age].name, ax, 20, 17, COL[YOU], 'left', '800');
@@ -990,19 +1059,32 @@ function drawButtons() {
       ctx.fillStyle = GOLDC; ctx.beginPath(); ctx.arc(b.x + 60, b.y + 60, 7, 0, 6.28); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.4; ctx.stroke();
       textSh(cost + '', b.x + 74, b.y + 60, 15, gold >= cost ? INK : COL[FOE], 'left', '800');
       // hotkey
-      textSh('[' + b.key + '] hold', b.x + b.w - 8, b.y + 14, 11, 'rgba(42,35,32,0.55)', 'right', '700');
+      textSh('[' + b.key + ']', b.x + b.w - 8, b.y + 14, 11, 'rgba(42,35,32,0.55)', 'right', '700');
+    } else if (b.kind === 'miner') {
+      textSh('MINER', b.x + 14, b.y + 22, 16, '#8a5a12', 'left', '800');
+      // little gold nugget icon
+      ctx.fillStyle = GOLDC; ctx.strokeStyle = INK; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(b.x + 14, b.y + 42); ctx.quadraticCurveTo(b.x + 22, b.y + 30, b.x + 30, b.y + 42); ctx.closePath(); ctx.fill(); ctx.stroke();
+      if (miners >= MINER_MAX) { textSh('MAX  ' + miners + ' miners', b.x + 40, b.y + 42, 12, INK, 'left', '800'); }
+      else {
+        textSh(miners + '/' + MINER_MAX + ' · +' + MINER_INC + '/s each', b.x + 40, b.y + 42, 10.5, 'rgba(42,35,32,0.66)', 'left', '700');
+        ctx.fillStyle = GOLDC; ctx.beginPath(); ctx.arc(b.x + 20, b.y + 62, 7, 0, 6.28); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.4; ctx.stroke();
+        textSh(cost + '', b.x + 34, b.y + 62, 15, gold >= cost ? INK : COL[FOE], 'left', '800');
+        textSh('income', b.x + b.w - 8, b.y + 62, 11, 'rgba(42,35,32,0.5)', 'right', '700');
+      }
+      textSh('[' + b.key + ']', b.x + b.w - 8, b.y + 14, 11, 'rgba(42,35,32,0.55)', 'right', '700');
     } else if (b.kind === 'turret') {
       textSh('TURRET', b.x + 14, b.y + 22, 17, COL[YOU], 'left', '800');
       if (turretTier >= TURRET.max) textSh('MAX  T' + turretTier, b.x + 14, b.y + 44, 14, INK, 'left', '800');
       else { textSh(turretTier === 0 ? 'build archer' : 'upgrade → T' + (turretTier + 1), b.x + 14, b.y + 44, 12, 'rgba(42,35,32,0.65)', 'left', '700');
         ctx.fillStyle = GOLDC; ctx.beginPath(); ctx.arc(b.x + 20, b.y + 62, 7, 0, 6.28); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.4; ctx.stroke();
         textSh(cost + '', b.x + 34, b.y + 62, 15, gold >= cost ? INK : COL[FOE], 'left', '800'); }
-      textSh('[4]', b.x + b.w - 8, b.y + 14, 11, 'rgba(42,35,32,0.55)', 'right', '700');
+      textSh('[5]', b.x + b.w - 8, b.y + 14, 11, 'rgba(42,35,32,0.55)', 'right', '700');
     } else { // age
       if (age >= 4) { textSh('MAX AGE', b.x + b.w / 2, b.y + 30, 18, COL[YOU], 'center', '800'); textSh('Future reached', b.x + b.w / 2, b.y + 52, 12, 'rgba(42,35,32,0.6)', 'center', '700'); }
       else { textSh('ADVANCE AGE', b.x + b.w / 2, b.y + 20, 16, COL[YOU], 'center', '800');
         textSh('→ ' + AGES[age + 1].name, b.x + b.w / 2, b.y + 40, 14, INK, 'center', '800');
-        textSh(cost + ' XP  [5]', b.x + b.w / 2, b.y + 60, 13, xp >= cost ? XPC : 'rgba(42,35,32,0.55)', 'center', '800'); }
+        textSh(cost + ' XP  [6]', b.x + b.w / 2, b.y + 60, 13, xp >= cost ? XPC : 'rgba(42,35,32,0.55)', 'center', '800'); }
     }
     ctx.restore();
   }
@@ -1035,19 +1117,20 @@ function drawExplainer() {
   const a = clamp(explainerT / 1.2, 0, 1);
   ctx.globalAlpha = a;
   // one-liner strip
-  ctx.fillStyle = 'rgba(42,35,32,0.9)'; roundRect(W / 2 - 320, 120, 640, 34, 8); ctx.fill();
-  textSh('Earn gold  →  spawn units  →  march right to smash their fort  →  advance the age', W / 2, 137, 15, '#F4ECD8', 'center', '800');
+  ctx.fillStyle = 'rgba(42,35,32,0.9)'; roundRect(W / 2 - 340, 120, 680, 34, 8); ctx.fill();
+  textSh('MINERS raise your gold income · WARRIORS fight now · smash their fort · advance the age', W / 2, 137, 14, '#F4ECD8', 'center', '800');
   // arrows / labels (screen space)
-  textSh('↓ spawn here (hold to keep sending)', 240, 428, 14, COL[YOU], 'center', '800');
-  textSh('advance age ↓', 837, 428, 13, COL[YOU], 'center', '800');
+  textSh('↓ warriors (hold)', 205, 428, 13, COL[YOU], 'center', '800');
+  textSh('↓ miners = income', 471, 428, 12, '#8a5a12', 'center', '800');
+  textSh('advance age ↓', 828, 428, 13, COL[YOU], 'center', '800');
   ctx.globalAlpha = 1;
 }
 // small navigation hint on early battle: the map is wide, you must look around
 function drawNavHint() {
   if (sideCalloutT <= 0) return; const a = clamp(sideCalloutT / 1.4, 0, 1); ctx.globalAlpha = a;
   const bob = Math.sin(performance.now() * 0.006) * 3;
-  ctx.fillStyle = 'rgba(42,35,32,0.82)'; roundRect(W / 2 - 250, 172 + bob, 500, 30, 8); ctx.fill();
-  textSh('the field is WIDE — drag or ◄ ► to look · YOUR fort is far left · FOE fort far right', W / 2, 187 + bob, 13.5, '#F4ECD8', 'center', '800');
+  ctx.fillStyle = 'rgba(42,35,32,0.82)'; roundRect(W / 2 - 275, 172 + bob, 550, 30, 8); ctx.fill();
+  textSh('YOU steer the view — drag · ◄ ►/A·D pan · Q your fort · E foe fort (it never moves on its own)', W / 2, 187 + bob, 12.5, '#F4ECD8', 'center', '800');
   ctx.globalAlpha = 1;
 }
 // minimap: full battlefield with fort markers, unit blips, and the camera window
@@ -1176,6 +1259,7 @@ function render() {
   ctx.save(); ctx.translate(-camX, 0);
   drawPaper();
   drawFort(YOU); drawFort(FOE);
+  if (state === ST.BATTLE || state === ST.INTERLUDE) { drawMiners(YOU); drawMiners(FOE); }
   const order = [];
   for (let i = 0; i < MAXU; i++) if (units[i].active) order.push(units[i]);
   order.sort((a, b) => a.x - b.x);
