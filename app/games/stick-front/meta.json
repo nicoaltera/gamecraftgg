@@ -1,0 +1,13 @@
+{
+  "title": "Stick Front",
+  "slug": "stick-front",
+  "description": "Age-of-War in one ink lane: spawn stick armies, climb 5 ages, and smash the enemy fort — how many battles can you win?",
+  "verb": "spawn and advance",
+  "dials": ["progression", "mastery"],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "wins",
+  "scoreOrder": "desc",
+  "palette": ["#F4ECD8", "#2A2320", "#1F4E8C", "#B23A2C", "#E0A32E", "#3AA6A0"],
+  "author": "gamesight"
+}

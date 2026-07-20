@@ -1,0 +1,1222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Stick Front</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #241d17; overflow: hidden; }
+  canvas { display: block; touch-action: none; -webkit-tap-highlight-color: transparent; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+/* ============================================================
+   STICK FRONT — Age of War in one ink lane.
+   Earn gold, spawn featureless stick warriors, smash the enemy
+   fort, advance through 5 ages. Win battles vs an escalating AI.
+   Pure Canvas2D + WebAudio. 960x540 virtual, letterboxed, dpr-crisp.
+   ============================================================ */
+const W = 960, H = 540;
+const SLUG = 'stick-front';
+const HANDFONT = '"Comic Neue","Chalkboard SE","Segoe Print","Bradley Hand",cursive';
+
+// ---------- geometry / world ----------
+// The battlefield is far WIDER than the 960 viewport (~2.7x): the two forts are
+// far apart, so you cannot see both at once — a camera follows the frontline.
+const GY = 410;                 // ground line (feet)
+const YOU = 0, FOE = 1;
+const WORLD_W = 2560;           // full battlefield width in world px
+const YOU_CTR = 150, YOU_WALL = 202;    // your fort (far left)
+const FOE_CTR = 2410, FOE_WALL = 2358;  // enemy fort (far right)
+const YOU_SPAWN = 214, FOE_SPAWN = 2346;
+const TURRET_Y = 302;
+const SPACING = 27;             // marching column gap
+const POP_YOU = 16;             // your population cap
+const SIEGE_START = 70;         // seconds until war-exhaustion (wider map => longer)
+const SIEGE_WARN = 57;
+
+// ---------- palette ----------
+const PAPER = '#F4ECD8', PAPER2 = '#EAE0C6', INK = '#2A2320';
+const COL = ['#1F4E8C', '#B23A2C'];        // YOU ink / FOE ink
+const ACC = ['#5B9BD5', '#E0913C'];        // accents (plume/glow)
+const GOLDC = '#E0A32E', XPC = '#3AA6A0';
+
+// ---------- canvas / letterbox ----------
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let dpr = 1, scale = 1, ox = 0, oy = 0, cw = 0, chh = 0;
+function resize() {
+  dpr = Math.min(2.5, window.devicePixelRatio || 1);
+  cw = window.innerWidth; chh = window.innerHeight;
+  canvas.width = Math.round(cw * dpr);
+  canvas.height = Math.round(chh * dpr);
+  canvas.style.width = cw + 'px'; canvas.style.height = chh + 'px';
+  scale = Math.min(cw / W, chh / H);
+  ox = (cw - W * scale) / 2; oy = (chh - H * scale) / 2;
+}
+window.addEventListener('resize', resize); resize();
+const toV = (cx, cy) => ({ x: (cx - ox) / scale, y: (cy - oy) / scale });
+
+// ---------- camera ----------
+// camX = world x drawn at the left edge of the 960-wide viewport.
+let camX = 0, camManual = 0;              // camManual>0 pauses auto-follow (player panning)
+let camDragging = false, camDragLast = 0, camDragMoved = 0;
+const CAM_MAX = () => WORLD_W - W;
+function panCam(nx, hold) { camX = clamp(nx, 0, CAM_MAX()); camManual = hold != null ? hold : 2.4; }
+// minimap (screen space, under the HUD)
+const MM_W = 300, MM_X = (W - MM_W) / 2, MM_Y = 92, MM_H = 12;
+const inMinimap = (vx, vy) => vx >= MM_X - 6 && vx <= MM_X + MM_W + 6 && vy >= MM_Y - 8 && vy <= MM_Y + MM_H + 8;
+const w2mini = (wx) => MM_X + clamp(wx / WORLD_W, 0, 1) * MM_W;
+
+// ---------- RNG ----------
+function mulberry32(a) { return function () {
+  a |= 0; a = (a + 0x6D2B79F5) | 0;
+  let t = Math.imul(a ^ (a >>> 15), 1 | a);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}; }
+let rng = mulberry32(9182);
+const rand = (a, b) => a + (b - a) * rng();
+const randi = (a, b) => Math.floor(rand(a, b + 1));
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+
+// ============================================================
+//  AUDIO (WebAudio synth)
+// ============================================================
+let ac = null, master = null, noiseBuf = null;
+function initAudio() {
+  if (ac) return;
+  try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+  master = ac.createGain(); master.gain.value = 0.55; master.connect(ac.destination);
+  noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.5, ac.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+}
+function env(g, t0, a, peak, d) {
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.linearRampToValueAtTime(peak, t0 + a);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + a + d);
+}
+function tone(freq, type, t0, a, peak, d, dest) {
+  const o = ac.createOscillator(); o.type = type; o.frequency.value = freq;
+  const g = ac.createGain(); env(g, t0, a, peak, d);
+  o.connect(g); g.connect(dest || master); o.start(t0); o.stop(t0 + a + d + 0.02);
+  return o;
+}
+function noise(t0, a, peak, d, filt, freq, q) {
+  const n = ac.createBufferSource(); n.buffer = noiseBuf;
+  const f = ac.createBiquadFilter(); f.type = filt; f.frequency.value = freq; f.Q.value = q || 1;
+  const g = ac.createGain(); env(g, t0, a, peak, d);
+  n.connect(f); f.connect(g); g.connect(master); n.start(t0); n.stop(t0 + a + d + 0.05);
+}
+function sClink() { if (!ac) return; const t = ac.currentTime, pv = 0.85 + Math.random() * 0.3;
+  tone(1400 * pv, 'square', t, 0.002, 0.05, 0.06); tone(2100 * pv, 'triangle', t, 0.002, 0.035, 0.05);
+  noise(t, 0.001, 0.04, 0.04, 'highpass', 2600, 1); }
+function sTwang() { if (!ac) return; const t = ac.currentTime, pv = 0.9 + Math.random() * 0.25;
+  const o = ac.createOscillator(); o.type = 'triangle';
+  o.frequency.setValueAtTime(520 * pv, t); o.frequency.exponentialRampToValueAtTime(180 * pv, t + 0.12);
+  const g = ac.createGain(); env(g, t, 0.002, 0.06, 0.12); o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.16); }
+function sLaser() { if (!ac) return; const t = ac.currentTime, pv = 0.9 + Math.random() * 0.3;
+  const o = ac.createOscillator(); o.type = 'sawtooth';
+  o.frequency.setValueAtTime(1200 * pv, t); o.frequency.exponentialRampToValueAtTime(420, t + 0.1);
+  const g = ac.createGain(); env(g, t, 0.002, 0.05, 0.1); o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.14); }
+function sCoin() { if (!ac) return; const t = ac.currentTime, pv = 0.96 + Math.random() * 0.08;
+  tone(1180 * pv, 'square', t, 0.002, 0.05, 0.06); tone(1760 * pv, 'square', t + 0.05, 0.002, 0.045, 0.08); }
+function sSpawn(side) { if (!ac) return; const t = ac.currentTime;
+  const o = ac.createOscillator(); o.type = 'triangle';
+  o.frequency.setValueAtTime(side === YOU ? 300 : 220, t); o.frequency.exponentialRampToValueAtTime(side === YOU ? 460 : 330, t + 0.09);
+  const g = ac.createGain(); env(g, t, 0.004, 0.05, 0.09); o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.14); }
+function sFortHit() { if (!ac) return; const t = ac.currentTime;
+  noise(t, 0.003, 0.12, 0.16, 'lowpass', 240, 0.7);
+  const o = ac.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(120, t); o.frequency.exponentialRampToValueAtTime(50, t + 0.15);
+  const g = ac.createGain(); env(g, t, 0.003, 0.14, 0.16); o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.22); }
+function sFanfare() { if (!ac) return; const t = ac.currentTime;
+  [523, 659, 784, 1046].forEach((f, i) => { tone(f, 'triangle', t + i * 0.09, 0.01, 0.09, 0.24); tone(f * 2, 'sine', t + i * 0.09, 0.01, 0.03, 0.2); }); }
+function sCrumble(win) { if (!ac) return; const t = ac.currentTime;
+  noise(t, 0.02, 0.4, 1.0, 'lowpass', 600, 0.6);
+  const o = ac.createOscillator(); o.type = 'sawtooth';
+  o.frequency.setValueAtTime(win ? 200 : 260, t); o.frequency.exponentialRampToValueAtTime(win ? 480 : 60, t + 0.7);
+  const g = ac.createGain(); env(g, t, 0.02, 0.22, 0.9); o.connect(g); g.connect(master); o.start(t); o.stop(t + 1.0);
+  if (win) [523, 784, 1046].forEach((f, i) => tone(f, 'triangle', t + 0.2 + i * 0.12, 0.01, 0.1, 0.3)); }
+let drumT = 0;
+function sDrum(vol) { if (!ac) return; const t = ac.currentTime;
+  const o = ac.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(96, t); o.frequency.exponentialRampToValueAtTime(48, t + 0.12);
+  const g = ac.createGain(); env(g, t, 0.004, vol, 0.14); o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.2); }
+
+// ============================================================
+//  DATA — ages, unit classes, turret
+// ============================================================
+// 5 ages. Each visibly re-skins units + boosts stats, fort HP, income.
+const AGES = [
+  { name: 'Stone Age',  hp: 1.00, dmg: 1.00, cost: 1.00, fort: 720,  inc: 9,  band: 0 },
+  { name: 'Sword Age',  hp: 1.55, dmg: 1.45, cost: 1.40, fort: 940,  inc: 13, band: 1 },
+  { name: 'Knight Age', hp: 2.35, dmg: 2.05, cost: 1.90, fort: 1200, inc: 18, band: 2 },
+  { name: 'Musket Age', hp: 3.40, dmg: 3.10, cost: 2.55, fort: 1520, inc: 25, band: 3 },
+  { name: 'Future Age', hp: 5.00, dmg: 4.60, cost: 3.40, fort: 1950, inc: 34, band: 4 },
+];
+// xp to reach age idx 1..4. Steep + progressively steeper so each age is a
+// real, earned milestone (rubric P7): the first age-up takes meaningful play,
+// later ages take substantially more.
+const AGE_XP = [220, 520, 1000, 1750];
+// Per-age STYLE — a visible fidelity LEAP each age (rubric P7 / "make advancement
+// unmistakable"). rough=hand-scribble jitter+passes, lw=stroke weight mult,
+// fill=torso fill alpha, shade=inner shading, torso=body silhouette, glow=energy.
+const AGE_STYLE = [
+  { name: 'stone',  rough: 2.3, passes: 3, lw: 0.92, fill: 0.00, shade: 0.00, torso: 'none',  glow: 0.0 },
+  { name: 'sword',  rough: 1.05, passes: 2, lw: 1.12, fill: 0.13, shade: 0.10, torso: 'tunic', glow: 0.0 },
+  { name: 'knight', rough: 0.45, passes: 1, lw: 1.34, fill: 0.20, shade: 0.30, torso: 'plate', glow: 0.12 },
+  { name: 'musket', rough: 0.18, passes: 1, lw: 1.52, fill: 0.26, shade: 0.44, torso: 'coat',  glow: 0.18 },
+  { name: 'future', rough: 0.0,  passes: 1, lw: 1.72, fill: 0.34, shade: 0.58, torso: 'suit',  glow: 1.0 },
+];
+// 3 classes: light (cheap swarm) / heavy (tanky, cleaves) / ranged (poke, fragile)
+// Speeds are tuned up for the wider battlefield so fronts still meet at a good clip.
+const CLS = [
+  { key: 'light',  name: 'Runner',  hp: 34,  dmg: 9,  spd: 82, atkCd: 0.66, range: 20,  cost: 20, gold: 8,  xp: 7,  sc: 0.92, ranged: false, pspd: 0 },
+  { key: 'heavy',  name: 'Brute',   hp: 155, dmg: 27, spd: 38, atkCd: 1.05, range: 22,  cost: 78, gold: 27, xp: 24, sc: 1.20, ranged: false, pspd: 0 },
+  { key: 'ranged', name: 'Shooter', hp: 42,  dmg: 15, spd: 58, atkCd: 1.25, range: 178, cost: 50, gold: 15, xp: 14, sc: 1.00, ranged: true,  pspd: 460 },
+];
+const TURRET = { // tiers: 0 = none. cost to reach tier i (buy=1).
+  cost: [0, 120, 240, 430, 700],  // gold to reach tier index
+  dmg:  [0, 16, 30, 52, 90],
+  cd:   [0, 1.4, 1.15, 0.92, 0.72],
+  range:[0, 360, 400, 450, 520],
+  max: 4,
+};
+
+// ============================================================
+//  STATE
+// ============================================================
+const ST = { SPLASH: 0, BATTLE: 1, INTERLUDE: 2, OVER: 3 };
+let state = ST.SPLASH;
+
+let best = 0;
+try { best = parseInt(localStorage.getItem('gs_best:' + SLUG) || '0', 10) || 0; } catch (e) {}
+let challengeN = 0;
+try { const c = parseInt(new URLSearchParams(location.search).get('c') || '', 10); if (Number.isFinite(c) && c > 0) challengeN = c; } catch (e) {}
+let challengePosted = false;
+// read-only verification telemetry (opt-in via ?v=1) — emits console lines only,
+// never mutates state. Used by the scripted drive; harmless when absent.
+let VLOG = false; try { VLOG = new URLSearchParams(location.search).get('v') === '1'; } catch (e) {}
+let vAcc = 0;
+
+function post(m) { try { parent.postMessage(m, '*'); } catch (e) {} }
+function saveRun() { try { localStorage.setItem('gs_save:' + SLUG, JSON.stringify({ battle, age, turretTier, gold: Math.round(gold), xp: Math.round(xp), won: battlesWon })); } catch (e) {} }
+function clearSave() { try { localStorage.removeItem('gs_save:' + SLUG); } catch (e) {} }
+
+// run/campaign state
+let battle = 1, battlesWon = 0;
+let gold = 160, xp = 0, age = 0, turretTier = 0;
+// enemy state
+let eGold = 0, eXp = 0, eAge = 0, eTurret = 0, eAgeCap = 0, ePopCap = 6, eInc = 7, eDecT = 0;
+// forts
+const fort = [{ hp: 720, max: 720, shake: 0 }, { hp: 380, max: 380, shake: 0 }];
+// timers / juice
+let battleTime = 0, shake = 0, siege = 0, drumInt = 1.4, drumClock = 0;
+let ageFlash = [0, 0], flashCol = null, flashPop = 0;
+let ageWaveT = 0, ageWaveSide = YOU;   // expanding shockwave for the age-up moment
+let banner = null, bannerT = 0;      // {txt, sub, col}
+let explainerT = 0, sideCalloutT = 0, firstBattleEver = true;
+let turretMuzzle = [0, 0];
+let goT = 0;                          // gameover ease
+let pendingResume = null;
+try { const s = JSON.parse(localStorage.getItem('gs_save:' + SLUG) || 'null'); if (s && s.battle) pendingResume = s; } catch (e) {}
+
+// ============================================================
+//  POOLS
+// ============================================================
+const MAXU = 44, MAXP = 140, MAXPT = 300, MAXF = 44;
+function mkUnit() { return { active: false, side: 0, ci: 0, tier: 0, x: 0, hp: 0, maxHp: 0, dmg: 0, spd: 0, atkCd: 0, atkT: 0, range: 0, ranged: false, pspd: 0, gold: 0, xp: 0, walk: 0, atkAnim: 0, moving: false, dying: false, deathT: 0, k: 0, fall: 0, hpFlash: 0 }; }
+function mkProj() { return { active: false, side: 0, x: 0, y: 0, vx: 0, vy: 0, dmg: 0, type: 0, life: 0, g: 0 }; }
+function mkPart() { return { active: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 0, r: 0, col: '#000', g: 0, kind: 0, rot: 0, vr: 0 }; }
+function mkFloat() { return { active: false, x: 0, y: 0, vy: 0, life: 0, txt: '', col: '#000', sz: 0 }; }
+const units = []; for (let i = 0; i < MAXU; i++) units.push(mkUnit());
+const projs = []; for (let i = 0; i < MAXP; i++) projs.push(mkProj());
+const parts = []; for (let i = 0; i < MAXPT; i++) parts.push(mkPart());
+const floats = []; for (let i = 0; i < MAXF; i++) floats.push(mkFloat());
+function getU() { for (let i = 0; i < MAXU; i++) if (!units[i].active) return units[i]; return null; }
+function getP() { for (let i = 0; i < MAXP; i++) if (!projs[i].active) return projs[i]; return null; }
+function getPt() { for (let i = 0; i < MAXPT; i++) if (!parts[i].active) return parts[i]; return null; }
+function getF() { for (let i = 0; i < MAXF; i++) if (!floats[i].active) return floats[i]; return null; }
+function countUnits(side) { let n = 0; for (let i = 0; i < MAXU; i++) if (units[i].active && !units[i].dying && units[i].side === side) n++; return n; }
+
+// ============================================================
+//  PARTICLES / FLOATERS
+// ============================================================
+function inkSplat(x, y, col, n) {
+  for (let i = 0; i < n; i++) { const p = getPt(); if (!p) break;
+    const a = rand(0, 6.28), sp = rand(30, 150);
+    p.active = true; p.x = x; p.y = y; p.vx = Math.cos(a) * sp; p.vy = Math.sin(a) * sp - rand(10, 70);
+    p.life = p.max = rand(0.35, 0.7); p.r = rand(1.6, 4.2); p.col = col; p.g = 460; p.kind = 0; }
+}
+function pop(x, y, col) {
+  const p = getPt(); if (!p) return; p.active = true; p.x = x; p.y = y; p.vx = 0; p.vy = 0;
+  p.life = p.max = 0.24; p.r = 6; p.col = col; p.g = 0; p.kind = 1;
+}
+function ember(x, y) {
+  const p = getPt(); if (!p) return; p.active = true; p.x = x; p.y = y;
+  p.vx = rand(-20, 20); p.vy = rand(-70, -20); p.life = p.max = rand(0.6, 1.2); p.r = rand(1, 2.6);
+  p.col = rng() < 0.5 ? '#E0913C' : '#B23A2C'; p.g = -30; p.kind = 2;
+}
+function floater(x, y, txt, col, sz) {
+  const f = getF(); if (!f) return; f.active = true; f.x = x; f.y = y; f.vy = -34; f.life = 0.85; f.txt = txt; f.col = col; f.sz = sz || 15;
+}
+function updateParts(dt) {
+  for (let i = 0; i < MAXPT; i++) { const p = parts[i]; if (!p.active) continue;
+    p.life -= dt; if (p.life <= 0) { p.active = false; continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt;
+    if (p.kind === 0 && p.y > GY + 6) { p.y = GY + 6; p.vy = 0; p.vx *= 0.6; }
+  }
+  for (let i = 0; i < MAXF; i++) { const f = floats[i]; if (!f.active) continue;
+    f.life -= dt; if (f.life <= 0) { f.active = false; continue; } f.y += f.vy * dt; f.vy *= 0.94; }
+}
+
+// ============================================================
+//  UNITS
+// ============================================================
+function spawnUnit(side, ci) {
+  const c = CLS[ci]; const u = getU(); if (!u) return null;
+  const tier = side === YOU ? age : eAge;
+  const a = AGES[tier];
+  u.active = true; u.side = side; u.ci = ci; u.tier = tier;
+  u.x = side === YOU ? YOU_SPAWN : FOE_SPAWN;
+  u.maxHp = u.hp = Math.round(c.hp * a.hp);
+  u.dmg = c.dmg * a.dmg; u.spd = c.spd; u.atkCd = c.atkCd; u.atkT = 0; u.range = c.range;
+  u.ranged = c.ranged; u.pspd = c.pspd; u.gold = Math.round(c.gold * a.cost * 0.6); u.xp = c.xp;
+  u.walk = rand(0, 6.28); u.atkAnim = 0; u.moving = true; u.dying = false; u.deathT = 0; u.fall = 0;
+  u.k = rand(-0.7, 0.7); u.hpFlash = 0;
+  sSpawn(side);
+  return u;
+}
+function hurt(u, dmg, bySide, hx) {
+  if (u.dying) return; u.hp -= dmg; u.hpFlash = 1;
+  inkSplat(hx != null ? hx : u.x, GY - 26, COL[u.side], 3);
+  if (u.hp <= 0) {
+    u.dying = true; u.deathT = 0.45; u.hp = 0;
+    inkSplat(u.x, GY - 24, COL[u.side], 7); pop(u.x, GY - 26, ACC[bySide]);
+    // reward killer
+    if (bySide === YOU) { gold += u.gold; xp += u.xp; floater(u.x, GY - 46, '+' + u.gold, GOLDC, 15); sCoin(); }
+    else { eGold += u.gold; eXp += u.xp; }
+  }
+}
+function updateUnits(dt) {
+  for (let i = 0; i < MAXU; i++) { const u = units[i]; if (!u.active) continue;
+    if (u.atkAnim > 0) u.atkAnim = Math.max(0, u.atkAnim - dt * 4);
+    if (u.hpFlash > 0) u.hpFlash = Math.max(0, u.hpFlash - dt * 1.4);
+    if (u.dying) { u.deathT -= dt; u.fall = Math.min(1, u.fall + dt * 4); if (u.deathT <= 0) u.active = false; continue; }
+    const d = u.side === YOU ? 1 : -1;
+    // scan
+    let nEnemy = null, nDist = 1e9, blockGap = 1e9;
+    for (let j = 0; j < MAXU; j++) { const v = units[j]; if (!v.active || v === u || v.dying) continue;
+      const rel = (v.x - u.x) * d;
+      if (v.side !== u.side) { const dist = Math.abs(v.x - u.x); if (rel > -8 && dist < nDist) { nDist = dist; nEnemy = v; } }
+      else { if (rel > 0 && rel < blockGap) blockGap = rel; }
+    }
+    const fortWall = u.side === YOU ? FOE_WALL : YOU_WALL;
+    const fortDist = (fortWall - u.x) * d;
+    const fortAhead = fortDist > 0 && (!nEnemy || fortDist < (nEnemy.x - u.x) * d);
+    u.moving = false;
+    if (u.ranged && nEnemy && nDist <= u.range) {
+      // stop & shoot
+      u.atkT -= dt; if (u.atkT <= 0) { fireArrow(u, nEnemy); u.atkT = u.atkCd; u.atkAnim = 1; }
+    } else if (!u.ranged && nEnemy && nDist <= u.range) {
+      // melee clash
+      u.atkT -= dt; if (u.atkT <= 0) { hurt(nEnemy, u.dmg, u.side, (u.x + nEnemy.x) / 2); u.atkT = u.atkCd; u.atkAnim = 1; sClink(); pop((u.x + nEnemy.x) / 2, GY - 26, INK); }
+    } else if (fortAhead && fortDist <= (u.ranged ? u.range : u.range + 4)) {
+      // hit fort
+      u.atkT -= dt; if (u.atkT <= 0) { hitFort(u.side === YOU ? FOE : YOU, u.dmg, u); u.atkT = u.atkCd; u.atkAnim = 1; if (u.ranged) { fireArrowFort(u); } else sClink(); }
+    } else {
+      // advance (unless blocked by column ahead)
+      if (blockGap >= SPACING) { u.x += d * u.spd * dt; u.moving = true; u.walk += dt * u.spd * 0.18; }
+    }
+  }
+}
+function fireArrow(u, tgt) {
+  const p = getP(); if (!p) return; const d = u.side === YOU ? 1 : -1;
+  p.active = true; p.side = u.side; p.x = u.x + d * 12; p.y = GY - 34; p.dmg = u.dmg;
+  p.type = u.tier >= 4 ? 2 : (u.tier >= 3 ? 1 : 0); // 0 arrow,1 ball,2 laser
+  const spd = u.pspd; const tx = tgt.x, ty = GY - 26; const dx = tx - p.x, dy = ty - p.y; const L = Math.hypot(dx, dy) || 1;
+  p.vx = dx / L * spd; p.vy = dy / L * spd; p.g = p.type === 0 ? 220 : 0; p.life = 2.2;
+  if (p.type === 2) sLaser(); else if (p.type === 1) sTwang(); else sTwang();
+}
+function fireArrowFort(u) {
+  const p = getP(); if (!p) return; const d = u.side === YOU ? 1 : -1;
+  p.active = true; p.side = u.side; p.x = u.x + d * 12; p.y = GY - 34; p.dmg = 0; // visual only, fort dmg already applied
+  p.type = u.tier >= 4 ? 2 : (u.tier >= 3 ? 1 : 0);
+  const spd = u.pspd; p.vx = d * spd; p.vy = -140; p.g = 220; p.life = 0.6;
+  if (p.type === 2) sLaser(); else sTwang();
+}
+function updateProjs(dt) {
+  for (let i = 0; i < MAXP; i++) { const p = projs[i]; if (!p.active) continue;
+    p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt;
+    if (p.life <= 0 || p.x < -20 || p.x > WORLD_W + 20 || p.y > GY + 10) { p.active = false; continue; }
+    if (p.dmg <= 0) continue; // decorative
+    // hit enemy unit
+    let hit = null, hd = 15;
+    for (let j = 0; j < MAXU; j++) { const v = units[j]; if (!v.active || v.dying || v.side === p.side) continue;
+      const dx = Math.abs(v.x - p.x), dy = Math.abs((GY - 26) - p.y);
+      if (dx < 12 && dy < 26) { const dd = dx; if (dd < hd) { hd = dd; hit = v; } } }
+    if (hit) { hurt(hit, p.dmg, p.side, p.x); pop(p.x, p.y, ACC[p.side]); p.active = false; continue; }
+    // hit fort
+    const fx = p.side === YOU ? FOE_WALL : YOU_WALL;
+    if ((p.side === YOU && p.x >= fx) || (p.side === FOE && p.x <= fx)) { hitFort(p.side === YOU ? FOE : YOU, p.dmg, null); p.active = false; }
+  }
+}
+
+// ============================================================
+//  FORTS / BATTLE FLOW
+// ============================================================
+function hitFort(target, dmg, u) {
+  if (state !== ST.BATTLE) return;
+  const f = fort[target]; f.hp -= dmg; f.shake = Math.min(7, f.shake + 1.6);
+  shake = Math.min(8, shake + 0.8);
+  const fx = target === YOU ? YOU_WALL : FOE_WALL;
+  inkSplat(fx, GY - 40, INK, 2);
+  if (Math.random() < 0.4) sFortHit();
+  if (f.hp <= 0) { f.hp = 0; endBattle(target); }
+}
+function endBattle(loser) {
+  if (loser === FOE) { // you won this battle
+    battlesWon++; state = ST.INTERLUDE; bannerT = 2.2;
+    banner = { txt: 'FORT DESTROYED', sub: 'Battle ' + battle + ' won  ·  next foe advances', col: COL[YOU] };
+    sCrumble(true); shake = 8;
+    for (let i = 0; i < 16; i++) inkSplat(FOE_CTR + rand(-30, 30), GY - rand(20, 120), COL[FOE], 3);
+    if (challengeN && battlesWon >= challengeN && !challengePosted) { challengePosted = true; post({ gs: 'challenge_beaten', score: battlesWon }); }
+  } else { // you lost -> campaign over
+    state = ST.OVER; goT = 0;
+    banner = { txt: 'YOUR FORT HAS FALLEN', sub: '', col: COL[FOE] };
+    sCrumble(false); shake = 8;
+    for (let i = 0; i < 18; i++) inkSplat(YOU_CTR + rand(-30, 30), GY - rand(20, 120), COL[YOU], 3);
+    const sc = battlesWon;
+    if (sc > best) { best = sc; try { localStorage.setItem('gs_best:' + SLUG, String(best)); } catch (e) {} }
+    clearSave();
+    post({ gs: 'gameover', score: sc });
+  }
+}
+function startBattle(n, resume) {
+  battle = n; battleTime = 0; siege = 0; shake = 0; banner = null; flashPop = 0;
+  for (let i = 0; i < MAXU; i++) units[i].active = false;
+  for (let i = 0; i < MAXP; i++) projs[i].active = false;
+  // your fort: heal to current-age max (reward / fresh)
+  fort[YOU].max = AGES[age].fort; fort[YOU].hp = fort[YOU].max; fort[YOU].shake = 0;
+  // enemy scales with battle number
+  fort[FOE].max = Math.round(380 + (n - 1) * 175); fort[FOE].hp = fort[FOE].max; fort[FOE].shake = 0;
+  eGold = 90 + n * 28; eXp = 0; eAge = 0; eTurret = 0; eDecT = 0;
+  eAgeCap = clamp(n - 1, 0, 4);
+  ePopCap = Math.min(16, 5 + n * 2);
+  eInc = 6.5 + (n - 1) * 3.1;
+  drumInt = 1.4; drumClock = 0;
+  camX = 0; camManual = 0; camDragging = false;   // start looking at your fort
+  if (!resume) { /* keep gold/xp/age/turret across battles within run */ }
+  state = ST.BATTLE;
+  saveRun();
+}
+const ROMAN = ['I', 'II', 'III', 'IV', 'V'];
+function playerAgeUp() {
+  if (age >= 4) return false;
+  const cost = AGE_XP[age]; if (xp < cost) return false;
+  xp -= cost; age++;
+  fort[YOU].max = AGES[age].fort; fort[YOU].hp = fort[YOU].max; // heal + bigger
+  // BIG unmistakable moment: white flash + expanding shockwave + shake + fanfare
+  ageFlash[YOU] = 1; flashCol = '#FFFFFF'; flashPop = 1.15;
+  ageWaveT = 1; ageWaveSide = YOU; shake = Math.min(9, shake + 5);
+  banner = { txt: 'AGE ' + ROMAN[age] + ' — ' + AGES[age].name.replace(' Age', '').toUpperCase(),
+             sub: 'your whole army transforms · fort reinforced', col: COL[YOU], big: true };
+  bannerT = 2.3; sFanfare(); if (VLOG) console.log('SFV_AGEUP ' + JSON.stringify({ age, t: +battleTime.toFixed(1) }));
+  // visibly upgrade + transform every one of your units into the new higher-fidelity style
+  for (let i = 0; i < MAXU; i++) { const u = units[i]; if (u.active && !u.dying && u.side === YOU) {
+    const r = u.hp / u.maxHp; u.tier = age; const c = CLS[u.ci], a = AGES[age];
+    u.maxHp = Math.round(c.hp * a.hp); u.hp = Math.round(u.maxHp * r); u.dmg = c.dmg * a.dmg; u.gold = Math.round(c.gold * a.cost * 0.6);
+    u.hpFlash = 0.6; pop(u.x, GY - 26, ACC[YOU]); inkSplat(u.x, GY - 30, ACC[YOU], 6);
+    const f = getF(); if (f) { f.active = true; f.x = u.x; f.y = GY - 60; f.vy = -30; f.life = 0.9; f.txt = '✦'; f.col = ACC[YOU]; f.sz = 20; } } }
+  saveRun(); return true;
+}
+function enemyAgeUp() {
+  if (eAge >= eAgeCap || eAge >= 4) return; const cost = AGE_XP[eAge]; if (eXp < cost) return;
+  eXp -= cost; eAge++; ageFlash[FOE] = 1;
+  for (let i = 0; i < MAXU; i++) { const u = units[i]; if (u.active && !u.dying && u.side === FOE) {
+    const r = u.hp / u.maxHp; u.tier = eAge; const c = CLS[u.ci], a = AGES[eAge];
+    u.maxHp = Math.round(c.hp * a.hp); u.hp = Math.round(u.maxHp * r); u.dmg = c.dmg * a.dmg; } }
+}
+function buyTurret(side) {
+  if (side === YOU) { if (turretTier >= TURRET.max) return false; const cost = TURRET.cost[turretTier + 1];
+    if (gold < cost) return false; gold -= cost; turretTier++; ageFlash[YOU] = 0.6; flashPop = 0.6; flashCol = ACC[YOU]; floater(YOU_CTR, TURRET_Y - 30, 'TURRET T' + turretTier, ACC[YOU], 15); sFanfare(); saveRun(); return true; }
+  else { if (eTurret >= TURRET.max) return; const cost = TURRET.cost[eTurret + 1]; if (eGold < cost) return; eGold -= cost; eTurret++; }
+}
+// turret fire
+let turretT = [0, 0];
+function updateTurrets(dt) {
+  [YOU, FOE].forEach(side => {
+    const tier = side === YOU ? turretTier : eTurret; if (tier <= 0) return;
+    turretT[side] -= dt; if (turretMuzzle[side] > 0) turretMuzzle[side] -= dt * 5;
+    if (turretT[side] > 0) return;
+    // nearest enemy in range
+    const tx = side === YOU ? YOU_CTR : FOE_CTR; let tgt = null, bd = TURRET.range[tier];
+    for (let j = 0; j < MAXU; j++) { const v = units[j]; if (!v.active || v.dying || v.side === side) continue;
+      const dd = Math.abs(v.x - tx); if (dd < bd) { bd = dd; tgt = v; } }
+    if (!tgt) return;
+    turretT[side] = TURRET.cd[tier]; turretMuzzle[side] = 0.18;
+    const p = getP(); if (!p) return; const d = side === YOU ? 1 : -1;
+    p.active = true; p.side = side; p.x = tx + d * 8; p.y = TURRET_Y; p.dmg = TURRET.dmg[tier];
+    p.type = (side === YOU ? age : eAge) >= 4 ? 2 : ((side === YOU ? age : eAge) >= 3 ? 1 : 0);
+    const spd = 560; const dx = tgt.x - p.x, dy = (GY - 26) - p.y, L = Math.hypot(dx, dy) || 1;
+    p.vx = dx / L * spd; p.vy = dy / L * spd; p.g = p.type === 0 ? 120 : 0; p.life = 2;
+    if (p.type === 2) sLaser(); else sTwang();
+  });
+}
+
+// ============================================================
+//  ENEMY AI
+// ============================================================
+function counterPick() {
+  // count player composition to pick a soft counter
+  let pl = 0, ph = 0, pr = 0;
+  for (let j = 0; j < MAXU; j++) { const v = units[j]; if (!v.active || v.dying || v.side !== YOU) continue;
+    if (v.ci === 0) pl++; else if (v.ci === 1) ph++; else pr++; }
+  const r = rng();
+  if (ph >= 2 && r < 0.55) return 2;        // player has heavies -> ranged
+  if (pr >= 2 && r < 0.55) return 0;        // player has ranged -> light swarm
+  if (pl >= 4 && r < 0.5) return 1;         // swarm -> heavy to cleave
+  return r < 0.5 ? 0 : (r < 0.8 ? 2 : 1);   // default mix, favor cheap
+}
+function updateAI(dt) {
+  eGold += (eInc + AGES[eAge].inc * 0.5) * dt; eXp += 5 * dt;
+  eDecT -= dt; if (eDecT > 0) return; eDecT = 0.35;
+  // age up when affordable and profitable to bank a bit
+  if (eAge < eAgeCap && eXp >= AGE_XP[eAge] && rng() < 0.5) { enemyAgeUp(); return; }
+  // buy/upgrade turret sometimes (battle 2+)
+  if (battle >= 2 && eTurret < TURRET.max && eGold > TURRET.cost[eTurret + 1] + 60 && rng() < 0.14) { buyTurret(FOE); return; }
+  // spawn if we have units and room
+  if (countUnits(FOE) >= ePopCap) return;
+  const aggro = 0.4 + battle * 0.08;
+  if (rng() > aggro) return;
+  const ci = counterPick(); const cost = Math.round(CLS[ci].cost * AGES[eAge].cost);
+  if (eGold >= cost) { eGold -= cost; spawnUnit(FOE, ci); }
+}
+
+// ============================================================
+//  ECONOMY + SIEGE + MAIN UPDATE
+// ============================================================
+function trySpawnPlayer(ci) {
+  if (state !== ST.BATTLE) return false;
+  if (countUnits(YOU) >= POP_YOU) return false;
+  const cost = Math.round(CLS[ci].cost * AGES[age].cost);
+  if (gold < cost) return false;
+  gold -= cost; spawnUnit(YOU, ci); return true;
+}
+function update(dt) {
+  // ambient
+  updateParts(dt);
+  if (bannerT > 0) { bannerT -= dt; if (bannerT <= 0 && state === ST.INTERLUDE) { startBattle(battle + 1); } }
+  if (ageFlash[YOU] > 0) ageFlash[YOU] -= dt * 1.5; if (ageFlash[FOE] > 0) ageFlash[FOE] -= dt * 1.5;
+  if (flashPop > 0) flashPop -= dt * 2;
+  if (ageWaveT > 0) ageWaveT = Math.max(0, ageWaveT - dt * 1.6);
+  if (state === ST.BATTLE || state === ST.INTERLUDE) updateCamera(dt);
+  if (shake > 0) shake = Math.max(0, shake - dt * 22);
+  fort[YOU].shake = Math.max(0, fort[YOU].shake - dt * 26); fort[FOE].shake = Math.max(0, fort[FOE].shake - dt * 26);
+  if (explainerT > 0) explainerT -= dt; if (sideCalloutT > 0) sideCalloutT -= dt;
+
+  if (state !== ST.BATTLE) { if (state === ST.INTERLUDE) { updateUnits(dt); updateProjs(dt); } return; }
+
+  battleTime += dt;
+  // income
+  gold += AGES[age].inc * dt; xp += 3 * dt;
+  // hold-to-repeat spawns
+  handleHold(dt);
+  // AI
+  updateAI(dt);
+  // sim
+  updateUnits(dt); updateProjs(dt); updateTurrets(dt);
+  // siege / war-exhaustion — guarantees termination
+  if (battleTime > SIEGE_START) {
+    siege = battleTime - SIEGE_START;
+    const frac = 0.0045 * siege * dt;
+    fort[YOU].hp -= fort[YOU].max * frac; fort[FOE].hp -= fort[FOE].max * frac;
+    if (rng() < siege * dt * 3) { ember(camX + rand(0, W), GY + rand(-4, 6)); ember(camX + rand(0, W), rand(90, 130)); }
+    if (fort[FOE].hp <= 0) { fort[FOE].hp = 0; endBattle(FOE); }
+    else if (fort[YOU].hp <= 0) { fort[YOU].hp = 0; endBattle(YOU); }
+  }
+  // march drum, tempo scales with army size
+  const total = countUnits(YOU) + countUnits(FOE);
+  drumInt = clamp(1.4 - total * 0.05, 0.42, 1.4);
+  drumClock += dt; if (drumClock >= drumInt) { drumClock = 0; sDrum(clamp(0.04 + total * 0.006, 0.05, 0.16)); }
+  if (VLOG) { vAcc += dt; if (vAcc >= 0.4) { vAcc = 0; console.log('SFV ' + JSON.stringify({ t: +battleTime.toFixed(1), st: state, age: age, gold: Math.floor(gold), xp: Math.floor(xp), foeHP: Math.round(fort[FOE].hp), foeMax: fort[FOE].max, youHP: Math.round(fort[YOU].hp), foeAge: eAge, pop: countUnits(YOU), cam: Math.round(camX), won: battlesWon })); } }
+}
+
+// ---------- camera follow ----------
+function updateCamera(dt) {
+  if (camManual > 0) { camManual -= dt; return; }   // player is panning — leave camX alone
+  let fY = null, fF = null;
+  for (let i = 0; i < MAXU; i++) { const u = units[i]; if (!u.active || u.dying) continue;
+    if (u.side === YOU) { if (fY === null || u.x > fY) fY = u.x; }
+    else { if (fF === null || u.x < fF) fF = u.x; } }
+  let focus;
+  if (fY === null && fF === null) focus = YOU_CTR + W * 0.34;   // pre-clash: your fort + field
+  else if (fF === null) focus = fY + 150;                      // you are pushing forward
+  else if (fY === null) focus = fF - 150;                      // enemy pushing toward you
+  else focus = (fY + fF) / 2;                                  // center the clash / frontline
+  const target = clamp(focus - W / 2, 0, CAM_MAX());
+  camX += (target - camX) * Math.min(1, dt * 3.4);
+}
+
+// ============================================================
+//  INPUT — buttons, hold-to-repeat, keyboard
+// ============================================================
+const SPAWN_CADENCE = 0.34;
+let buttons = []; // {id, x,y,w,h, kind, ci}
+function layoutButtons() {
+  buttons = [];
+  const y = 452, h = 78;
+  const uw = 150, gap = 12; let x = 14;
+  for (let i = 0; i < 3; i++) { buttons.push({ id: 'u' + i, x: x, y: y, w: uw, h: h, kind: 'unit', ci: i, key: String(i + 1) }); x += uw + gap; }
+  buttons.push({ id: 'turret', x: 520, y: y, w: 196, h: h, kind: 'turret', key: '4' });
+  buttons.push({ id: 'age', x: 728, y: y, w: 218, h: h, kind: 'age', key: '5' });
+}
+layoutButtons();
+function btnCost(b) {
+  if (b.kind === 'unit') return Math.round(CLS[b.ci].cost * AGES[age].cost);
+  if (b.kind === 'turret') return turretTier >= TURRET.max ? -1 : TURRET.cost[turretTier + 1];
+  if (b.kind === 'age') return age >= 4 ? -1 : AGE_XP[age];
+  return 0;
+}
+function btnEnabled(b) {
+  if (state !== ST.BATTLE) return false;
+  if (b.kind === 'unit') return gold >= btnCost(b) && countUnits(YOU) < POP_YOU;
+  if (b.kind === 'turret') { const c = btnCost(b); return c >= 0 && gold >= c; }
+  if (b.kind === 'age') { const c = btnCost(b); return c >= 0 && xp >= c; }
+  return false;
+}
+function doButton(b) {
+  if (b.kind === 'unit') return trySpawnPlayer(b.ci);
+  if (b.kind === 'turret') return buyTurret(YOU);
+  if (b.kind === 'age') return playerAgeUp();
+}
+// hold state
+let held = null, heldT = 0;   // held button for repeat (units)
+const keyHeld = {};
+function handleHold(dt) {
+  if (held && held.kind === 'unit') { heldT -= dt; if (heldT <= 0) { if (btnEnabled(held)) doButton(held); heldT = SPAWN_CADENCE; } }
+  // keyboard held unit spawns
+  for (let i = 0; i < 3; i++) { const k = String(i + 1);
+    if (keyHeld[k]) { keyHeld['_t' + k] = (keyHeld['_t' + k] || 0) - dt; if (keyHeld['_t' + k] <= 0) { const b = buttons[i]; if (btnEnabled(b)) doButton(b); keyHeld['_t' + k] = SPAWN_CADENCE; } } }
+}
+function hitButton(vx, vy) { for (const b of buttons) if (vx >= b.x && vx <= b.x + b.w && vy >= b.y && vy <= b.y + b.h) return b; return null; }
+
+function primaryTap() {
+  initAudio();
+  if (state === ST.SPLASH) { beginRun(); return true; }
+  if (state === ST.OVER) { if (goT > 0.5) resetRun(); return true; }
+  return false;
+}
+canvas.addEventListener('pointerdown', (e) => {
+  e.preventDefault(); if (canvas.setPointerCapture) try { canvas.setPointerCapture(e.pointerId); } catch (x) {}
+  window.focus(); initAudio();
+  const v = toV(e.clientX, e.clientY);
+  if (state === ST.BATTLE) {
+    const b = hitButton(v.x, v.y);
+    if (b) { const ok = doButton(b); if (b.kind === 'unit') { held = b; heldT = SPAWN_CADENCE; } if (!ok) { /* flash disabled handled visually */ } return; }
+    if (inMinimap(v.x, v.y)) { panCam((clamp((v.x - MM_X) / MM_W, 0, 1) * WORLD_W) - W / 2); return; }
+    // drag anywhere on the field to pan the camera and look toward either fort
+    if (v.y > 86 && v.y < 440) { camDragging = true; camDragLast = v.x; camDragMoved = 0; camManual = 2.4; return; }
+  }
+  primaryTap();
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!camDragging) return; e.preventDefault();
+  const v = toV(e.clientX, e.clientY);
+  const dx = (v.x - camDragLast); camDragLast = v.x; camDragMoved += Math.abs(dx);
+  panCam(camX - dx);   // drag right -> reveal terrain to the left (natural grab-pan)
+});
+canvas.addEventListener('pointerup', (e) => { e.preventDefault(); held = null; camDragging = false; });
+canvas.addEventListener('pointercancel', () => { held = null; camDragging = false; });
+canvas.addEventListener('pointerleave', () => { held = null; camDragging = false; });
+window.addEventListener('keydown', (e) => {
+  const k = e.key;
+  if (k === ' ' || k === 'Enter' || (k >= '1' && k <= '5') || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Home' || k === 'End') e.preventDefault();
+  initAudio();
+  if (state === ST.SPLASH) { if (k === ' ' || k === 'Enter' || (k >= '1' && k <= '5')) beginRun(); return; }
+  if (state === ST.OVER) { if ((k === ' ' || k === 'Enter') && goT > 0.5) resetRun(); return; }
+  if (state !== ST.BATTLE) return;
+  if (k >= '1' && k <= '3') { const i = +k - 1; if (!keyHeld[k]) { const b = buttons[i]; if (btnEnabled(b)) doButton(b); keyHeld[k] = true; keyHeld['_t' + k] = SPAWN_CADENCE; } }
+  else if (k === '4' || k === 't' || k === 'T') { buyTurret(YOU); }
+  else if (k === '5' || k === 'a' || k === 'A') { playerAgeUp(); }
+  else if (k === 'ArrowLeft') { panCam(camX - 260); }
+  else if (k === 'ArrowRight') { panCam(camX + 260); }
+  else if (k === 'Home' || k === 'q' || k === 'Q') { panCam(YOU_CTR - W / 2); }   // peek your fort
+  else if (k === 'End' || k === 'e' || k === 'E') { panCam(FOE_CTR - W / 2); }     // peek foe fort
+});
+window.addEventListener('keyup', (e) => { const k = e.key; if (k >= '1' && k <= '3') keyHeld[k] = false; });
+
+function beginRun() {
+  if (pendingResume) { battle = pendingResume.battle; age = pendingResume.age || 0; turretTier = pendingResume.turretTier || 0; gold = pendingResume.gold || 160; xp = pendingResume.xp || 0; battlesWon = pendingResume.won || 0; pendingResume = null; }
+  else { battle = 1; age = 0; turretTier = 0; gold = 160; xp = 0; battlesWon = 0; }
+  firstBattleEver = battle === 1 && battlesWon === 0;
+  explainerT = firstBattleEver ? 8.5 : 0; sideCalloutT = 4.5;
+  startBattle(battle);
+}
+function resetRun() {
+  clearSave(); pendingResume = null;
+  battle = 1; age = 0; turretTier = 0; gold = 160; xp = 0; battlesWon = 0;
+  firstBattleEver = true; explainerT = 8.5; sideCalloutT = 4.5;
+  startBattle(1);
+}
+
+// ============================================================
+//  DRAWING — hand-drawn ink
+// ============================================================
+function bow(x1, y1, x2, y2, w, k) {
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy) || 1;
+  ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(x1, y1);
+  ctx.quadraticCurveTo(mx + (-dy / L) * k, my + (dx / L) * k, x2, y2); ctx.stroke();
+}
+function textSh(txt, x, y, size, col, align, weight) {
+  ctx.font = (weight || '700') + ' ' + size + 'px ' + HANDFONT; ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(42,35,32,0.28)'; ctx.fillText(txt, x + 1.5, y + 1.8);
+  ctx.fillStyle = col; ctx.fillText(txt, x, y);
+}
+
+function drawWeapon(u, hx, hy, d, s, col, acc) {
+  ctx.strokeStyle = col; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const t = u.tier, cls = u.ci;
+  if (cls === 0) { // LIGHT
+    if (t === 0) { bow(hx, hy, hx + d * 12 * s, hy - 4 * s, 3.4 * s, 0); ctx.fillStyle = col; ctx.beginPath(); ctx.arc(hx + d * 13 * s, hy - 5 * s, 3.2 * s, 0, 6.28); ctx.fill(); }
+    else if (t === 1) { bow(hx - d * 3 * s, hy + 6 * s, hx + d * 20 * s, hy - 12 * s, 2.4 * s, 0); ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(hx + d * 20 * s, hy - 12 * s); ctx.lineTo(hx + d * 15 * s, hy - 10 * s); ctx.lineTo(hx + d * 17 * s, hy - 15 * s); ctx.fill(); }
+    else if (t === 2) { bow(hx, hy, hx + d * 18 * s, hy - 12 * s, 3 * s, 0); bow(hx + d * 4 * s, hy - 2 * s, hx + d * 4 * s, hy - 8 * s, 2.6 * s, 0); }
+    else if (t === 3) { bow(hx - d * 6 * s, hy + 2 * s, hx + d * 16 * s, hy - 6 * s, 3 * s, 0); ctx.strokeStyle = acc; bow(hx + d * 16 * s, hy - 6 * s, hx + d * 20 * s, hy - 8 * s, 2 * s, 0); }
+    else { ctx.strokeStyle = XPC; bow(hx, hy, hx + d * 16 * s, hy - 8 * s, 3.4 * s, 0); ctx.fillStyle = XPC; ctx.beginPath(); ctx.arc(hx + d * 17 * s, hy - 9 * s, 3 * s, 0, 6.28); ctx.fill(); }
+  } else if (cls === 1) { // HEAVY
+    if (t === 0) { bow(hx, hy + 2 * s, hx + d * 15 * s, hy - 12 * s, 5 * s, 0); ctx.fillStyle = col; ctx.beginPath(); ctx.arc(hx + d * 16 * s, hy - 13 * s, 6 * s, 0, 6.28); ctx.fill(); }
+    else if (t === 1) { bow(hx, hy + 2 * s, hx + d * 16 * s, hy - 14 * s, 3.4 * s, 0); ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(hx + d * 16 * s, hy - 14 * s); ctx.lineTo(hx + d * 8 * s, hy - 18 * s); ctx.lineTo(hx + d * 12 * s, hy - 8 * s); ctx.lineTo(hx + d * 22 * s, hy - 10 * s); ctx.fill(); }
+    else if (t === 2) { bow(hx - d * 4 * s, hy + 6 * s, hx + d * 22 * s, hy - 16 * s, 4 * s, 0); bow(hx + d * 4 * s, hy - 2 * s, hx + d * 4 * s, hy - 10 * s, 3 * s, 0); }
+    else if (t === 3) { bow(hx - d * 8 * s, hy + 2 * s, hx + d * 18 * s, hy - 6 * s, 4.4 * s, 0); ctx.fillStyle = col; ctx.beginPath(); ctx.arc(hx + d * 4 * s, hy + 2 * s, 3.6 * s, 0, 6.28); ctx.fill(); }
+    else { ctx.strokeStyle = XPC; ctx.lineWidth = 6 * s; ctx.strokeRect(hx - d * 2 * s, hy - 6 * s, d * 18 * s, 10 * s); ctx.fillStyle = 'rgba(58,166,160,0.35)'; ctx.fillRect(Math.min(hx - d * 2 * s, hx + d * 16 * s), hy - 6 * s, 18 * s, 10 * s); }
+  } else { // RANGED
+    if (t === 0) { bow(hx, hy, hx + d * 10 * s, hy + 6 * s, 2 * s, 0); ctx.fillStyle = col; ctx.beginPath(); ctx.arc(hx + d * 11 * s, hy + 7 * s, 2.4 * s, 0, 6.28); ctx.fill(); }
+    else if (t === 1) { bow(hx - d * 8 * s, hy + 8 * s, hx + d * 22 * s, hy - 16 * s, 2.2 * s, 0); }
+    else { // bow (t2), musket (t3), laser (t4)
+      if (t === 2) { ctx.strokeStyle = col; ctx.lineWidth = 2.6 * s; ctx.beginPath(); ctx.arc(hx + d * 8 * s, hy, 13 * s, d > 0 ? -1.1 : Math.PI + 1.1, d > 0 ? 1.1 : Math.PI - 1.1, d < 0); ctx.stroke();
+        ctx.lineWidth = 1.2 * s; ctx.beginPath(); ctx.moveTo(hx + d * 8 * s, hy - 11.5 * s); ctx.lineTo(hx - d * 3 * s, hy); ctx.lineTo(hx + d * 8 * s, hy + 11.5 * s); ctx.stroke();
+        bow(hx - d * 3 * s, hy, hx + d * 12 * s, hy, 1.6 * s, 0); }
+      else if (t === 3) { bow(hx - d * 8 * s, hy + 2 * s, hx + d * 22 * s, hy - 6 * s, 3 * s, 0); }
+      else { ctx.strokeStyle = XPC; bow(hx - d * 8 * s, hy + 2 * s, hx + d * 24 * s, hy - 6 * s, 3.2 * s, 0); ctx.fillStyle = XPC; ctx.beginPath(); ctx.arc(hx + d * 24 * s, hy - 6 * s, 2.6 * s, 0, 6.28); ctx.fill(); }
+    }
+  }
+}
+function drawGear(u, hcx, hcy, hr, d, s, col, acc) {
+  const t = u.tier; ctx.strokeStyle = col; ctx.lineCap = 'round';
+  if (t === 1) { ctx.lineWidth = 2.4 * s; ctx.beginPath(); ctx.moveTo(hcx - hr, hcy - hr * 0.3); ctx.lineTo(hcx + hr, hcy - hr * 0.3); ctx.stroke(); }
+  else if (t === 2) { // knight helm + plume
+    ctx.lineWidth = 2.6 * s; ctx.beginPath(); ctx.arc(hcx, hcy, hr + 1.4 * s, Math.PI * 1.05, Math.PI * 1.95); ctx.stroke();
+    ctx.strokeStyle = acc; ctx.lineWidth = 2.6 * s; bow(hcx, hcy - hr, hcx - d * 5 * s, hcy - hr - 9 * s, 2.6 * s, d * 3); }
+  else if (t === 3) { // tricorn hat
+    ctx.lineWidth = 2.4 * s; ctx.beginPath(); ctx.moveTo(hcx - hr - 3 * s, hcy - hr * 0.4); ctx.lineTo(hcx + hr + 3 * s, hcy - hr * 0.4); ctx.lineTo(hcx, hcy - hr - 7 * s); ctx.closePath(); ctx.stroke(); }
+  else if (t === 4) { // visor + antenna
+    ctx.strokeStyle = XPC; ctx.lineWidth = 2.6 * s; ctx.beginPath(); ctx.moveTo(hcx - hr, hcy - 1 * s); ctx.lineTo(hcx + hr, hcy - 1 * s); ctx.stroke();
+    bow(hcx, hcy - hr, hcx + d * 2 * s, hcy - hr - 7 * s, 1.6 * s, 0); ctx.fillStyle = XPC; ctx.beginPath(); ctx.arc(hcx + d * 2 * s, hcy - hr - 8 * s, 1.8 * s, 0, 6.28); ctx.fill(); }
+}
+// ---- hand-drawn sketch helpers (per-age fidelity) ----
+let sketchPhase = 0;          // stepped ~11fps so the scribble "boils" like animation (no per-frame flicker)
+let _sk = 0;
+function jitv(a) { const v = Math.sin(_sk++ * 12.9898 + sketchPhase + a * 7.13) * 43758.5453; return (v - Math.floor(v)) - 0.5; }
+function sbow(x1, y1, x2, y2, w, k, st) {   // sketch-stroke: multi-pass jittered curve for crude ages, clean for late ages
+  const R = st.rough, P = st.passes;
+  for (let p = 0; p < P; p++)
+    bow(x1 + jitv(1) * R, y1 + jitv(2) * R, x2 + jitv(3) * R, y2 + jitv(4) * R, w * st.lw * (p === 0 ? 1 : 0.7), k + jitv(5) * R * 0.5);
+}
+function scircle(cx, cy, r, w, st) {        // sketch head: crude wobble ring -> crisp ring by age
+  const R = st.rough, P = st.passes, segs = R > 1 ? 11 : 20;
+  ctx.lineWidth = w * st.lw;
+  for (let p = 0; p < P; p++) { ctx.beginPath();
+    for (let i = 0; i <= segs; i++) { const a = i / segs * 6.2832, rr = r + jitv(6 + i) * R * 0.8;
+      const px = cx + Math.cos(a) * rr + jitv(30 + i) * R * 0.4, py = cy + Math.sin(a) * rr + jitv(50 + i) * R * 0.4;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); }
+    ctx.stroke(); }
+}
+function drawTorso(st, x, hipY, shX, shY, d, s, col, acc) {
+  if (st.torso === 'none') return;               // Stone: bare sticks, no body
+  const halfSh = 5.4 * s, halfHip = 3.6 * s;
+  const bx = (shX + x) / 2;
+  ctx.save();
+  if (st.torso === 'tunic') {                    // Sword: simple filled tunic + belt
+    ctx.globalAlpha = st.fill; ctx.fillStyle = col;
+    ctx.beginPath(); ctx.moveTo(shX - halfSh, shY + 2 * s); ctx.lineTo(shX + halfSh, shY + 2 * s);
+    ctx.lineTo(x + halfHip, hipY); ctx.lineTo(x - halfHip, hipY); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1; ctx.strokeStyle = col; ctx.lineWidth = 1.6 * s; ctx.beginPath();
+    ctx.moveTo(x - halfHip - 0.5 * s, hipY - 1 * s); ctx.lineTo(x + halfHip + 0.5 * s, hipY - 1 * s); ctx.stroke();
+  } else if (st.torso === 'plate') {             // Knight: armored chest plate + pauldron + shading
+    ctx.globalAlpha = st.fill; ctx.fillStyle = col;
+    ctx.beginPath(); ctx.moveTo(shX - halfSh, shY + 1 * s); ctx.lineTo(shX + halfSh, shY + 1 * s);
+    ctx.lineTo(x + halfHip, hipY + 2 * s); ctx.lineTo(x - halfHip, hipY + 2 * s); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = st.shade; ctx.fillStyle = INK;
+    ctx.beginPath(); ctx.moveTo(bx, shY + 2 * s); ctx.lineTo(bx + halfSh * 0.7 * d, shY + 3 * s); ctx.lineTo(x + halfHip * d, hipY); ctx.lineTo(bx, hipY); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1; ctx.strokeStyle = acc; ctx.lineWidth = 1.6 * s;
+    ctx.beginPath(); ctx.moveTo(shX - halfSh, shY + 1 * s); ctx.lineTo(shX + halfSh, shY + 1 * s); ctx.stroke();
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(shX - d * halfSh, shY + 2 * s, 3 * s, 0, 6.28); ctx.fill();   // pauldron
+  } else if (st.torso === 'coat') {              // Musket: long flared coat + collar + buttons + boots
+    const hemY = hipY + 12 * s;
+    ctx.globalAlpha = st.fill; ctx.fillStyle = col;
+    ctx.beginPath(); ctx.moveTo(shX - halfSh, shY + 1 * s); ctx.lineTo(shX + halfSh, shY + 1 * s);
+    ctx.lineTo(x + halfHip + 3 * s, hemY); ctx.lineTo(x - halfHip - 3 * s, hemY); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = st.shade; ctx.fillStyle = INK;
+    ctx.beginPath(); ctx.moveTo(bx, shY + 1 * s); ctx.lineTo(x - halfHip - 3 * s, hemY); ctx.lineTo(bx, hemY); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1; ctx.fillStyle = acc;
+    for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(bx, shY + (4 + i * 5) * s, 1.3 * s, 0, 6.28); ctx.fill(); }   // buttons
+    ctx.strokeStyle = acc; ctx.lineWidth = 2 * s; ctx.beginPath();
+    ctx.moveTo(shX - halfSh - 1 * s, shY + 1 * s); ctx.lineTo(bx, shY + 4 * s); ctx.lineTo(shX + halfSh + 1 * s, shY + 1 * s); ctx.stroke();  // collar
+  } else if (st.torso === 'suit') {              // Future: sleek gradient bodysuit + glowing energy seam
+    const g = ctx.createLinearGradient(0, shY, 0, hipY);
+    g.addColorStop(0, col); g.addColorStop(1, INK);
+    ctx.globalAlpha = 0.5 + st.fill; ctx.fillStyle = g;
+    ctx.beginPath(); ctx.moveTo(shX - halfSh, shY + 1 * s); ctx.lineTo(shX + halfSh, shY + 1 * s);
+    ctx.lineTo(x + halfHip, hipY + 1 * s); ctx.lineTo(x - halfHip, hipY + 1 * s); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1; ctx.strokeStyle = XPC; ctx.lineWidth = 1.8 * s; ctx.shadowColor = XPC; ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.moveTo(bx, shY + 2 * s); ctx.lineTo(bx, hipY); ctx.stroke();
+    ctx.beginPath(); ctx.arc(bx, shY + 6 * s, 2.2 * s, 0, 6.28); ctx.fillStyle = XPC; ctx.fill(); ctx.shadowBlur = 0;
+  }
+  ctx.restore();
+}
+
+function drawStick(u) {
+  const d = u.side === YOU ? 1 : -1;
+  // cull off-screen (camera translate is applied by caller during battle)
+  if (state === ST.BATTLE && (u.x - camX < -64 || u.x - camX > W + 64)) return;
+  const c = CLS[u.ci]; const s = c.sc + u.tier * 0.055; const st = AGE_STYLE[u.tier] || AGE_STYLE[0];
+  const x = u.x, gy = GY, col = COL[u.side], acc = ACC[u.side];
+  _sk = ((u.k * 971) | 0) + u.ci * 131 + (u.side ? 517 : 0);   // stable per-unit sketch seed
+  ctx.save();
+  if (u.dying) { const f = u.fall; ctx.translate(x, gy); ctx.rotate(d * f * 1.2); ctx.globalAlpha = 1 - f * 0.7; ctx.translate(-x, -gy); }
+  const hipY = gy - (20 + u.tier * 0.6) * s, shY = gy - (38 + u.tier) * s, headY = gy - (49 + u.tier * 1.4) * s, headR = (5.6 + u.tier * 0.3) * s;
+  const wp = u.walk; const sw = u.moving ? Math.sin(wp) * 7 * s : 2 * s, sw2 = u.moving ? Math.sin(wp + Math.PI) * 7 * s : -2 * s;
+  ctx.strokeStyle = col; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // ground shadow (softer/tighter for higher fidelity)
+  ctx.save(); ctx.globalAlpha = 0.13 + st.glow * 0.05; ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(x, gy + 3, 11 * s, 3.2, 0, 0, 6.28); ctx.fill(); ctx.restore();
+  // future ground glow
+  if (st.glow > 0.5) { ctx.save(); ctx.globalAlpha = 0.25; ctx.fillStyle = XPC; ctx.beginPath(); ctx.ellipse(x, gy + 3, 9 * s, 2.4, 0, 0, 6.28); ctx.fill(); ctx.restore(); }
+  const lean = (u.moving ? 4 : 1.5) * d - d * u.atkAnim * 5;
+  const shX = x + lean;
+  // legs
+  sbow(x, hipY, x - 3 * s + sw, gy, 3.2 * s, u.k * 2, st);
+  sbow(x, hipY, x + 3 * s + sw2, gy, 3.2 * s, -u.k * 2, st);
+  // torso silhouette (fidelity leap lives here) drawn under the spine
+  drawTorso(st, x, hipY, shX, shY, d, s, col, acc);
+  // spine
+  sbow(x, hipY, shX, shY, 3.8 * s + (u.ci === 1 ? 1 * s : 0), u.k, st);
+  // rear arm
+  sbow(shX, shY + 3 * s, shX - d * 8 * s + sw * 0.4, shY + 11 * s, 2.6 * s, -d * 0.3, st);
+  // head (open ink circle — featureless, always)
+  scircle(shX, headY, headR, 3.2 * s, st);
+  // front arm + hand pos
+  const handX = shX + d * (11 * s) + d * u.atkAnim * 8 * s, handY = shY + (u.ranged ? 3 : 7) * s;
+  sbow(shX, shY + 3 * s, handX, handY, 3 * s, d * 0.3, st);
+  // weapon + gear
+  drawWeapon(u, handX, handY, d, s, col, acc);
+  drawGear(u, shX, headY, headR, d, s, col, acc);
+  ctx.restore();
+  // health bar (always shown; fades near full, pops when damaged) — drawn upright, unrotated
+  drawUnitHP(u, x, gy - (60 + u.tier * 1.6) * s, s);
+}
+function drawUnitHP(u, x, y, s) {
+  if (u.dying) return;
+  const r = clamp(u.hp / u.maxHp, 0, 1);
+  let a = Math.max((1 - r) * 0.95, u.hpFlash);       // invisible at full HP, pops as it takes damage
+  if (a <= 0.04) return;
+  a = clamp(a, 0, 1);
+  const bw = 18 * s, bh = 3, bx = x - bw / 2;
+  ctx.save(); ctx.globalAlpha = a;
+  ctx.fillStyle = 'rgba(42,35,32,0.35)'; ctx.fillRect(bx - 0.8, y - 0.8, bw + 1.6, bh + 1.6);
+  ctx.fillStyle = r > 0.5 ? '#5a9e4e' : r > 0.25 ? '#d6a72e' : '#c23b2d'; ctx.fillRect(bx, y, bw * r, bh);
+  ctx.restore();
+}
+
+function drawFort(side) {
+  const cx = side === YOU ? YOU_CTR : FOE_CTR; const col = COL[side], acc = ACC[side];
+  const shk = fort[side].shake; const jx = (Math.random() - 0.5) * shk, jy = (Math.random() - 0.5) * shk;
+  ctx.save(); ctx.translate(jx, jy);
+  const w = 64, base = GY + 4, top = 300;
+  ctx.strokeStyle = INK; ctx.lineWidth = 3.4; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.fillStyle = side === YOU ? 'rgba(31,78,140,0.10)' : 'rgba(178,58,44,0.10)';
+  // main keep
+  ctx.beginPath(); ctx.moveTo(cx - w / 2, base); ctx.lineTo(cx - w / 2, top + 14); ctx.lineTo(cx + w / 2, top + 14); ctx.lineTo(cx + w / 2, base); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // battlements
+  for (let i = 0; i < 4; i++) { const bx = cx - w / 2 + 4 + i * 15; ctx.strokeRect(bx, top, 9, 12); }
+  // stone lines
+  ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(42,35,32,0.35)';
+  for (let r = 0; r < 4; r++) { const yy = top + 30 + r * 24; ctx.beginPath(); ctx.moveTo(cx - w / 2 + 2, yy); ctx.lineTo(cx + w / 2 - 2, yy); ctx.stroke(); }
+  // door
+  ctx.lineWidth = 2.6; ctx.strokeStyle = INK; ctx.strokeRect(cx - 10, base - 34, 20, 34);
+  // flag pole + pennant (side color) + age pennants
+  const px = side === YOU ? cx - w / 2 : cx + w / 2;
+  ctx.beginPath(); ctx.moveTo(px, top); ctx.lineTo(px, top - 46); ctx.stroke();
+  ctx.fillStyle = col; ctx.beginPath(); const fd = side === YOU ? 1 : -1;
+  ctx.moveTo(px, top - 46); ctx.lineTo(px + fd * 26, top - 40); ctx.lineTo(px, top - 34); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  // turret figure on top
+  const tier = side === YOU ? turretTier : eTurret;
+  if (tier > 0) drawTurret(side, cx + jx, TURRET_Y + jy, tier);
+  else if (side === YOU && state === ST.BATTLE && explainerT > 0) { /* hint drawn later */ }
+  // HP bar
+  drawFortHP(side, cx);
+  // side label banner
+  const lbl = side === YOU ? 'YOU' : 'FOE';
+  ctx.save(); ctx.translate(cx, top - 62);
+  ctx.fillStyle = col; ctx.strokeStyle = INK; ctx.lineWidth = 2;
+  roundRect(-26, -13, 52, 24, 5); ctx.fill(); ctx.stroke();
+  textSh(lbl, 0, -1, 15, '#F4ECD8', 'center', '800'); ctx.restore();
+}
+function drawTurret(side, cx, ty, tier) {
+  const col = COL[side], acc = ACC[side], d = side === YOU ? 1 : -1;
+  // a stationary stick gunner aiming down lane
+  const u = { ci: tier >= 2 ? 2 : 2, tier: side === YOU ? age : (side === FOE ? eAge : 0), walk: 0, moving: false, atkAnim: turretMuzzle[side] > 0 ? 1 : 0, side: side, ranged: true, hp: 1, maxHp: 1, dying: false, x: cx, k: 0.2 };
+  // draw platform base line
+  ctx.strokeStyle = INK; ctx.lineWidth = 2.4; ctx.beginPath(); ctx.moveTo(cx - 16, ty + 14); ctx.lineTo(cx + 16, ty + 14); ctx.stroke();
+  // draw an archer/gunner via a mini custom pose
+  const s = 0.9 + tier * 0.06; const gy = ty + 12;
+  const hipY = gy - 16 * s, shY = gy - 30 * s, headY = gy - 39 * s, headR = 5 * s;
+  ctx.strokeStyle = col; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  bow(cx, hipY, cx - 4 * s, gy, 3 * s, 0); bow(cx, hipY, cx + 4 * s, gy, 3 * s, 0);
+  bow(cx, hipY, cx + d * 2 * s, shY, 3.4 * s, 0);
+  ctx.lineWidth = 3 * s; ctx.beginPath(); ctx.arc(cx + d * 2 * s, headY, headR, 0, 6.28); ctx.stroke();
+  const handX = cx + d * 13 * s, handY = shY + 2 * s;
+  bow(cx + d * 2 * s, shY + 2 * s, handX, handY, 2.8 * s, 0);
+  const wu = { ci: 2, tier: Math.min(4, (side === YOU ? age : eAge)) };
+  drawWeapon(wu, handX, handY, d, s, col, acc); drawGear(wu, cx + d * 2 * s, headY, headR, d, s, col, acc);
+  // tier pips
+  for (let i = 0; i < tier; i++) { ctx.fillStyle = acc; ctx.beginPath(); ctx.arc(cx - 14 + i * 7, ty + 20, 2.2, 0, 6.28); ctx.fill(); }
+  // muzzle glow
+  if (turretMuzzle[side] > 0) { ctx.globalAlpha = turretMuzzle[side] * 4; ctx.fillStyle = ACC[side]; ctx.beginPath(); ctx.arc(handX + d * 16 * s, handY - 4 * s, 6, 0, 6.28); ctx.fill(); ctx.globalAlpha = 1; }
+}
+function roundRect(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+function drawFortHP(side, cx) {
+  const f = fort[side]; const bw = 150, bh = 12, y = 150, x = cx - bw / 2;
+  ctx.fillStyle = 'rgba(42,35,32,0.18)'; roundRect(x - 2, y - 2, bw + 4, bh + 4, 6); ctx.fill();
+  ctx.fillStyle = 'rgba(244,236,216,0.7)'; roundRect(x, y, bw, bh, 5); ctx.fill();
+  const r = clamp(f.hp / f.max, 0, 1);
+  ctx.fillStyle = COL[side]; roundRect(x, y, bw * r, bh, 5); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = 1.6; roundRect(x, y, bw, bh, 5); ctx.stroke();
+  textSh(Math.ceil(f.hp) + ' / ' + f.max, cx, y + bh + 12, 13, INK, 'center', '700');
+}
+
+function drawProj(p) {
+  ctx.save();
+  if (p.type === 0) { // arrow
+    const a = Math.atan2(p.vy, p.vx); ctx.translate(p.x, p.y); ctx.rotate(a);
+    ctx.strokeStyle = COL[p.side]; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-7, 0); ctx.lineTo(6, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(6, 0); ctx.lineTo(2, -2.5); ctx.lineTo(2, 2.5); ctx.closePath(); ctx.fillStyle = COL[p.side]; ctx.fill();
+  } else if (p.type === 1) { // musket ball
+    ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(p.x, p.y, 2.6, 0, 6.28); ctx.fill();
+  } else { // laser
+    const a = Math.atan2(p.vy, p.vx); ctx.translate(p.x, p.y); ctx.rotate(a);
+    ctx.strokeStyle = XPC; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.globalAlpha = 0.9;
+    ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(6, 0); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawPaper() {
+  // draw only the visible world slice [camX, camX+W] (culled)
+  const vx0 = camX, vx1 = camX + W;
+  ctx.fillStyle = PAPER; ctx.fillRect(vx0 - 2, 0, W + 4, H);
+  // faint ruled paper lines
+  ctx.strokeStyle = 'rgba(90,120,150,0.08)'; ctx.lineWidth = 1;
+  for (let y = 120; y < GY; y += 26) { ctx.beginPath(); ctx.moveTo(vx0, y); ctx.lineTo(vx1, y); ctx.stroke(); }
+  // rolling pencil hills — continuous function of world x
+  ctx.strokeStyle = 'rgba(42,35,32,0.10)'; ctx.lineWidth = 2;
+  ctx.beginPath(); for (let x = vx0 - 20; x <= vx1 + 20; x += 20) { const y = 348 + Math.sin(x * 0.006) * 24 + Math.sin(x * 0.017) * 9; if (x <= vx0 - 20) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.stroke();
+  ctx.beginPath(); for (let x = vx0 - 20; x <= vx1 + 20; x += 20) { const y = 384 + Math.sin(x * 0.009 + 2) * 15; if (x <= vx0 - 20) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.stroke();
+  // ground band
+  ctx.fillStyle = PAPER2; ctx.fillRect(vx0 - 2, GY + 4, W + 4, 30);
+  ctx.strokeStyle = INK; ctx.lineWidth = 2.6; ctx.beginPath();
+  const gx0 = Math.floor(vx0 / 40) * 40;
+  for (let x = gx0; x <= vx1 + 40; x += 40) { const yy = GY + 4 + Math.sin(x * 0.05) * 1.2; if (x === gx0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy); } ctx.stroke();
+  // ground hatch
+  ctx.strokeStyle = 'rgba(42,35,32,0.16)'; ctx.lineWidth = 1;
+  const hx0 = Math.floor(vx0 / 22) * 22 + 8;
+  for (let x = hx0; x < vx1 + 22; x += 22) { ctx.beginPath(); ctx.moveTo(x, GY + 10); ctx.lineTo(x - 6, GY + 24); ctx.stroke(); }
+}
+
+// ---- HUD (top) ----
+function drawHUD() {
+  // top strip
+  ctx.fillStyle = 'rgba(244,236,216,0.82)'; ctx.fillRect(0, 0, W, 86);
+  ctx.strokeStyle = 'rgba(42,35,32,0.25)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(0, 86); ctx.lineTo(W, 86); ctx.stroke();
+  // gold
+  ctx.fillStyle = GOLDC; ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(30, 26, 11, 0, 6.28); ctx.fill(); ctx.stroke();
+  textSh('$', 30, 26, 14, '#5a3d0a', 'center', '800');
+  textSh(Math.floor(gold) + '', 48, 26, 26, INK, 'left', '800');
+  textSh('gold  +' + AGES[age].inc + '/s', 48, 46, 12, 'rgba(42,35,32,0.6)', 'left', '700');
+  // age + xp bar
+  const ax = 210;
+  textSh('AGE  ' + AGES[age].name, ax, 20, 17, COL[YOU], 'left', '800');
+  const bw = 168, by = 34;
+  ctx.fillStyle = 'rgba(42,35,32,0.15)'; roundRect(ax, by, bw, 12, 5); ctx.fill();
+  if (age < 4) { const r = clamp(xp / AGE_XP[age], 0, 1); ctx.fillStyle = XPC; roundRect(ax, by, bw * r, 12, 5); ctx.fill(); }
+  else { ctx.fillStyle = XPC; roundRect(ax, by, bw, 12, 5); ctx.fill(); }
+  ctx.strokeStyle = INK; ctx.lineWidth = 1.4; roundRect(ax, by, bw, 12, 5); ctx.stroke();
+  textSh(age < 4 ? ('XP ' + Math.floor(xp) + ' / ' + AGE_XP[age] + '  → ' + AGES[age + 1].name) : 'MAX AGE — Future', ax, by + 22, 12, XPC, 'left', '700');
+  // battle + won (center)
+  textSh('BATTLE ' + battle, W / 2, 20, 20, INK, 'center', '800');
+  textSh('WON: ' + battlesWon, W / 2, 44, 15, COL[YOU], 'center', '800');
+  // best + challenge (right)
+  textSh('BEST ' + best, W - 20, 20, 16, 'rgba(42,35,32,0.7)', 'right', '800');
+  if (challengeN) { const beaten = battlesWon >= challengeN; textSh('TARGET ' + challengeN, W - 20, 44, 15, beaten ? '#5a9e4e' : COL[FOE], 'right', '800'); }
+  // pop counter
+  textSh('army ' + countUnits(YOU) + '/' + POP_YOU, W - 20, 66, 12, 'rgba(42,35,32,0.55)', 'right', '700');
+}
+
+// ---- control bar buttons ----
+function drawButtons() {
+  ctx.fillStyle = 'rgba(234,224,198,0.95)'; ctx.fillRect(0, 440, W, 100);
+  ctx.strokeStyle = 'rgba(42,35,32,0.3)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(0, 440); ctx.lineTo(W, 440); ctx.stroke();
+  for (const b of buttons) {
+    const en = btnEnabled(b); const cost = btnCost(b);
+    const held0 = held === b || (b.kind === 'unit' && keyHeld[b.key]);
+    ctx.save();
+    ctx.fillStyle = en ? (held0 ? 'rgba(31,78,140,0.20)' : 'rgba(244,236,216,0.95)') : 'rgba(210,200,178,0.7)';
+    ctx.strokeStyle = en ? COL[YOU] : 'rgba(42,35,32,0.35)'; ctx.lineWidth = en ? 2.6 : 2;
+    roundRect(b.x, b.y, b.w, b.h, 10); ctx.fill(); ctx.stroke();
+    ctx.globalAlpha = en ? 1 : 0.55;
+    if (b.kind === 'unit') {
+      const c = CLS[b.ci];
+      // mini unit icon
+      drawIcon(b.ci, age, b.x + 30, b.y + 44);
+      textSh(c.name, b.x + 54, b.y + 22, 17, INK, 'left', '800');
+      const tag = b.ci === 0 ? 'fast · cheap' : b.ci === 1 ? 'tanky' : 'ranged';
+      textSh(tag, b.x + 54, b.y + 40, 11, 'rgba(42,35,32,0.6)', 'left', '700');
+      // cost
+      ctx.fillStyle = GOLDC; ctx.beginPath(); ctx.arc(b.x + 60, b.y + 60, 7, 0, 6.28); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.4; ctx.stroke();
+      textSh(cost + '', b.x + 74, b.y + 60, 15, gold >= cost ? INK : COL[FOE], 'left', '800');
+      // hotkey
+      textSh('[' + b.key + '] hold', b.x + b.w - 8, b.y + 14, 11, 'rgba(42,35,32,0.55)', 'right', '700');
+    } else if (b.kind === 'turret') {
+      textSh('TURRET', b.x + 14, b.y + 22, 17, COL[YOU], 'left', '800');
+      if (turretTier >= TURRET.max) textSh('MAX  T' + turretTier, b.x + 14, b.y + 44, 14, INK, 'left', '800');
+      else { textSh(turretTier === 0 ? 'build archer' : 'upgrade → T' + (turretTier + 1), b.x + 14, b.y + 44, 12, 'rgba(42,35,32,0.65)', 'left', '700');
+        ctx.fillStyle = GOLDC; ctx.beginPath(); ctx.arc(b.x + 20, b.y + 62, 7, 0, 6.28); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.4; ctx.stroke();
+        textSh(cost + '', b.x + 34, b.y + 62, 15, gold >= cost ? INK : COL[FOE], 'left', '800'); }
+      textSh('[4]', b.x + b.w - 8, b.y + 14, 11, 'rgba(42,35,32,0.55)', 'right', '700');
+    } else { // age
+      if (age >= 4) { textSh('MAX AGE', b.x + b.w / 2, b.y + 30, 18, COL[YOU], 'center', '800'); textSh('Future reached', b.x + b.w / 2, b.y + 52, 12, 'rgba(42,35,32,0.6)', 'center', '700'); }
+      else { textSh('ADVANCE AGE', b.x + b.w / 2, b.y + 20, 16, COL[YOU], 'center', '800');
+        textSh('→ ' + AGES[age + 1].name, b.x + b.w / 2, b.y + 40, 14, INK, 'center', '800');
+        textSh(cost + ' XP  [5]', b.x + b.w / 2, b.y + 60, 13, xp >= cost ? XPC : 'rgba(42,35,32,0.55)', 'center', '800'); }
+    }
+    ctx.restore();
+  }
+}
+function drawIcon(ci, tier, x, y) {
+  // tiny standing figure preview
+  const u = { ci: ci, tier: tier, x: x, walk: 0, moving: false, atkAnim: 0, side: YOU, ranged: CLS[ci].ranged, hp: 1, maxHp: 1, dying: false, k: 0.2 };
+  ctx.save(); const sv = GY; // drawStick uses GY; fake by translating
+  ctx.translate(0, y - (GY - 2)); drawStickAt(u, x, GY - 2, 0.62); ctx.restore();
+}
+function drawStickAt(u, x, gy, mul) {
+  // simplified inline draw for icons — reflects the current age's fidelity/style
+  const c = CLS[u.ci]; const s = (c.sc + u.tier * 0.055) * mul; const d = 1; const col = COL[YOU], acc = ACC[YOU];
+  const st = AGE_STYLE[u.tier] || AGE_STYLE[0];
+  const hipY = gy - 20 * s, shY = gy - 38 * s, headY = gy - 49 * s, headR = 5.6 * s;
+  _sk = u.ci * 131 + 7;
+  ctx.strokeStyle = col; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  sbow(x, hipY, x - 3 * s, gy, 3.2 * s, 0, st); sbow(x, hipY, x + 3 * s, gy, 3.2 * s, 0, st);
+  drawTorso(st, x, hipY, x, shY, d, s, col, acc);
+  sbow(x, hipY, x, shY, 3.8 * s, 0, st);
+  scircle(x, headY, headR, 3.2 * s, st);
+  const handX = x + d * 11 * s, handY = shY + (u.ranged ? 3 : 7) * s;
+  sbow(x, shY + 3 * s, handX, handY, 3 * s, 0, st);
+  drawWeapon(u, handX, handY, d, s, col, acc); drawGear(u, x, headY, headR, d, s, col, acc);
+}
+
+// ---- overlays ----
+function drawExplainer() {
+  if (explainerT <= 0 || state !== ST.BATTLE) return;
+  const a = clamp(explainerT / 1.2, 0, 1);
+  ctx.globalAlpha = a;
+  // one-liner strip
+  ctx.fillStyle = 'rgba(42,35,32,0.9)'; roundRect(W / 2 - 320, 120, 640, 34, 8); ctx.fill();
+  textSh('Earn gold  →  spawn units  →  march right to smash their fort  →  advance the age', W / 2, 137, 15, '#F4ECD8', 'center', '800');
+  // arrows / labels (screen space)
+  textSh('↓ spawn here (hold to keep sending)', 240, 428, 14, COL[YOU], 'center', '800');
+  textSh('advance age ↓', 837, 428, 13, COL[YOU], 'center', '800');
+  ctx.globalAlpha = 1;
+}
+// small navigation hint on early battle: the map is wide, you must look around
+function drawNavHint() {
+  if (sideCalloutT <= 0) return; const a = clamp(sideCalloutT / 1.4, 0, 1); ctx.globalAlpha = a;
+  const bob = Math.sin(performance.now() * 0.006) * 3;
+  ctx.fillStyle = 'rgba(42,35,32,0.82)'; roundRect(W / 2 - 250, 172 + bob, 500, 30, 8); ctx.fill();
+  textSh('the field is WIDE — drag or ◄ ► to look · YOUR fort is far left · FOE fort far right', W / 2, 187 + bob, 13.5, '#F4ECD8', 'center', '800');
+  ctx.globalAlpha = 1;
+}
+// minimap: full battlefield with fort markers, unit blips, and the camera window
+function drawMinimap() {
+  const x = MM_X, y = MM_Y, w = MM_W, h = MM_H;
+  ctx.fillStyle = 'rgba(42,35,32,0.16)'; roundRect(x - 5, y - 5, w + 10, h + 10, 6); ctx.fill();
+  ctx.fillStyle = 'rgba(244,236,216,0.9)'; roundRect(x, y, w, h, 4); ctx.fill();
+  // fort markers
+  ctx.fillStyle = COL[YOU]; ctx.fillRect(w2mini(YOU_CTR) - 3, y - 2, 6, h + 4);
+  ctx.fillStyle = COL[FOE]; ctx.fillRect(w2mini(FOE_CTR) - 3, y - 2, 6, h + 4);
+  // unit blips
+  for (let i = 0; i < MAXU; i++) { const u = units[i]; if (!u.active || u.dying) continue;
+    ctx.fillStyle = COL[u.side]; ctx.globalAlpha = 0.85; ctx.beginPath(); ctx.arc(w2mini(u.x), y + h / 2, 1.6, 0, 6.28); ctx.fill(); }
+  ctx.globalAlpha = 1;
+  // camera viewport window
+  const vx0 = w2mini(camX), vx1 = w2mini(camX + W);
+  ctx.fillStyle = 'rgba(42,35,32,0.12)'; ctx.fillRect(vx0, y, vx1 - vx0, h);
+  ctx.strokeStyle = INK; ctx.lineWidth = 1.6; ctx.strokeRect(vx0, y - 1, vx1 - vx0, h + 2);
+  ctx.strokeStyle = 'rgba(42,35,32,0.4)'; ctx.lineWidth = 1.2; roundRect(x, y, w, h, 4); ctx.stroke();
+  textSh('◄ YOU', x - 2, y + h / 2, 10, COL[YOU], 'right', '800');
+  textSh('FOE ►', x + w + 2, y + h / 2, 10, COL[FOE], 'left', '800');
+}
+// edge indicators for off-screen forts (arrow + name + HP)
+function drawEdgeIndicators() {
+  [YOU, FOE].forEach(side => {
+    const cx = side === YOU ? YOU_CTR : FOE_CTR; const sx = cx - camX;
+    if (sx > 40 && sx < W - 40) return;   // fort is on screen — no indicator
+    const left = sx <= W / 2; const ex = left ? 12 : W - 12; const ey = 250;
+    const f = fort[side], r = clamp(f.hp / f.max, 0, 1), col = COL[side];
+    ctx.save();
+    ctx.fillStyle = 'rgba(244,236,216,0.92)'; ctx.strokeStyle = col; ctx.lineWidth = 2.4;
+    const bw = 96, bx = left ? ex : ex - bw;
+    roundRect(bx, ey - 22, bw, 44, 8); ctx.fill(); ctx.stroke();
+    textSh((left ? '◄ ' : '') + (side === YOU ? 'YOUR FORT' : 'FOE FORT') + (left ? '' : ' ►'), bx + bw / 2, ey - 8, 12, col, 'center', '800');
+    // hp bar
+    const hbw = bw - 16, hx = bx + 8, hy = ey + 4;
+    ctx.fillStyle = 'rgba(42,35,32,0.18)'; ctx.fillRect(hx, hy, hbw, 6);
+    ctx.fillStyle = col; ctx.fillRect(hx, hy, hbw * r, 6);
+    textSh(Math.ceil(f.hp) + '', bx + bw / 2, ey + 15, 10, INK, 'center', '700');
+    ctx.restore();
+  });
+}
+function drawBanner() {
+  if (!banner || bannerT <= 0) return; const a = clamp(bannerT, 0, 1);
+  ctx.globalAlpha = Math.min(1, a * 1.5);
+  if (banner.big) {
+    // big unmistakable AGE-UP moment
+    const pulse = 1 + 0.06 * Math.sin(performance.now() * 0.012);
+    ctx.fillStyle = 'rgba(42,35,32,0.72)'; ctx.fillRect(0, 196, W, 148);
+    ctx.strokeStyle = banner.col; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(W / 2 - 300, 210); ctx.lineTo(W / 2 + 300, 210); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(W / 2 - 300, 330); ctx.lineTo(W / 2 + 300, 330); ctx.stroke();
+    ctx.save(); ctx.translate(W / 2, 262); ctx.scale(pulse, pulse);
+    textSh(banner.txt, 0, 0, 46, banner.col, 'center', '800');
+    ctx.restore();
+    textSh('✦  ' + (banner.sub || '') + '  ✦', W / 2, 306, 17, '#F4ECD8', 'center', '800');
+  } else {
+    ctx.fillStyle = 'rgba(42,35,32,0.6)'; ctx.fillRect(0, 210, W, 120);
+    textSh(banner.txt, W / 2, 250, 52, banner.col, 'center', '800');
+    if (banner.sub) textSh(banner.sub, W / 2, 296, 18, '#F4ECD8', 'center', '700');
+  }
+  ctx.globalAlpha = 1;
+}
+function drawSiegeFX() {
+  if (siege <= 0 && battleTime < SIEGE_WARN) return;
+  if (battleTime >= SIEGE_WARN && siege <= 0) {
+    const p = 0.5 + 0.5 * Math.sin(performance.now() * 0.008);
+    ctx.globalAlpha = 0.6 + 0.4 * p; textSh('⚠ war exhaustion nears — end it soon', W / 2, 170, 16, '#B23A2C', 'center', '800'); ctx.globalAlpha = 1;
+    return;
+  }
+  // charring edges
+  const v = clamp(siege / 18, 0, 1); const edge = 30 + v * 90;
+  const g = ctx.createLinearGradient(0, 0, 0, edge); g.addColorStop(0, 'rgba(42,25,20,' + (0.5 * v) + ')'); g.addColorStop(1, 'rgba(42,25,20,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 86, W, edge);
+  const g2 = ctx.createLinearGradient(0, H, 0, H - edge); g2.addColorStop(0, 'rgba(42,25,20,' + (0.4 * v) + ')'); g2.addColorStop(1, 'rgba(42,25,20,0)');
+  ctx.fillStyle = g2; ctx.fillRect(0, 440 - edge, W, edge);
+  const p = 0.5 + 0.5 * Math.sin(performance.now() * 0.01);
+  ctx.globalAlpha = 0.7 + 0.3 * p; textSh('SUDDEN DEATH — WAR EXHAUSTION', W / 2, 170, 20, '#B23A2C', 'center', '800'); ctx.globalAlpha = 1;
+}
+function drawSplash() {
+  ctx.fillStyle = 'rgba(244,236,216,0.55)'; ctx.fillRect(0, 0, W, H);
+  const bob = Math.sin(performance.now() * 0.003) * 3;
+  // title
+  textSh('STICK FRONT', W / 2, 150 + bob, 74, INK, 'center', '800');
+  ctx.strokeStyle = COL[YOU]; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(W / 2 - 200, 190); ctx.lineTo(W / 2 - 10, 190); ctx.stroke();
+  ctx.strokeStyle = COL[FOE]; ctx.beginPath(); ctx.moveTo(W / 2 + 10, 190); ctx.lineTo(W / 2 + 200, 190); ctx.stroke();
+  textSh('spawn stick armies · advance 5 ages · smash the enemy fort', W / 2, 216, 18, 'rgba(42,35,32,0.7)', 'center', '700');
+  // two mini armies clashing
+  const dm = { ci: 1, tier: 2, walk: 0, moving: false, atkAnim: 0.5, side: YOU, ranged: false, hp: 1, maxHp: 1, dying: false, x: W / 2 - 60, k: 0.2 };
+  drawStick(Object.assign(mkUnit(), dm, { x: W / 2 - 120 })); drawStick(Object.assign(mkUnit(), dm, { x: W / 2 - 60, ci: 0, tier: 1 }));
+  drawStick(Object.assign(mkUnit(), { ci: 1, tier: 2, walk: 0, moving: false, atkAnim: 0.5, side: FOE, ranged: false, hp: 1, maxHp: 1, dying: false, x: W / 2 + 60, k: 0.2 }));
+  drawStick(Object.assign(mkUnit(), { ci: 2, tier: 3, walk: 0, moving: false, atkAnim: 0, side: FOE, ranged: true, hp: 1, maxHp: 1, dying: false, x: W / 2 + 120, k: 0.2 }));
+  const pulse = 0.6 + 0.4 * Math.sin(performance.now() * 0.006);
+  ctx.globalAlpha = pulse; textSh(pendingResume ? 'tap / space to RESUME battle ' + pendingResume.battle : 'tap · click · press any key to begin', W / 2, 470, 24, COL[YOU], 'center', '800'); ctx.globalAlpha = 1;
+  if (challengeN) textSh('challenge: win ' + challengeN + ' battles', W / 2, 500, 15, COL[FOE], 'center', '800');
+}
+function drawGameOver() {
+  goT = Math.min(1, goT + 0.03);
+  ctx.fillStyle = 'rgba(42,35,32,' + (0.55 * goT) + ')'; ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = goT;
+  const yc = lerp(120, 150, goT);
+  textSh('DEFEAT', W / 2, yc, 60, COL[FOE], 'center', '800');
+  textSh('your fort crumbled at battle ' + battle, W / 2, yc + 44, 18, '#F4ECD8', 'center', '700');
+  textSh(battlesWon + '', W / 2, yc + 116, 82, '#F4ECD8', 'center', '800');
+  textSh('battles won', W / 2, yc + 150, 18, '#D8CBAE', 'center', '700');
+  if (battlesWon >= best && battlesWon > 0) { const p = 0.7 + 0.3 * Math.sin(performance.now() * 0.008); ctx.globalAlpha = goT * p; textSh('★ NEW BEST ★', W / 2, yc + 186, 26, GOLDC, 'center', '800'); ctx.globalAlpha = goT; }
+  else textSh('best ' + best, W / 2, yc + 186, 18, '#D8CBAE', 'center', '700');
+  if (challengeN) { const won = battlesWon >= challengeN; textSh(won ? '✓ beat the target of ' + challengeN : 'target was ' + challengeN + ' wins', W / 2, yc + 214, 16, won ? '#7FB86A' : '#E0913C', 'center', '800'); }
+  const pulse = 0.6 + 0.4 * Math.sin(performance.now() * 0.006);
+  ctx.globalAlpha = goT * pulse; textSh('FIGHT AGAIN — fresh battle 1', W / 2, yc + 258, 26, '#F4ECD8', 'center', '800'); ctx.globalAlpha = goT;
+  textSh('tap · space · enter', W / 2, yc + 288, 14, 'rgba(244,236,216,0.7)', 'center', '700');
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+//  RENDER
+// ============================================================
+function render() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#241d17'; ctx.fillRect(0, 0, cw, chh);
+  const sx = ox + (Math.random() - 0.5) * shake * scale, sy = oy + (Math.random() - 0.5) * shake * scale;
+  ctx.setTransform(scale * dpr, 0, 0, scale * dpr, sx * dpr, sy * dpr);
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+
+  // ---- WORLD LAYER (scrolls with the camera) ----
+  ctx.save(); ctx.translate(-camX, 0);
+  drawPaper();
+  drawFort(YOU); drawFort(FOE);
+  const order = [];
+  for (let i = 0; i < MAXU; i++) if (units[i].active) order.push(units[i]);
+  order.sort((a, b) => a.x - b.x);
+  for (const u of order) drawStick(u);
+  for (let i = 0; i < MAXP; i++) { const p = projs[i]; if (p.active && p.x - camX > -30 && p.x - camX < W + 30) drawProj(p); }
+  for (let i = 0; i < MAXPT; i++) { const p = parts[i]; if (!p.active) continue; if (p.x - camX < -20 || p.x - camX > W + 20) continue; const a = clamp(p.life / p.max, 0, 1);
+    if (p.kind === 1) { ctx.globalAlpha = a * 0.8; ctx.strokeStyle = p.col; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (1.4 - a) * 3 + 3, 0, 6.28); ctx.stroke(); }
+    else { ctx.globalAlpha = a; ctx.fillStyle = p.col; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.28); ctx.fill(); }
+    ctx.globalAlpha = 1; }
+  for (let i = 0; i < MAXF; i++) { const f = floats[i]; if (!f.active) continue; if (f.x - camX < -40 || f.x - camX > W + 40) continue; ctx.globalAlpha = clamp(f.life / 0.85, 0, 1); textSh(f.txt, f.x, f.y, f.sz, f.col, 'center', '800'); ctx.globalAlpha = 1; }
+  ctx.restore();
+
+  // ---- SCREEN LAYER (fixed UI) ----
+  // age-up shockwave ring + flash
+  if (ageWaveT > 0) { const p = 1 - ageWaveT; ctx.save(); ctx.globalAlpha = ageWaveT * 0.5; ctx.strokeStyle = ACC[ageWaveSide]; ctx.lineWidth = 6 * (1 - p * 0.6);
+    ctx.beginPath(); ctx.arc(W / 2, 300, 40 + p * 620, 0, 6.28); ctx.stroke(); ctx.restore(); }
+  if (flashPop > 0 && flashCol) { ctx.globalAlpha = clamp(flashPop, 0, 1) * 0.26; ctx.fillStyle = flashCol; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+
+  if (state === ST.BATTLE) drawSiegeFX();
+  drawHUD();
+  if (state === ST.BATTLE || state === ST.INTERLUDE) { drawMinimap(); drawEdgeIndicators(); drawButtons(); }
+  if (state === ST.BATTLE) { drawNavHint(); drawExplainer(); }
+  drawBanner();
+  if (state === ST.SPLASH) drawSplash();
+  if (state === ST.OVER) drawGameOver();
+
+  ctx.restore();
+}
+
+// ============================================================
+//  LOOP
+// ============================================================
+let last = performance.now(), postedReady = false;
+function frame(now) {
+  let dt = (now - last) / 1000; last = now; if (dt > 0.05) dt = 0.05;
+  sketchPhase = Math.floor(now / 90) % 100000;   // hand-drawn "boil" for the crude ages
+  update(dt); render();
+  if (!postedReady) { postedReady = true; post({ gs: 'ready' }); }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
