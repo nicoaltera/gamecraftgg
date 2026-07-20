@@ -32,13 +32,24 @@ var GOLD    = '#F2B441';                // stars
 
 // -------- PHYSICS TUNING (floaty-fun, forgiving, reads great on screen) -----
 var GRAVITY     = 1420;   // px/s^2  downward pull — brisk but a touch floaty
-var FRICTION    = 0.0007; // snow tangential loss PER SUBSTEP (low => slippery, glidey feel)
-var ICE_FR      = 0.0002; // icy surfaces: nearly frictionless, keeps speed
-var STICKY_FR   = 0.028;  // sticky/candy patches: grippy, bleed speed
-var RESTITUTION = 0.20;   // bounciness on landings (low => it slides, not pinball)
+// FRICTION is applied PER SUBSTEP whenever the sled is pressing into ground, so
+// the effective loss is ~fr*540/sec. The old 0.0007 (~31%/sec) bled so much
+// momentum the sled couldn't climb ramps, exit the half-pipe, or hold speed
+// across bridges — levels were literally unwinnable. These lower values make it
+// glide and CONSERVE momentum (climbs, U-turns, and elevated flags now reachable)
+// while gravity on any real slope still refills speed satisfyingly.
+var FRICTION    = 0.00022;// snow tangential loss PER SUBSTEP (~11%/sec — glidey, still snowy)
+var ICE_FR      = 0.00008;// icy surfaces: near-frictionless, keeps speed (theme distinction)
+var STICKY_FR   = 0.020;  // sticky/candy patches: grippy, bleed speed (reserved; unused today)
+var RESTITUTION = 0.07;   // bounciness on landings: LOW so the sled hugs curves
+                          // (half-pipe/valleys) without chattering off and bleeding
+                          // energy, and so normal landings barely bounce (forgiving)
 var AIR_DRAG    = 0.0005; // gentle velocity damping per substep while airborne
 var SLED_R      = 9.0;    // sled collision radius (px) — generous, forgiving
-var SUBSTEPS    = 9;      // physics substeps per frame (anti-tunnel at speed)
+var SUBSTEPS    = 13;     // physics substeps per frame: anti-tunnel at speed AND
+                          // fine enough that the sled follows concave curves
+                          // (half-pipe/valleys) without slamming the corner and
+                          // dumping momentum. Higher = smoother, conserves energy.
 var MAX_SPEED   = 2050;   // clamp so it never explodes into NaN/offscreen
 var REST_SPEED  = 45;     // below this + on ground for a beat => came to rest
 var STUCK_TIME  = 1.4;    // s at rest before a *gentle* "didn't make it" (not a death)
@@ -225,16 +236,18 @@ var LEVELS = [
   L({ name:'Boing!', theme:'candy', // springy pad flings you up to a high flag
     terrain:[ [[50,150],[150,206],[250,266],[340,320],[432,362]],
               [[720,232],[820,252],[895,260]] ],
-    start:[70,138], goal:[865,248], star:[560,140], spikes:[], movers:[],
-    pads:[{x:472,y:372,pow:1140}],
+    start:[70,138], goal:[865,248], star:[640,196], spikes:[], movers:[],
+    pads:[{x:472,y:372,pow:720}],
     ink:1450, hint:'Sled into the springy pad — boing up to the high flag!' }),
 
   L({ name:'Half-Pipe', theme:'dusk', // ride the U; a bumper bobs in the exit
+    // smooth, gently-rounded U (equal rims, no sharp bottom vertex) so momentum
+    // is conserved and the sled reliably carves up and out the far side.
     terrain:[ [[50,150],[150,200],[250,254]],
-              [[330,300],[382,358],[448,394],[524,400],[598,362],[652,300]],
-              [[720,300],[820,320],[895,326]] ],
-    start:[70,138], goal:[865,312], star:[652,246], spikes:[], pads:[],
-    movers:[{ax:686,ay:298,bx:686,by:384,period:2.3,r:16,kind:'bump'}],
+              [[330,296],[372,320],[418,340],[466,352],[512,354],[558,348],[606,332],[652,312]],
+              [[720,312],[820,330],[895,336]] ],
+    start:[70,138], goal:[865,322], star:[652,250], spikes:[], pads:[],
+    movers:[{ax:690,ay:250,bx:690,by:300,period:2.3,r:14,kind:'bump'}],
     ink:1600, hint:'Carve down the half-pipe and up the far side' }),
 
   L({ name:'Snowball Run', theme:'night', // time your crossing past a rolling snowball
@@ -247,8 +260,8 @@ var LEVELS = [
     terrain:[ [[40,120],[130,166],[210,226],[270,286]],
               [[468,432],[520,434],[560,432]],
               [[760,250],[850,270],[905,278]] ],
-    start:[60,108], goal:[880,266], star:[500,120], spikes:[],
-    pads:[{x:514,y:426,pow:1080}], movers:[],
+    start:[60,108], goal:[880,266], star:[660,150], spikes:[],
+    pads:[{x:514,y:426,pow:820}], movers:[],
     ink:1750, hint:'One last chasm — send it. The little pad can boost you across' })
 ];
 
@@ -1096,6 +1109,8 @@ function drawResults(){
 loadLevel(0);              // render the first hill behind the splash
 levelBanner = 0;
 requestAnimationFrame(frame);
+// read-only test probe (no effect on play): lets the verification drive inspect
+// state and convert virtual->client coords so it can draw real pointer strokes.
 try{ parent.postMessage({gs:'ready'},'*'); }catch(e){}
 })();
 </script>
