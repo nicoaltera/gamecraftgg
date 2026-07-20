@@ -1,26 +1,28 @@
 {
   "title": "Best in Show",
   "slug": "best-in-show",
-  "description": "Show your adorable pup in a dog pageant — pose, groom, and pull off tricks on cue to wow three judges and win the rosette.",
-  "verb": "wow the judges",
+  "description": "Adopt an adorable pup, then feed it, brush it, play fetch and keep it happy — raise your bond, buy bows and treats, and trot it out to dog shows to climb from Novice all the way to Supreme Legend.",
+  "verb": "raise a show dog",
   "dials": [
-    "mastery",
-    "progression",
-    "comedy"
+    "progression"
   ],
   "orientation": "landscape",
   "mode": "sp",
-  "scoreLabel": "pts",
+  "scoreLabel": "champ pts",
   "scoreOrder": "desc",
+  "boards": [
+    { "key": "champ", "label": "champ pts", "order": "desc", "primary": true },
+    { "key": "show", "label": "show pts", "order": "desc", "challenge": true }
+  ],
   "palette": [
-    "#FFE1C4",
-    "#8FD98A",
-    "#FFF3E0",
+    "#FFF6E7",
+    "#A9E4A0",
+    "#7FCB7A",
+    "#FFC7DD",
     "#FF8FB0",
-    "#FF5C6C",
-    "#FFC94D",
-    "#5B4A6A",
-    "#8AD0EA"
+    "#FFD36B",
+    "#8FD3EE",
+    "#6B5876"
   ],
   "author": "gamesight"
 }
