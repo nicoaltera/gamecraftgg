@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFE7B8"/>
+      <stop offset="1" stop-color="#FFB0C8"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFF6D6"/>
+      <stop offset="1" stop-color="#FFE59A"/>
+    </radialGradient>
+  </defs>
+  <rect width="640" height="400" fill="url(#sky)"/>
+  <circle cx="548" cy="86" r="52" fill="url(#sun)" opacity="0.85"/>
+  <!-- clouds -->
+  <g fill="#FFFFFF" opacity="0.75">
+    <ellipse cx="120" cy="70" rx="34" ry="20"/><ellipse cx="150" cy="78" rx="26" ry="16"/><ellipse cx="92" cy="80" rx="24" ry="15"/>
+    <ellipse cx="430" cy="52" rx="30" ry="18"/><ellipse cx="456" cy="60" rx="22" ry="14"/>
+  </g>
+  <!-- bunting -->
+  <g stroke="#5B4A6A" stroke-width="2" fill="none"><path d="M0 20 Q320 44 640 20"/></g>
+  <g>
+    <polygon points="30,25 54,25 42,48" fill="#FF5C6C"/>
+    <polygon points="95,30 119,30 107,53" fill="#FFC94D"/>
+    <polygon points="160,33 184,33 172,56" fill="#8AD0EA"/>
+    <polygon points="456,33 480,33 468,56" fill="#FF8FB0"/>
+    <polygon points="521,30 545,30 533,53" fill="#8FD98A"/>
+    <polygon points="586,25 610,25 598,48" fill="#FF5C6C"/>
+  </g>
+  <!-- ring floor -->
+  <path d="M0 250 Q320 214 640 250 L640 400 L0 400 Z" fill="#8EDBA0"/>
+  <ellipse cx="320" cy="272" rx="300" ry="34" fill="#000000" opacity="0.05"/>
+  <!-- crowd -->
+  <g opacity="0.45">
+    <circle cx="40" cy="150" r="12" fill="#C98BB0"/><circle cx="40" cy="139" r="7" fill="#FBE0C4"/>
+    <circle cx="78" cy="152" r="12" fill="#8BB0C9"/><circle cx="78" cy="141" r="7" fill="#FBE0C4"/>
+    <circle cx="600" cy="150" r="12" fill="#A0C98B"/><circle cx="600" cy="139" r="7" fill="#FBE0C4"/>
+  </g>
+  <!-- judges table -->
+  <rect x="196" y="150" width="248" height="34" rx="8" fill="#B57A4E"/>
+  <rect x="196" y="180" width="248" height="10" fill="#9C6740"/>
+  <!-- judge 1 pink -->
+  <g transform="translate(236,150)">
+    <rect x="-18" y="0" width="36" height="30" rx="10" fill="#F7A8C4"/>
+    <circle cx="0" cy="-10" r="14" fill="#FBE0C4"/>
+    <path d="M-14 -14 A14 14 0 0 1 14 -14 Z" fill="#E86A98"/>
+    <circle cx="-5" cy="-9" r="4" fill="none" stroke="#5B4A6A" stroke-width="2"/>
+    <circle cx="5" cy="-9" r="4" fill="none" stroke="#5B4A6A" stroke-width="2"/>
+    <path d="M-4 -3 Q0 1 4 -3" stroke="#5B4A6A" stroke-width="2" fill="none"/>
+  </g>
+  <!-- judge 2 green monocle -->
+  <g transform="translate(320,150)">
+    <rect x="-18" y="0" width="36" height="30" rx="10" fill="#A8D8B0"/>
+    <circle cx="0" cy="-10" r="14" fill="#FBE0C4"/>
+    <path d="M-13 -15 A13 13 0 0 1 13 -15 Z" fill="#5FAE73"/>
+    <circle cx="5" cy="-9" r="5" fill="none" stroke="#5B4A6A" stroke-width="2"/>
+    <circle cx="-5" cy="-9" r="2" fill="#5B4A6A"/>
+    <path d="M-4 -2 Q0 2 4 -2" stroke="#5B4A6A" stroke-width="2" fill="none"/>
+  </g>
+  <!-- judge 3 blue top hat -->
+  <g transform="translate(404,150)">
+    <rect x="-18" y="0" width="36" height="30" rx="10" fill="#A9C7F0"/>
+    <circle cx="0" cy="-10" r="14" fill="#FBE0C4"/>
+    <rect x="-10" y="-34" width="20" height="16" fill="#5B7FD6"/>
+    <ellipse cx="0" cy="-18" rx="15" ry="4" fill="#5B7FD6"/>
+    <circle cx="-5" cy="-9" r="2" fill="#5B4A6A"/><circle cx="5" cy="-9" r="2" fill="#5B4A6A"/>
+    <path d="M-4 -3 Q0 1 4 -3" stroke="#5B4A6A" stroke-width="2" fill="none"/>
+  </g>
+  <!-- rosette -->
+  <g transform="translate(566,262)">
+    <polygon points="-8,10 -18,44 -2,32" fill="#D23A4E"/>
+    <polygon points="8,10 18,44 2,32" fill="#D23A4E"/>
+    <g fill="#FF7A8C">
+      <circle cx="0" cy="0" r="30"/>
+    </g>
+    <circle cx="0" cy="0" r="22" fill="#D23A4E"/>
+    <circle cx="0" cy="0" r="14" fill="#FFF3E0"/>
+    <text x="0" y="6" font-family="Chalkboard SE, Comic Neue, sans-serif" font-size="18" font-weight="900" fill="#D23A4E" text-anchor="middle">1</text>
+  </g>
+  <!-- sparkles around pup -->
+  <g fill="#FFC94D">
+    <path d="M150 150 l4 10 10 4 -10 4 -4 10 -4 -10 -10 -4 10 -4 z"/>
+    <path d="M470 210 l3 8 8 3 -8 3 -3 8 -3 -8 -8 -3 8 -3 z"/>
+  </g>
+  <!-- the pup (mid jump) -->
+  <g transform="translate(300,232)">
+    <!-- shadow -->
+    <ellipse cx="0" cy="86" rx="46" ry="12" fill="#5B4A6A" opacity="0.16"/>
+    <!-- tail -->
+    <g transform="translate(30,26) rotate(-30)"><ellipse cx="16" cy="0" rx="18" ry="9" fill="#E4B884"/><circle cx="32" cy="0" r="8" fill="#FFF3E0"/></g>
+    <!-- back paws tucked -->
+    <ellipse cx="-18" cy="52" rx="11" ry="7" fill="#E4B884"/>
+    <ellipse cx="18" cy="52" rx="11" ry="7" fill="#E4B884"/>
+    <!-- body -->
+    <ellipse cx="0" cy="22" rx="38" ry="42" fill="#F6E4C6"/>
+    <ellipse cx="0" cy="30" rx="24" ry="28" fill="#FFF3E0"/>
+    <!-- front paws -->
+    <ellipse cx="-14" cy="58" rx="10" ry="8" fill="#FFF3E0"/>
+    <ellipse cx="14" cy="58" rx="10" ry="8" fill="#FFF3E0"/>
+    <!-- bow tie -->
+    <g fill="#5B7FD6"><polygon points="0,12 -16,4 -16,20"/><polygon points="0,12 16,4 16,20"/></g>
+    <circle cx="0" cy="12" r="4" fill="#3E5FB0"/>
+    <!-- head -->
+    <g transform="translate(0,-32)">
+      <!-- ears up (jumping) -->
+      <g transform="translate(-30,-8) rotate(-40)"><ellipse cx="-4" cy="8" rx="13" ry="22" fill="#E4B884"/><ellipse cx="-4" cy="8" rx="7" ry="14" fill="#F2C79A"/></g>
+      <g transform="translate(30,-8) rotate(40)"><ellipse cx="4" cy="8" rx="13" ry="22" fill="#E4B884"/><ellipse cx="4" cy="8" rx="7" ry="14" fill="#F2C79A"/></g>
+      <circle cx="0" cy="0" r="32" fill="#F6E4C6"/>
+      <ellipse cx="13" cy="-6" rx="15" ry="15" fill="#E4B884"/>
+      <ellipse cx="0" cy="12" rx="17" ry="13" fill="#FFF3E0"/>
+      <!-- eyes -->
+      <ellipse cx="-13" cy="-7" rx="8" ry="10" fill="#FFF"/>
+      <ellipse cx="13" cy="-7" rx="8" ry="10" fill="#FFF"/>
+      <circle cx="-12" cy="-5" r="5" fill="#3A2E47"/>
+      <circle cx="14" cy="-5" r="5" fill="#3A2E47"/>
+      <circle cx="-13.5" cy="-6.5" r="2" fill="#FFF"/>
+      <circle cx="12.5" cy="-6.5" r="2" fill="#FFF"/>
+      <!-- blush -->
+      <circle cx="-18" cy="6" r="5" fill="#FF8FB0" opacity="0.55"/>
+      <circle cx="18" cy="6" r="5" fill="#FF8FB0" opacity="0.55"/>
+      <!-- nose + happy tongue -->
+      <polygon points="0,6 -5,10 5,10" fill="#4A3A5A"/>
+      <path d="M-4 15 h8 v6 a4 4 0 0 1 -8 0 z" fill="#FF8FB0"/>
+      <!-- red ear bow -->
+      <g transform="translate(-24,-26) rotate(-24)" fill="#FF5C6C"><polygon points="0,0 -13,-8 -13,8"/><polygon points="0,0 13,-8 13,8"/><circle cx="0" cy="0" r="4" fill="#D23A4E"/></g>
+    </g>
+  </g>
+  <!-- title -->
+  <g text-anchor="middle" font-family="Chalkboard SE, Comic Neue, Marker Felt, sans-serif" font-weight="900">
+    <text x="322" y="356" font-size="52" fill="#5B4A6A">Best in Show</text>
+    <text x="320" y="353" font-size="52" fill="#FFFFFF">Best in Show</text>
+    <text x="320" y="384" font-size="19" fill="#FF5C6C">wow the judges &#183; win the rosette</text>
+  </g>
+</svg>

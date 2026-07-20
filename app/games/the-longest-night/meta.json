@@ -1,0 +1,17 @@
+{
+  "title": "The Longest Night",
+  "slug": "the-longest-night",
+  "description": "You wake at 3:33 AM in a house that won't let you leave. Click your way out — find every ending.",
+  "verb": "click your way out",
+  "dials": ["comedy", "mastery"],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "endings",
+  "scoreOrder": "desc",
+  "boards": [
+    { "key": "endings", "label": "endings", "order": "desc", "primary": true },
+    { "key": "clicks", "label": "clicks to escape", "order": "asc", "challenge": true }
+  ],
+  "palette": ["#14152B", "#232A57", "#5B2A6E", "#FF5A5F", "#FFC24B", "#2FB3A8", "#F4ECD8", "#E86A8E"],
+  "author": "gamesight"
+}

@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="44%" r="82%">
+      <stop offset="0%" stop-color="#16371F"/>
+      <stop offset="52%" stop-color="#122A1C"/>
+      <stop offset="100%" stop-color="#0B140F"/>
+    </radialGradient>
+    <radialGradient id="vig" cx="50%" cy="50%" r="72%">
+      <stop offset="55%" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.55"/>
+    </radialGradient>
+  </defs>
+
+  <!-- petri agar -->
+  <rect width="640" height="400" fill="url(#bg)"/>
+  <!-- toxic haze blobs -->
+  <g opacity="0.16">
+    <circle cx="130" cy="110" r="90" fill="#4DD0FF"/>
+    <circle cx="520" cy="90" r="80" fill="#FF5CE1"/>
+    <circle cx="470" cy="320" r="100" fill="#C6FF3A"/>
+    <circle cx="110" cy="330" r="80" fill="#FF8A2E"/>
+  </g>
+  <!-- petri dish hazard rim -->
+  <rect x="10" y="10" width="620" height="380" rx="16" fill="none" stroke="#07130C" stroke-width="12"/>
+  <rect x="10" y="10" width="620" height="380" rx="16" fill="none" stroke="#C6FF3A" stroke-width="5" stroke-dasharray="34 22" opacity="0.45"/>
+
+  <!-- food spores -->
+  <g stroke="#07130C" stroke-width="1.6">
+    <circle cx="196" cy="150" r="5" fill="#4DD0FF"/><circle cx="300" cy="120" r="6" fill="#FF5CE1"/>
+    <circle cx="560" cy="220" r="5" fill="#FF8A2E"/><circle cx="250" cy="300" r="5" fill="#7C5CFF"/>
+    <circle cx="360" cy="335" r="6" fill="#4DD0FF"/><circle cx="150" cy="250" r="5" fill="#FF8A2E"/>
+    <circle cx="592" cy="150" r="5" fill="#FF5CE1"/><circle cx="72" cy="150" r="5" fill="#4DD0FF"/>
+  </g>
+
+  <!-- RED predator germ (angry, fangs) top-right -->
+  <g>
+    <circle cx="524" cy="150" r="60" fill="none" stroke="#07130C" stroke-width="7" stroke-dasharray="4 11" opacity="0.9"/>
+    <circle cx="524" cy="150" r="54" fill="#FF3355" stroke="#07130C" stroke-width="8"/>
+    <path d="M498 130 L516 138 M550 130 L532 138" stroke="#07130C" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="508" cy="146" r="14" fill="#F7FFF0" stroke="#07130C" stroke-width="3"/>
+    <circle cx="540" cy="146" r="14" fill="#F7FFF0" stroke="#07130C" stroke-width="3"/>
+    <circle cx="510" cy="150" r="7" fill="#07130C"/><circle cx="542" cy="150" r="7" fill="#07130C"/>
+    <path d="M504 172 L514 184 L524 172 L534 184 L544 172" fill="none" stroke="#07130C" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+
+  <!-- CYAN small prey germ (scared) -->
+  <g>
+    <circle cx="150" cy="130" r="34" fill="none" stroke="#07130C" stroke-width="5" stroke-dasharray="3 8" opacity="0.9"/>
+    <circle cx="150" cy="130" r="30" fill="#4DD0FF" stroke="#07130C" stroke-width="6"/>
+    <circle cx="141" cy="124" r="8.5" fill="#F7FFF0" stroke="#07130C" stroke-width="2.4"/>
+    <circle cx="159" cy="124" r="8.5" fill="#F7FFF0" stroke="#07130C" stroke-width="2.4"/>
+    <circle cx="141" cy="126" r="4" fill="#07130C"/><circle cx="159" cy="126" r="4" fill="#07130C"/>
+    <circle cx="150" cy="143" r="4.5" fill="none" stroke="#07130C" stroke-width="2.6"/>
+  </g>
+
+  <!-- ORANGE germ bottom-left -->
+  <g>
+    <circle cx="96" cy="300" r="44" fill="none" stroke="#07130C" stroke-width="6" stroke-dasharray="3 10" opacity="0.9"/>
+    <circle cx="96" cy="300" r="40" fill="#FF8A2E" stroke="#07130C" stroke-width="7"/>
+    <circle cx="85" cy="293" r="11" fill="#F7FFF0" stroke="#07130C" stroke-width="2.6"/>
+    <circle cx="108" cy="293" r="11" fill="#F7FFF0" stroke="#07130C" stroke-width="2.6"/>
+    <circle cx="87" cy="296" r="5.5" fill="#07130C"/><circle cx="110" cy="296" r="5.5" fill="#07130C"/>
+    <path d="M82 314 A16 16 0 0 0 110 314" fill="none" stroke="#07130C" stroke-width="3.5" stroke-linecap="round"/>
+  </g>
+
+  <!-- VIOLET germ being chomped (small magenta half inside) + goo -->
+  <g>
+    <circle cx="415" cy="255" r="52" fill="#7C5CFF" stroke="#07130C" stroke-width="7"/>
+    <circle cx="404" cy="248" r="12" fill="#F7FFF0" stroke="#07130C" stroke-width="2.6"/>
+    <circle cx="428" cy="248" r="12" fill="#F7FFF0" stroke="#07130C" stroke-width="2.6"/>
+    <circle cx="406" cy="251" r="6" fill="#07130C"/><circle cx="430" cy="251" r="6" fill="#07130C"/>
+    <path d="M400 272 A18 18 0 0 0 432 272" fill="none" stroke="#07130C" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="462" cy="230" r="15" fill="#FF5CE1" stroke="#07130C" stroke-width="4"/>
+    <g fill="#FF5CE1" stroke="#07130C" stroke-width="1.4">
+      <circle cx="470" cy="205" r="5"/><circle cx="486" cy="222" r="4"/><circle cx="452" cy="200" r="3.5"/>
+    </g>
+  </g>
+
+  <!-- YOU — the LIME hero germ with crown + grin + tag -->
+  <g>
+    <circle cx="248" cy="222" r="86" fill="#C6FF3A" opacity="0.16"/>
+    <circle cx="248" cy="222" r="60" fill="none" stroke="#07130C" stroke-width="8" stroke-dasharray="4 12"/>
+    <circle cx="248" cy="222" r="54" fill="#C6FF3A" stroke="#07130C" stroke-width="9"/>
+    <circle cx="248" cy="222" r="62" fill="none" stroke="#C6FF3A" stroke-width="4"/>
+    <ellipse cx="232" cy="190" rx="18" ry="9" fill="#ffffff" opacity="0.5"/>
+    <path d="M200 176 L200 152 L224 168 L248 142 L272 168 L296 152 L296 176 Z" fill="#C6FF3A" stroke="#07130C" stroke-width="5" stroke-linejoin="round"/>
+    <circle cx="230" cy="216" r="16" fill="#F7FFF0" stroke="#07130C" stroke-width="3.4"/>
+    <circle cx="266" cy="216" r="16" fill="#F7FFF0" stroke="#07130C" stroke-width="3.4"/>
+    <circle cx="234" cy="220" r="8" fill="#07130C"/><circle cx="270" cy="220" r="8" fill="#07130C"/>
+    <path d="M222 246 A30 30 0 0 0 274 246" fill="none" stroke="#07130C" stroke-width="4.5" stroke-linecap="round"/>
+  </g>
+  <!-- YOU tag -->
+  <g>
+    <rect x="222" y="120" width="52" height="24" rx="12" fill="#07130C" opacity="0.9" stroke="#C6FF3A" stroke-width="2"/>
+    <text x="248" y="137" font-family="'Baloo 2','Trebuchet MS',sans-serif" font-size="15" font-weight="800" fill="#C6FF3A" text-anchor="middle">YOU</text>
+    <path d="M242 144 L254 144 L248 151 Z" fill="#C6FF3A"/>
+  </g>
+
+  <!-- title -->
+  <text x="320" y="360" font-family="'Baloo 2','Trebuchet MS',sans-serif" font-size="50" font-weight="900" fill="#EBFF9E" text-anchor="middle" stroke="#07130C" stroke-width="4" paint-order="stroke" letter-spacing="1">MICROBE BLOOM</text>
+  <text x="320" y="385" font-family="'Baloo 2','Trebuchet MS',sans-serif" font-size="15" font-weight="700" fill="#C6FF3A" text-anchor="middle">chomp · grow · how big can you bloom?</text>
+
+  <rect width="640" height="400" fill="url(#vig)"/>
+</svg>

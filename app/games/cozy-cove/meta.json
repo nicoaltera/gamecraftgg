@@ -1,0 +1,13 @@
+{
+  "title": "Cozy Cove",
+  "slug": "cozy-cove",
+  "description": "A little seaside island that's all yours — fish, dig, pick flowers, chat with a cat, and slowly decorate your cove into the coziest place on the water.",
+  "verb": "make a cozy life",
+  "dials": ["progression", "toy"],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "cozy",
+  "scoreOrder": "desc",
+  "palette": ["#F5E6C0", "#F3D19B", "#8FD08A", "#4E9E6A", "#7ED0D6", "#3F94B8", "#EC8B6E", "#4A3B32"],
+  "author": "gamesight"
+}

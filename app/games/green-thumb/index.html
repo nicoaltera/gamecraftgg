@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Green Thumb</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#2b3a2a; overflow:hidden; }
+  canvas { display:block; touch-action:none; -webkit-user-select:none; user-select:none; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<script>
+'use strict';
+/* ============================================================
+   GREEN THUMB — a cozy garden you tend and grow.
+   Plant · water · watch it bloom · harvest · reinvest.
+   Pure Canvas2D + WebAudio. Fixed 960x540, letterboxed.
+   ============================================================ */
+
+const W = 960, H = 540;
+const SLUG = 'green-thumb';
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+
+/* ---------- letterbox / dpr ---------- */
+let scale = 1, offX = 0, offY = 0, dpr = 1;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const w = window.innerWidth, h = window.innerHeight;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  cv.style.width = w + 'px'; cv.style.height = h + 'px';
+  scale = Math.min(w / W, h / H);
+  offX = (w - W * scale) / 2; offY = (h - H * scale) / 2;
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------- rng ---------- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const juice = mulberry32(0x9E3779B1);
+function hash01(n) { const r = mulberry32(n | 0); return r(); }
+
+/* ---------- bridge ---------- */
+function post(m) { try { parent.postMessage(m, '*'); } catch (e) {} }
+const params = new URLSearchParams(location.search);
+const challenge = Math.max(0, parseInt(params.get('c') || '0', 10) || 0);
+
+/* ---------- persistence ---------- */
+function lbGet() { try { return parseInt(localStorage.getItem('gs_best:' + SLUG) || '0', 10) || 0; } catch (e) { return 0; } }
+function lbSet(v) { try { localStorage.setItem('gs_best:' + SLUG, String(v)); } catch (e) {} }
+let best = lbGet();
+
+/* ============================================================
+   AUDIO — gentle WebAudio synth, generated on the fly.
+   plink (plant) · trickle (water) · bloom chime · coin ding ·
+   soft purchase chord · gentle nope · ambient breeze + birdsong.
+   ============================================================ */
+const AU = {
+  ctx: null, master: null, pad: null, noiseBuf: null, muted: false, birdT: 0,
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    try {
+      const C = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new C();
+      const comp = this.ctx.createDynamicsCompressor();
+      this.master = this.ctx.createGain(); this.master.gain.value = 0.5;
+      this.master.connect(comp); comp.connect(this.ctx.destination);
+      const len = (this.ctx.sampleRate * 1.5) | 0;
+      this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const d = this.noiseBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      this.startPad();
+    } catch (e) { this.ctx = null; }
+  },
+  now() { return this.ctx ? this.ctx.currentTime : 0; },
+  vary(f) { return f * (0.94 + juice() * 0.12); },
+  tone(type, f0, f1, t0, dur, peak, curve) {
+    if (!this.ctx || this.muted) return;
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type; o.frequency.setValueAtTime(f0, t0);
+    if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(peak, t0 + (curve || 0.01));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  },
+  noise(t0, dur, peak, type, f0, f1, q) {
+    if (!this.ctx || this.muted) return;
+    const s = this.ctx.createBufferSource(); s.buffer = this.noiseBuf; s.loop = true;
+    const fl = this.ctx.createBiquadFilter(); fl.type = type; fl.Q.value = q || 1;
+    fl.frequency.setValueAtTime(f0, t0);
+    if (f1) fl.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(peak, t0 + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    s.connect(fl); fl.connect(g); g.connect(this.master);
+    s.start(t0); s.stop(t0 + dur + 0.05);
+  },
+  startPad() {
+    if (!this.ctx) return;
+    // soft warm breeze pad — two detuned sines, very quiet
+    this.pad = this.ctx.createGain(); this.pad.gain.value = 0.05; this.pad.connect(this.master);
+    const mk = (f, det) => { const o = this.ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f * det; o.connect(this.pad); o.start(); return o; };
+    mk(146.83, 1); mk(220, 1.003); mk(293.66, 0.997);
+  },
+  plink() { const t = this.now(); this.tone('triangle', this.vary(560), this.vary(760), t, 0.14, 0.16, 0.006); this.tone('sine', this.vary(280), 200, t, 0.1, 0.06); },
+  trickle() { const t = this.now(); this.noise(t, 0.16, 0.03, 'bandpass', this.vary(1400), this.vary(2600), 3); this.tone('sine', this.vary(900), this.vary(1300), t, 0.08, 0.015); },
+  bloom() { const t = this.now(); const b = 523.25; [0, 0.09, 0.18].forEach((d, i) => this.tone('sine', this.vary([b, b * 1.25, b * 1.5][i]), null, t + d, 0.5, 0.11, 0.01)); this.tone('triangle', this.vary(1560), null, t + 0.02, 0.4, 0.03); },
+  coin() { const t = this.now(); this.tone('triangle', this.vary(940), this.vary(1500), t, 0.09, 0.14); this.tone('square', this.vary(1300), this.vary(1900), t + 0.03, 0.07, 0.05); },
+  buy() { const t = this.now(); [523.25, 659.25, 783.99].forEach((f, i) => this.tone('triangle', this.vary(f), null, t + i * 0.05, 0.4, 0.1)); },
+  nope() { const t = this.now(); this.tone('sine', 200, 150, t, 0.16, 0.09); },
+  bird() {
+    if (!this.ctx || this.muted) return;
+    const t = this.now(); const base = 2000 + juice() * 900;
+    const n = 2 + (juice() * 3 | 0);
+    for (let i = 0; i < n; i++) this.tone('sine', this.vary(base + i * 120), this.vary(base + 300 + i * 120), t + i * 0.08, 0.09, 0.03, 0.008);
+  }
+};
+
+/* ============================================================
+   DATA — the plant ladder + garden upgrades (the progression)
+   ============================================================ */
+// each plant: name, price(seed-packet unlock cost), grow(seconds), value(coins@harvest), type key for drawing
+const PLANTS = [
+  { n: 'Daisy',    price: 0,     grow: 11,  value: 8,      key: 'daisy' },
+  { n: 'Tulip',    price: 12,    grow: 16,  value: 20,     key: 'tulip' },
+  { n: 'Marigold', price: 30,    grow: 22,  value: 42,     key: 'marigold' },
+  { n: 'Carrot',   price: 70,    grow: 28,  value: 95,     key: 'carrot' },
+  { n: 'Sunflower',price: 160,   grow: 40,  value: 210,    key: 'sunflower' },
+  { n: 'Lavender', price: 380,   grow: 55,  value: 480,    key: 'lavender' },
+  { n: 'Rose',     price: 850,   grow: 72,  value: 1050,   key: 'rose' },
+  { n: 'Berry Bush',price: 1900, grow: 95,  value: 2350,   key: 'berry' },
+  { n: 'Lotus',    price: 4200,  grow: 120, value: 5200,   key: 'lotus' },
+  { n: 'Orchid',   price: 9500,  grow: 155, value: 11800,  key: 'orchid' },
+  { n: 'Moonflower',price: 22000,grow: 200, value: 27000,  key: 'moon' },
+  { n: 'Rainbow Bloom', price: 55000, grow: 260, value: 68000, key: 'rainbow' }
+];
+const PLOTS_BY_EXPAND = [4, 6, 9, 12, 16, 20];
+// upgrades: id, name, icon, tiers [{price, note}]
+const UPG = [
+  { id: 'expand', n: 'Bigger Bed', ic: '▦', note: (l) => l < 5 ? 'Unlock more plots (' + PLOTS_BY_EXPAND[l] + '→' + PLOTS_BY_EXPAND[l + 1] + ')' : 'Bed maxed',
+    tiers: [{ price: 40 }, { price: 150 }, { price: 600 }, { price: 2500 }, { price: 9000 }] },
+  { id: 'soil', n: 'Rich Soil', ic: '❉', note: (l) => 'Plants grow +25% faster (now +' + (l * 25) + '%)',
+    tiers: [{ price: 25 }, { price: 120 }, { price: 500 }, { price: 2200 }] },
+  { id: 'can', n: 'Bigger Can', ic: '◗', note: (l) => 'Water tank +50 (now ' + (100 + l * 50) + ')',
+    tiers: [{ price: 30 }, { price: 140 }, { price: 700 }] },
+  { id: 'well', n: 'Deep Well', ic: '≈', note: (l) => 'Water refills faster (now +' + (l * 4) + '/s)',
+    tiers: [{ price: 45 }, { price: 200 }, { price: 900 }] },
+  { id: 'sprinkler', n: 'Sprinkler', ic: '✳', note: (l) => l < 3 ? 'Auto-waters your plots' : 'Full auto-water',
+    tiers: [{ price: 220 }, { price: 1100 }, { price: 5000 }] },
+  { id: 'bees', n: 'Bee Hive', ic: '✦', note: (l) => 'Harvest +' + [15, 30, 50][Math.min(l, 2)] + '% coins',
+    tiers: [{ price: 300 }, { price: 1400 }, { price: 6000 }] },
+  { id: 'pond', n: 'Lily Pond', ic: '◊', note: () => 'Butterflies + Lotus +50% value',
+    tiers: [{ price: 1800 }] },
+  { id: 'flutter', n: 'Butterflies', ic: '❀', note: () => 'A cloud of butterflies (+value)',
+    tiers: [{ price: 3500 }] },
+  { id: 'trowel', n: 'Golden Trowel', ic: '⚒', note: () => 'Harvest +20% + coin bursts',
+    tiers: [{ price: 5000 }] },
+  { id: 'compost', n: 'Compost Bin', ic: '♺', note: () => '+15% growth, +25% harvest',
+    tiers: [{ price: 8000 }] },
+  { id: 'greenhouse', n: 'Greenhouse', ic: '⌂', note: () => '+35% growth, lush glass house',
+    tiers: [{ price: 20000 }] },
+  { id: 'arbor', n: 'Rainbow Arbor', ic: '☂', note: () => 'A rainbow over your dream garden',
+    tiers: [{ price: 60000 }] }
+];
+function upgVal(id) { const u = UPG.find(x => x.id === id); const l = G.upg[id] || 0; let s = 0; for (let i = 0; i < l; i++) s += u.tiers[i].price; return s; }
+
+/* ============================================================
+   STATE
+   ============================================================ */
+const G = {};
+function freshState() {
+  G.coins = 6;
+  G.water = 100; G.waterMax = 100;
+  G.owned = { 0: true };        // seed packets owned by plant index
+  G.upg = {};                   // upgrade id -> level
+  G.sel = 0;                    // selected seed index
+  G.day = 1;
+  G.harvests = 0;
+  G.plots = [];
+  for (let i = 0; i < 20; i++) G.plots.push({ type: -1, prog: 0, moist: 0.35, ripe: false, scale: 1, born: 0, wobble: 0 });
+}
+function saveGame() {
+  try {
+    localStorage.setItem('gs_save:' + SLUG, JSON.stringify({
+      coins: G.coins, water: G.water, waterMax: G.waterMax, owned: G.owned, upg: G.upg,
+      sel: G.sel, day: G.day, harvests: G.harvests,
+      plots: G.plots.map(p => ({ t: p.type, pr: p.prog, m: p.moist }))
+    }));
+  } catch (e) {}
+}
+function loadGame() {
+  freshState();
+  try {
+    const raw = localStorage.getItem('gs_save:' + SLUG);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (!s) return;
+    G.coins = s.coins ?? 6; G.water = s.water ?? 100; G.waterMax = s.waterMax ?? 100;
+    G.owned = s.owned || { 0: true }; G.owned[0] = true;
+    G.upg = s.upg || {}; G.sel = s.sel ?? 0; G.day = s.day ?? 1; G.harvests = s.harvests ?? 0;
+    if (Array.isArray(s.plots)) for (let i = 0; i < 20 && i < s.plots.length; i++) {
+      const p = s.plots[i]; if (!p) continue;
+      G.plots[i].type = p.t ?? -1; G.plots[i].prog = p.pr ?? 0; G.plots[i].moist = p.m ?? 0.3;
+      G.plots[i].ripe = G.plots[i].prog >= 1 && G.plots[i].type >= 0;
+    }
+    if (!G.owned[G.sel]) G.sel = 0;
+    G.waterMax = 100 + (G.upg.can || 0) * 50;
+  } catch (e) { freshState(); }
+}
+
+/* derived */
+function plotsUnlocked() { return PLOTS_BY_EXPAND[Math.min(G.upg.expand || 0, 5)]; }
+function growthMult() { return (1 + 0.25 * (G.upg.soil || 0)) * (G.upg.compost ? 1.15 : 1) * (G.upg.greenhouse ? 1.35 : 1); }
+function harvestMult(type) {
+  let m = 1;
+  const b = G.upg.bees || 0; if (b) m += [0.15, 0.30, 0.50][Math.min(b, 3) - 1];
+  if (G.upg.trowel) m += 0.20;
+  if (G.upg.compost) m += 0.25;
+  if (type === 8 && G.upg.pond) m += 0.50;   // Lotus + pond
+  return m;
+}
+function liveValue(p) { return p.type >= 0 ? PLANTS[p.type].value * (0.15 + 0.85 * Math.min(1, p.prog)) : 0; }
+function gardenValue() {
+  let v = G.coins;
+  for (const i of Object.keys(G.owned)) if (G.owned[i]) v += PLANTS[i].price;
+  for (const u of UPG) v += upgVal(u.id);
+  for (const p of G.plots) v += liveValue(p);
+  return Math.round(v);
+}
+
+/* ============================================================
+   LAYOUT
+   ============================================================ */
+const HUD_H = 58;
+const BED = { x: 40, y: 96, w: 720, h: 300 };
+const COL = 5, ROW = 4;
+const cellW = BED.w / COL, cellH = BED.h / ROW;
+const TRAY = { x: 0, y: 404, w: W, h: H - 404 };
+const BARREL = { x: 792, y: 150, w: 96, h: 176 };
+function plotCenter(i) {
+  const c = i % COL, r = (i / COL) | 0;
+  return { cx: BED.x + c * cellW + cellW / 2, cy: BED.y + r * cellH + cellH / 2, r, c };
+}
+function plotSoilRect(i) {
+  const p = plotCenter(i); const sw = cellW - 18, sh = cellH - 16;
+  return { x: p.cx - sw / 2, y: p.cy - sh / 2 + 4, w: sw, h: sh, cx: p.cx, baseY: p.cy + sh / 2 - 2 };
+}
+
+/* ============================================================
+   PARTICLES (pooled)
+   ============================================================ */
+const P_MAX = 320;
+const parts = [];
+for (let i = 0; i < P_MAX; i++) parts.push({ on: false });
+function spawnP(o) {
+  for (let i = 0; i < P_MAX; i++) { const p = parts[i]; if (!p.on) { Object.assign(p, o); p.on = true; p.t = 0; return p; } }
+}
+/* ambient pollen */
+const pollen = [];
+for (let i = 0; i < 26; i++) pollen.push({ x: juice() * W, y: 60 + juice() * 340, ph: juice() * 6.28, sp: 6 + juice() * 12, r: 1 + juice() * 2, a: 0.15 + juice() * 0.3 });
+/* clouds */
+const clouds = [];
+for (let i = 0; i < 4; i++) clouds.push({ x: juice() * W, y: 18 + juice() * 46, s: 0.7 + juice() * 0.8, v: 4 + juice() * 5 });
+/* butterflies + bees */
+const flutters = [];
+function ensureFlutters(n) { while (flutters.length < n) flutters.push({ x: juice() * W, y: 120 + juice() * 240, ph: juice() * 6.28, hue: juice() * 360, sp: 18 + juice() * 22, tx: juice() * W, ty: 120 + juice() * 240, kind: 'b' }); flutters.length = Math.max(0, n); }
+const bees = [];
+function ensureBees(n) { while (bees.length < n) bees.push({ x: 700, y: 120, ph: juice() * 6.28, tx: juice() * W, ty: 120 + juice() * 220 }); bees.length = Math.max(0, n); }
+
+/* ============================================================
+   STATE MACHINE + FLOW
+   ============================================================ */
+let mode = 'splash';   // splash | play | dayend
+let tab = 'seeds';     // seeds | garden
+let scroll = { seeds: 0, garden: 0 };
+let time = 0, splashT = 0, dayendT = 0, sunrise = 0;
+let hint = 0, hintStage = 0;   // 0 plant, 1 water, 2 harvest, done
+let hasPlanted = false, hasWatered = false, hasHarvested = false;
+let dispCoins = 6, dispValue = 0, valuePop = 0, coinPop = 0;
+let cBeaten = false, cFlashT = 0;
+let lastScorePost = 0, lastPostedVal = -1, autosaveT = 0;
+let bloomsToday = 0, coinsToday = 0;
+
+function startGame() {
+  loadGame();
+  dispCoins = G.coins; dispValue = gardenValue();
+  ensureFlutters(baseFlutters());
+  ensureBees((G.upg.bees || 0) ? 2 + (G.upg.bees || 0) : 0);
+  hint = 6; hintStage = 0;
+  mode = 'play';
+}
+function baseFlutters() { let n = 2; if (G.upg.pond) n += 3; if (G.upg.flutter) n += 6; if (G.upg.arbor) n += 5; return n; }
+
+function endDay() {
+  // overnight: gentle growth + refill + a little dew coins
+  bloomsToday = 0; coinsToday = 0;
+  mode = 'dayend'; dayendT = 0;
+  post({ gs: 'gameover', score: gardenValue() });
+  saveGame();
+}
+function newDay() {
+  G.day++;
+  G.water = G.waterMax;
+  // overnight growth tick for planted crops
+  for (const p of G.plots) if (p.type >= 0 && !p.ripe) { p.prog = Math.min(1, p.prog + 0.12); if (p.prog >= 1) p.ripe = true; p.moist = Math.max(p.moist, 0.4); }
+  sunrise = 1.4;
+  mode = 'play'; hint = 0;
+  saveGame();
+}
+
+/* ============================================================
+   ACTIONS
+   ============================================================ */
+function plantAt(i) {
+  const p = G.plots[i];
+  if (i >= plotsUnlocked() || p.type >= 0) return false;
+  p.type = G.sel; p.prog = 0; p.ripe = false; p.moist = Math.max(p.moist, 0.2); p.born = time; p.scale = 0; p.wobble = 0.4;
+  AU.plink();
+  const s = plotSoilRect(i);
+  for (let k = 0; k < 5; k++) spawnP({ kind: 'dirt', x: s.cx + (juice() - 0.5) * 20, y: s.baseY - 4, vx: (juice() - 0.5) * 40, vy: -30 - juice() * 40, life: 0.5, col: '#6b4326' });
+  if (!hasPlanted) { hasPlanted = true; hintStage = 1; hint = 6; }
+  return true;
+}
+function waterAt(i, dt) {
+  const p = G.plots[i];
+  if (i >= plotsUnlocked() || p.type < 0 || p.ripe) return false;
+  if (G.water <= 0) return false;
+  const add = Math.min(1 - p.moist, 1.4 * dt);
+  p.moist = Math.min(1, p.moist + 1.4 * dt);
+  G.water = Math.max(0, G.water - 15 * dt);
+  const s = plotSoilRect(i);
+  if (juice() < 0.5) spawnP({ kind: 'drop', x: s.cx + (juice() - 0.5) * 30, y: s.y - 40 - juice() * 20, vx: (juice() - 0.5) * 12, vy: 120 + juice() * 60, life: 0.5, tgt: s.baseY });
+  if (!hasWatered) { hasWatered = true; if (hintStage === 1) { hint = 0; } }
+  return true;
+}
+let harvestCd = 0;
+function harvestAt(i) {
+  const p = G.plots[i];
+  if (i >= plotsUnlocked() || p.type < 0 || !p.ripe) return false;
+  const pl = PLANTS[p.type];
+  const gain = Math.round(pl.value * harvestMult(p.type));
+  G.coins += gain; coinsToday += gain; G.harvests++; bloomsToday++;
+  const s = plotSoilRect(i);
+  AU.coin();
+  // petal burst
+  const cols = bloomColors(pl.key);
+  for (let k = 0; k < 14; k++) spawnP({ kind: 'petal', x: s.cx, y: s.baseY - 40, vx: (juice() - 0.5) * 190, vy: -120 - juice() * 150, life: 0.9 + juice() * 0.5, col: cols[k % cols.length], rot: juice() * 6.28, vr: (juice() - 0.5) * 10 });
+  // coin fliers toward HUD coin readout
+  const nC = G.upg.trowel ? 5 : 3;
+  for (let k = 0; k < nC; k++) spawnP({ kind: 'coin', x: s.cx + (juice() - 0.5) * 20, y: s.baseY - 46, vx: (juice() - 0.5) * 60, vy: -180 - juice() * 60, life: 0.7, tx: 108, ty: 30 });
+  for (let k = 0; k < 6; k++) spawnP({ kind: 'spark', x: s.cx + (juice() - 0.5) * 30, y: s.baseY - 50 - juice() * 30, vx: (juice() - 0.5) * 60, vy: -30 - juice() * 40, life: 0.6 });
+  coinPop = 1;
+  p.type = -1; p.prog = 0; p.ripe = false; p.scale = 1;
+  if (!hasHarvested) { hasHarvested = true; hintStage = 3; hint = 0; }
+  return true;
+}
+function buySeed(i) {
+  if (G.owned[i]) { G.sel = i; AU.plink(); return; }
+  if (i > 0 && !G.owned[i - 1]) { AU.nope(); shakeCard = i; shakeCardT = 0.4; return; }
+  if (G.coins >= PLANTS[i].price) {
+    G.coins -= PLANTS[i].price; G.owned[i] = true; G.sel = i; AU.buy(); saveGame();
+    for (let k = 0; k < 10; k++) spawnP({ kind: 'spark', x: 480, y: 470, vx: (juice() - 0.5) * 120, vy: -60 - juice() * 80, life: 0.7 });
+  } else { AU.nope(); shakeCard = 'seed' + i; shakeCardT = 0.4; }
+}
+function buyUpg(id) {
+  const u = UPG.find(x => x.id === id); const l = G.upg[id] || 0;
+  if (l >= u.tiers.length) return;
+  const price = u.tiers[l].price;
+  if (G.coins >= price) {
+    G.coins -= price; G.upg[id] = l + 1; AU.buy();
+    if (id === 'can') G.waterMax = 100 + (G.upg.can) * 50;
+    if (id === 'bees') ensureBees(2 + G.upg.bees);
+    if (id === 'pond' || id === 'flutter' || id === 'arbor') ensureFlutters(baseFlutters());
+    for (let k = 0; k < 14; k++) spawnP({ kind: 'spark', x: 480, y: 470, vx: (juice() - 0.5) * 140, vy: -70 - juice() * 90, life: 0.8 });
+    saveGame();
+  } else { AU.nope(); shakeCard = 'upg' + id; shakeCardT = 0.4; }
+}
+let shakeCard = null, shakeCardT = 0;
+
+/* ============================================================
+   INPUT
+   ============================================================ */
+const ptr = { down: false, x: 0, y: 0, x0: 0, y0: 0, moved: false, region: 'none', drag: 'none', scr0: 0, planted: {} };
+function toWorld(cx, cy) { return { x: (cx - offX) / scale, y: (cy - offY) / scale }; }
+function plotAt(x, y) {
+  if (x < BED.x || x > BED.x + BED.w || y < BED.y || y > BED.y + BED.h) return -1;
+  const c = Math.min(COL - 1, Math.max(0, ((x - BED.x) / cellW) | 0));
+  const r = Math.min(ROW - 1, Math.max(0, ((y - BED.y) / cellH) | 0));
+  return r * COL + c;
+}
+/* tray cards */
+const CW = 150, CH = 92, CGAP = 12, CPADX = 16;
+function trayItems() {
+  if (tab === 'seeds') return PLANTS.map((p, i) => ({ kind: 'seed', i }));
+  return UPG.map(u => ({ kind: 'upg', id: u.id }));
+}
+function trayCardX(idx) { return CPADX + idx * (CW + CGAP) - scroll[tab]; }
+function trayMaxScroll() { const n = trayItems().length; const total = CPADX * 2 + n * CW + (n - 1) * CGAP; return Math.max(0, total - W); }
+function cardTop() { return TRAY.y + 40; }
+function trayCardAt(x, y) {
+  if (y < cardTop() || y > cardTop() + CH) return -1;
+  const items = trayItems();
+  for (let idx = 0; idx < items.length; idx++) { const cx = trayCardX(idx); if (x >= cx && x <= cx + CW) return idx; }
+  return -1;
+}
+
+function onDown(x, y) {
+  AU.init();
+  if (mode === 'splash') { startGame(); return; }
+  if (mode === 'dayend') { newDay(); return; }
+  ptr.down = true; ptr.x = x; ptr.y = y; ptr.x0 = x; ptr.y0 = y; ptr.moved = false; ptr.planted = {};
+  // tabs
+  if (y >= TRAY.y && y <= TRAY.y + 34) {
+    if (x >= 16 && x <= 116) { tab = 'seeds'; ptr.region = 'ui'; return; }
+    if (x >= 124 && x <= 224) { tab = 'garden'; ptr.region = 'ui'; return; }
+  }
+  // end-day button (top right sun)
+  if (x >= W - 118 && x <= W - 8 && y >= 8 && y <= 44) { ptr.region = 'ui'; ptr.endday = true; return; }
+  ptr.endday = false;
+  if (y >= TRAY.y) { ptr.region = 'tray'; ptr.scr0 = scroll[tab]; return; }
+  // bed
+  const i = plotAt(x, y);
+  if (i >= 0) {
+    ptr.region = 'bed';
+    const p = G.plots[i];
+    if (i >= plotsUnlocked()) { ptr.drag = 'none'; return; }
+    if (p.ripe) { ptr.drag = 'harvest'; harvestAt(i); }
+    else if (p.type < 0) { ptr.drag = 'plant'; if (plantAt(i)) ptr.planted[i] = 1; }
+    else { ptr.drag = 'water'; }
+    return;
+  }
+  ptr.region = 'none';
+}
+function onMove(x, y) {
+  if (!ptr.down) return;
+  if (Math.abs(x - ptr.x0) > 6 || Math.abs(y - ptr.y0) > 6) ptr.moved = true;
+  ptr.x = x; ptr.y = y;
+  if (ptr.region === 'tray') {
+    scroll[tab] = Math.max(0, Math.min(trayMaxScroll(), ptr.scr0 - (x - ptr.x0)));
+  }
+}
+function onUp(x, y) {
+  if (!ptr.down) { return; }
+  ptr.down = false;
+  if (ptr.region === 'ui' && ptr.endday && mode === 'play') {
+    if (x >= W - 118 && x <= W - 8 && y >= 8 && y <= 44) endDay();
+    return;
+  }
+  if (ptr.region === 'tray' && !ptr.moved) {
+    const idx = trayCardAt(x, y);
+    if (idx >= 0) { const it = trayItems()[idx]; if (it.kind === 'seed') buySeed(it.i); else buyUpg(it.id); }
+  }
+  ptr.region = 'none'; ptr.drag = 'none';
+}
+
+cv.addEventListener('pointerdown', (e) => { e.preventDefault(); try { window.focus(); } catch (x) {} const w = toWorld(e.clientX, e.clientY); onDown(w.x, w.y); }, { passive: false });
+window.addEventListener('pointermove', (e) => { const w = toWorld(e.clientX, e.clientY); onMove(w.x, w.y); }, { passive: false });
+window.addEventListener('pointerup', (e) => { const w = toWorld(e.clientX, e.clientY); onUp(w.x, w.y); });
+window.addEventListener('pointercancel', () => { ptr.down = false; ptr.region = 'none'; ptr.drag = 'none'; });
+window.addEventListener('blur', () => { ptr.down = false; if (mode === 'play') post({ gs: 'gameover', score: gardenValue() }); });
+cv.addEventListener('contextmenu', (e) => e.preventDefault());
+cv.addEventListener('wheel', (e) => { e.preventDefault(); const w = toWorld(e.clientX, e.clientY); if (w.y >= TRAY.y) scroll[tab] = Math.max(0, Math.min(trayMaxScroll(), scroll[tab] + e.deltaY + e.deltaX)); }, { passive: false });
+
+window.addEventListener('keydown', (e) => {
+  if (['Space', 'Enter', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+  if (e.code === 'Space' || e.code === 'Enter') { AU.init(); if (mode === 'splash') startGame(); else if (mode === 'dayend') newDay(); }
+  if (mode === 'play') {
+    if (e.code === 'ArrowRight') scroll[tab] = Math.max(0, Math.min(trayMaxScroll(), scroll[tab] + 160));
+    if (e.code === 'ArrowLeft') scroll[tab] = Math.max(0, Math.min(trayMaxScroll(), scroll[tab] - 160));
+    if (e.code === 'Tab') tab = tab === 'seeds' ? 'garden' : 'seeds';
+  }
+});
+document.addEventListener('visibilitychange', () => { if (document.hidden && mode === 'play') { post({ gs: 'gameover', score: gardenValue() }); saveGame(); } });
+window.addEventListener('pagehide', () => { if (mode === 'play') { post({ gs: 'gameover', score: gardenValue() }); saveGame(); } });
+window.addEventListener('message', (e) => { if (e.data && e.data.gs === 'reset') { freshState(); dispCoins = G.coins; dispValue = gardenValue(); mode = 'splash'; } });
+
+/* ============================================================
+   UPDATE
+   ============================================================ */
+let trickleT = 0;
+function update(dt) {
+  time += dt;
+  splashT += dt;
+  if (sunrise > 0) sunrise = Math.max(0, sunrise - dt);
+  if (cFlashT > 0) cFlashT -= dt;
+  if (shakeCardT > 0) shakeCardT -= dt; else shakeCard = null;
+  if (harvestCd > 0) harvestCd -= dt;
+  valuePop = Math.max(0, valuePop - dt * 3);
+  coinPop = Math.max(0, coinPop - dt * 3);
+
+  // ambient
+  for (const c of clouds) { c.x += c.v * dt; if (c.x > W + 80) c.x = -80; }
+  for (const p of pollen) { p.ph += dt * 0.6; p.x += Math.sin(p.ph) * 6 * dt + p.sp * dt * 0.15; p.y += Math.cos(p.ph * 0.7) * 5 * dt; if (p.x > W + 10) p.x = -10; if (p.y > 420) p.y = 60; if (p.y < 50) p.y = 400; }
+  AU.birdT -= dt; if (AU.birdT <= 0 && mode !== 'splash') { AU.birdT = 5 + juice() * 9; AU.bird(); }
+
+  if (mode === 'dayend') { dayendT += dt; return; }
+  if (mode !== 'play') return;
+
+  // water refill
+  const refill = 3.5 + (G.upg.well || 0) * 4;
+  if (G.water < G.waterMax) G.water = Math.min(G.waterMax, G.water + refill * dt);
+
+  // continuous pointer action (hold-to-repeat)
+  if (ptr.down && ptr.region === 'bed') {
+    const i = plotAt(ptr.x, ptr.y);
+    if (i >= 0 && i < plotsUnlocked()) {
+      const p = G.plots[i];
+      if (ptr.drag === 'water' && p.type >= 0 && !p.ripe) { if (waterAt(i, dt)) { trickleT -= dt; if (trickleT <= 0) { trickleT = 0.14; AU.trickle(); } } }
+      else if (ptr.drag === 'harvest' && p.ripe && harvestCd <= 0) { harvestAt(i); harvestCd = 0.12; }
+      else if (ptr.drag === 'plant' && p.type < 0 && !ptr.planted[i]) { if (plantAt(i)) ptr.planted[i] = 1; }
+    }
+  }
+
+  // sprinkler auto-water
+  const spr = G.upg.sprinkler || 0;
+  if (spr) { const rate = [0.06, 0.10, 0.16][spr - 1], tgt = [0.5, 0.7, 0.9][spr - 1]; for (let i = 0; i < plotsUnlocked(); i++) { const p = G.plots[i]; if (p.type >= 0 && !p.ripe && p.moist < tgt) p.moist = Math.min(tgt, p.moist + rate * dt); } }
+
+  // growth + moisture
+  const gm = growthMult();
+  for (let i = 0; i < G.plots.length; i++) {
+    const p = G.plots[i];
+    if (p.scale < 1) p.scale = Math.min(1, p.scale + dt * 3.2);
+    if (p.wobble > 0) p.wobble = Math.max(0, p.wobble - dt * 1.6);
+    if (p.type < 0) continue;
+    // evaporation
+    p.moist = Math.max(0, p.moist - dt * 0.045);
+    if (!p.ripe) {
+      if (p.moist > 0.02) {
+        const before = p.prog;
+        p.prog += (dt / PLANTS[p.type].grow) * gm * (0.42 + 0.58 * Math.min(1, p.moist));
+        if (before < 1 && p.prog >= 1) { p.prog = 1; p.ripe = true; p.wobble = 0.6; AU.bloom(); const s = plotSoilRect(i); for (let k = 0; k < 8; k++) spawnP({ kind: 'spark', x: s.cx + (juice() - 0.5) * 30, y: s.baseY - 44 - juice() * 24, vx: (juice() - 0.5) * 50, vy: -30 - juice() * 40, life: 0.7 }); }
+      }
+    }
+  }
+
+  // butterflies + bees roam
+  for (const f of flutters) {
+    f.ph += dt * 6;
+    const dx = f.tx - f.x, dy = f.ty - f.y, d = Math.hypot(dx, dy);
+    if (d < 20) { f.tx = 60 + juice() * (W - 120); f.ty = 110 + juice() * 250; }
+    f.x += (dx / (d || 1)) * f.sp * dt; f.y += (dy / (d || 1)) * f.sp * dt + Math.sin(f.ph) * 8 * dt;
+  }
+  for (const b of bees) {
+    b.ph += dt * 10;
+    const dx = b.tx - b.x, dy = b.ty - b.y, d = Math.hypot(dx, dy);
+    if (d < 16) { b.tx = 80 + juice() * (BED.w - 40); b.ty = BED.y + juice() * BED.h; }
+    b.x += (dx / (d || 1)) * 60 * dt; b.y += (dy / (d || 1)) * 60 * dt + Math.sin(b.ph) * 10 * dt;
+  }
+
+  // particles
+  for (let i = 0; i < P_MAX; i++) {
+    const p = parts[i]; if (!p.on) continue; p.t += dt;
+    if (p.t >= p.life) { p.on = false; continue; }
+    if (p.kind === 'drop') { p.vy += 320 * dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.tgt && p.y >= p.tgt) { p.on = false; for (let k = 0; k < 2; k++) spawnP({ kind: 'splash', x: p.x, y: p.tgt, vx: (juice() - 0.5) * 40, vy: -20 - juice() * 20, life: 0.25 }); } }
+    else if (p.kind === 'coin') { const k = p.t / p.life; p.x += (p.tx - p.x) * Math.min(1, dt * 5); p.y += (p.ty - p.y) * Math.min(1, dt * 5) + p.vy * dt * (1 - k); p.vy += 200 * dt; }
+    else if (p.kind === 'petal') { p.vy += 240 * dt; p.vx *= (1 - dt * 1.5); p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt; }
+    else if (p.kind === 'dirt') { p.vy += 300 * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+    else { p.vy += 120 * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+  }
+
+  // displays
+  dispCoins += (G.coins - dispCoins) * Math.min(1, dt * 8);
+  const gv = gardenValue();
+  if (Math.abs(gv - dispValue) > 0.5) valuePop = Math.min(1, valuePop + Math.min(0.6, Math.abs(gv - dispValue) / 500));
+  dispValue += (gv - dispValue) * Math.min(1, dt * 6);
+  if (gv > best) { best = gv; lbSet(best); }
+  if (challenge && !cBeaten && gv >= challenge) { cBeaten = true; cFlashT = 1.6; post({ gs: 'challenge_beaten', score: gv }); AU.bloom(); for (let k = 0; k < 24; k++) spawnP({ kind: 'petal', x: W / 2, y: 200, vx: (juice() - 0.5) * 300, vy: -160 - juice() * 160, life: 1.4, col: bloomColors('rainbow')[k % 6], rot: juice() * 6.28, vr: (juice() - 0.5) * 8 }); }
+
+  // score post (throttled)
+  const nowMs = performance.now();
+  if (nowMs - lastScorePost > 260 && gv !== lastPostedVal) { lastScorePost = nowMs; lastPostedVal = gv; post({ gs: 'score', score: gv }); }
+  autosaveT += dt; if (autosaveT > 4) { autosaveT = 0; saveGame(); }
+}
+
+/* ============================================================
+   DRAW HELPERS
+   ============================================================ */
+function mix(a, b, t) {
+  t = Math.max(0, Math.min(1, t));
+  const pa = hx(a), pb = hx(b);
+  return 'rgb(' + Math.round(pa[0] + (pb[0] - pa[0]) * t) + ',' + Math.round(pa[1] + (pb[1] - pa[1]) * t) + ',' + Math.round(pa[2] + (pb[2] - pa[2]) * t) + ')';
+}
+function hx(c) { const h = c.replace('#', ''); const n = h.length === 3 ? h.split('').map(x => x + x).join('') : h; return [parseInt(n.slice(0, 2), 16), parseInt(n.slice(2, 4), 16), parseInt(n.slice(4, 6), 16)]; }
+function rr(x, y, w, h, r) { r = Math.min(r, w / 2, h / 2); ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+function setF(px, w) { ctx.font = (w || 700) + ' ' + px + 'px "Comic Neue","Chalkboard SE","Marker Felt","Segoe Print",sans-serif'; }
+function bloomColors(key) {
+  switch (key) {
+    case 'daisy': return ['#FFFDF5', '#FFE9A8', '#FFC24B'];
+    case 'tulip': return ['#F26D8C', '#E84B6E', '#FFB0C4'];
+    case 'marigold': return ['#FFB53B', '#FF8C1F', '#FFD98A'];
+    case 'carrot': return ['#F2761D', '#FF9E45', '#5FA83E'];
+    case 'sunflower': return ['#FFC21F', '#FFDF6B', '#5A3A22'];
+    case 'lavender': return ['#B98BE8', '#9A6DD7', '#D9C2F2'];
+    case 'rose': return ['#E23B5A', '#C21F3E', '#FF7D95'];
+    case 'berry': return ['#E23B5A', '#8E1B33', '#C43A78'];
+    case 'lotus': return ['#F7A9C6', '#F582AE', '#FFE0EC'];
+    case 'orchid': return ['#D64FA8', '#B12E85', '#FFDDF2'];
+    case 'moon': return ['#EAF1FF', '#BCD2FF', '#8FB3FF'];
+    case 'rainbow': return ['#FF6B6B', '#FFB84B', '#FFE94B', '#6BE07A', '#5AC8F0', '#B98BE8'];
+    default: return ['#FFFDF5', '#FFC24B'];
+  }
+}
+
+/* ---- draw a plant at (x=base center, y=base) for a plot ---- */
+function drawPlant(p, x, y, i) {
+  const key = PLANTS[p.type].key, prog = p.prog, sc = p.scale;
+  const sway = Math.sin(time * 1.6 + i * 1.3) * (2 + prog * 4) + (p.wobble ? Math.sin(time * 22) * p.wobble * 6 : 0);
+  const cols = bloomColors(key);
+  const stemMax = key === 'sunflower' ? 80 : key === 'berry' ? 52 : key === 'rose' ? 66 : 60;
+  // stage
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(sc, sc);
+  // seed / mound
+  if (prog < 0.14) {
+    ctx.fillStyle = '#3f2817'; ctx.beginPath(); ctx.ellipse(0, -3, 9, 5, 0, 0, 6.28); ctx.fill();
+    const g = prog / 0.14; ctx.strokeStyle = '#6BBF59'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(0, -4); ctx.lineTo(sway * 0.3, -4 - 10 * g); ctx.stroke();
+    ctx.restore(); return;
+  }
+  const gp = Math.min(1, (prog - 0.05) / 0.95);
+  const stemH = 14 + stemMax * gp;
+  const droop = (p.type >= 0 && !p.ripe && p.moist < 0.12) ? 0.5 : 0; // dry droop
+  // stem (curved)
+  const topX = sway - droop * 6, topY = -stemH + droop * 8;
+  ctx.strokeStyle = '#3E8E5A'; ctx.lineWidth = key === 'sunflower' || key === 'berry' ? 6 : 4; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(topX * 0.4, -stemH * 0.5, topX, topY); ctx.stroke();
+  // leaves
+  const nLeaf = key === 'berry' ? 4 : 2;
+  for (let l = 0; l < nLeaf; l++) {
+    const ly = -stemH * (0.28 + 0.32 * l);
+    const side = l % 2 === 0 ? 1 : -1;
+    const lsz = (7 + 9 * gp) * (0.7 + 0.3 * (nLeaf - l) / nLeaf);
+    ctx.save(); ctx.translate(sway * (ly / -stemH), ly); ctx.rotate(side * (0.6 + Math.sin(time * 1.6 + l) * 0.06));
+    const lg = ctx.createLinearGradient(0, 0, side * lsz * 2, 0); lg.addColorStop(0, '#4EA65C'); lg.addColorStop(1, '#7BCB63');
+    ctx.fillStyle = lg; ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(side * lsz, -lsz * 0.7, side * lsz * 2, 0); ctx.quadraticCurveTo(side * lsz, lsz * 0.7, 0, 0); ctx.fill();
+    ctx.restore();
+  }
+  // head: bud vs bloom
+  const bloomP = Math.max(0, (prog - 0.45) / 0.55);   // 0..1 how open
+  const headX = topX, headY = topY;
+  if (prog < 0.46) {
+    // closed green bud
+    const bs = 5 + 5 * gp;
+    ctx.fillStyle = '#5FB05A'; ctx.beginPath(); ctx.ellipse(headX, headY, bs * 0.8, bs, 0, 0, 6.28); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.beginPath(); ctx.ellipse(headX - bs * 0.3, headY - bs * 0.3, bs * 0.3, bs * 0.4, 0, 0, 6.28); ctx.fill();
+  } else {
+    drawBloom(key, cols, headX, headY, bloomP, p.ripe, i);
+  }
+  ctx.restore();
+
+  // ripe indicator glow (screen space via translate already popped): re-draw glow at world coords
+  if (p.ripe) {
+    const bob = Math.sin(time * 3 + i) * 3;
+    const gx = x + topX, gy = y + topY - 2 + bob;
+    ctx.save();
+    const pr = 0.5 + Math.sin(time * 4 + i) * 0.5;
+    ctx.globalAlpha = 0.25 + pr * 0.2;
+    const rg = ctx.createRadialGradient(gx, gy, 4, gx, gy, 34); rg.addColorStop(0, '#FFF3B0'); rg.addColorStop(1, 'rgba(255,243,176,0)');
+    ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(gx, gy, 34, 0, 6.28); ctx.fill();
+    ctx.restore();
+    // occasional sparkle
+    if (juice() < 0.04) spawnP({ kind: 'spark', x: gx + (juice() - 0.5) * 30, y: gy + (juice() - 0.5) * 30, vx: 0, vy: -10, life: 0.5 });
+  }
+}
+
+function drawBloom(key, cols, x, y, open, ripe, i) {
+  const wob = ripe ? Math.sin(time * 3 + i) * 3 : 0;
+  y += wob;
+  const R = (key === 'sunflower' ? 26 : key === 'lotus' ? 20 : key === 'rose' ? 17 : 15) * (0.5 + 0.5 * open);
+  const petalC = cols[0], petalC2 = cols[1], center = cols[2] || cols[1];
+  ctx.save(); ctx.translate(x, y);
+  const spin = time * 0.3;
+  function radial(n, len, wid, c1, c2, rot0) {
+    for (let k = 0; k < n; k++) {
+      const a = rot0 + (k / n) * 6.28 + Math.sin(time * 1.4 + k) * 0.02;
+      ctx.save(); ctx.rotate(a);
+      const g = ctx.createLinearGradient(0, 0, 0, -len); g.addColorStop(0, c2); g.addColorStop(1, c1);
+      ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(0, -len * 0.6, wid, len * 0.6, 0, 0, 6.28); ctx.fill();
+      ctx.restore();
+    }
+  }
+  switch (key) {
+    case 'daisy': radial(11, R * 1.15, R * 0.28, petalC, cols[1], 0); ctx.fillStyle = center; ctx.beginPath(); ctx.arc(0, 0, R * 0.42, 0, 6.28); ctx.fill(); break;
+    case 'marigold': radial(13, R * 1.2, R * 0.34, petalC2, petalC, 0); radial(9, R * 0.75, R * 0.3, cols[2], petalC, 0.3); ctx.fillStyle = '#B5560E'; ctx.beginPath(); ctx.arc(0, 0, R * 0.25, 0, 6.28); ctx.fill(); break;
+    case 'sunflower': radial(18, R * 1.25, R * 0.3, petalC, cols[1], 0); ctx.fillStyle = cols[2]; ctx.beginPath(); ctx.arc(0, 0, R * 0.55, 0, 6.28); ctx.fill(); ctx.fillStyle = 'rgba(0,0,0,0.18)'; for (let k = 0; k < 8; k++) { const a = k / 8 * 6.28; ctx.beginPath(); ctx.arc(Math.cos(a) * R * 0.28, Math.sin(a) * R * 0.28, R * 0.08, 0, 6.28); ctx.fill(); } break;
+    case 'tulip': {
+      const g = ctx.createLinearGradient(0, R * 0.4, 0, -R * 1.4); g.addColorStop(0, cols[1]); g.addColorStop(1, cols[0]);
+      ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(-R * 0.7, R * 0.3); ctx.quadraticCurveTo(-R * 0.95, -R * 1.2, 0, -R * 1.35 * open - R * 0.2); ctx.quadraticCurveTo(R * 0.95, -R * 1.2, R * 0.7, R * 0.3); ctx.quadraticCurveTo(0, R * 0.05, -R * 0.7, R * 0.3); ctx.fill();
+      ctx.fillStyle = cols[2]; ctx.beginPath(); ctx.moveTo(0, R * 0.2); ctx.quadraticCurveTo(-R * 0.35, -R * 0.9, 0, -R * 1.2 * open); ctx.quadraticCurveTo(R * 0.35, -R * 0.9, 0, R * 0.2); ctx.fill(); break;
+    }
+    case 'rose': {
+      for (let ring = 3; ring >= 0; ring--) { const rr2 = R * (0.35 + ring * 0.22); ctx.fillStyle = ring % 2 ? cols[1] : cols[0]; for (let k = 0; k < 5 + ring; k++) { const a = spin * (ring % 2 ? -1 : 1) + k / (5 + ring) * 6.28; ctx.save(); ctx.rotate(a); ctx.beginPath(); ctx.ellipse(0, -rr2 * 0.5, rr2 * 0.42, rr2 * 0.5, 0, 0, 6.28); ctx.fill(); ctx.restore(); } }
+      ctx.fillStyle = cols[2]; ctx.beginPath(); ctx.arc(0, 0, R * 0.2, 0, 6.28); ctx.fill(); break;
+    }
+    case 'lavender': for (let s = -1; s <= 1; s++) { ctx.save(); ctx.translate(s * R * 0.5, R * 0.2); for (let k = 0; k < 6; k++) { ctx.fillStyle = k % 2 ? cols[0] : cols[1]; ctx.beginPath(); ctx.ellipse(Math.sin(k) * 2, -k * R * 0.28 - R * 0.3, R * 0.28, R * 0.34, 0, 0, 6.28); ctx.fill(); } ctx.restore(); } break;
+    case 'carrot': { ctx.fillStyle = '#5FA83E'; for (let k = 0; k < 7; k++) { const a = -1.57 + (k - 3) * 0.32; ctx.save(); ctx.rotate(a); ctx.strokeStyle = k % 2 ? '#4E9E4A' : '#6BC24E'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(0, -R * 1.1, Math.sin(k) * 4, -R * 1.4); ctx.stroke(); ctx.restore(); } ctx.fillStyle = cols[0]; ctx.beginPath(); ctx.moveTo(-R * 0.4, 2); ctx.quadraticCurveTo(0, R * 1.2, R * 0.4, 2); ctx.quadraticCurveTo(0, R * 0.2, -R * 0.4, 2); ctx.fill(); break; }
+    case 'berry': ctx.fillStyle = '#3E8E4A'; ctx.beginPath(); ctx.arc(0, 0, R * 1.1, 0, 6.28); ctx.fill(); ctx.fillStyle = '#57A657'; ctx.beginPath(); ctx.arc(-R * 0.4, -R * 0.3, R * 0.6, 0, 6.28); ctx.arc(R * 0.5, R * 0.1, R * 0.5, 0, 6.28); ctx.fill(); for (let k = 0; k < 6; k++) { const a = k / 6 * 6.28 + i; ctx.fillStyle = k % 2 ? cols[0] : cols[1]; ctx.beginPath(); ctx.arc(Math.cos(a) * R * 0.7, Math.sin(a) * R * 0.7, R * 0.26, 0, 6.28); ctx.fill(); ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(Math.cos(a) * R * 0.7 - 2, Math.sin(a) * R * 0.7 - 2, R * 0.08, 0, 6.28); ctx.fill(); } break;
+    case 'lotus': radial(8, R * 1.1, R * 0.4, cols[0], cols[2], 0); radial(6, R * 0.75, R * 0.36, cols[1], cols[2], 0.4); ctx.fillStyle = '#FFE58A'; ctx.beginPath(); ctx.arc(0, 0, R * 0.28, 0, 6.28); ctx.fill(); break;
+    case 'orchid': radial(5, R * 1.15, R * 0.5, cols[0], cols[2], -1.57); ctx.fillStyle = cols[2]; ctx.beginPath(); ctx.ellipse(0, R * 0.2, R * 0.4, R * 0.55, 0, 0, 6.28); ctx.fill(); ctx.fillStyle = cols[1]; ctx.beginPath(); ctx.arc(0, 0, R * 0.22, 0, 6.28); ctx.fill(); break;
+    case 'moon': { ctx.save(); const glow = ctx.createRadialGradient(0, 0, 2, 0, 0, R * 1.6); glow.addColorStop(0, 'rgba(200,220,255,0.5)'); glow.addColorStop(1, 'rgba(200,220,255,0)'); ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, 0, R * 1.6, 0, 6.28); ctx.fill(); ctx.restore(); radial(6, R * 1.2, R * 0.42, cols[0], cols[1], time * 0.2); ctx.fillStyle = cols[2]; ctx.beginPath(); ctx.arc(0, 0, R * 0.32, 0, 6.28); ctx.fill(); break; }
+    case 'rainbow': { for (let k = 0; k < 12; k++) { const a = spin + k / 12 * 6.28; ctx.save(); ctx.rotate(a); ctx.fillStyle = cols[k % 6]; ctx.beginPath(); ctx.ellipse(0, -R * 0.7, R * 0.26, R * 0.7, 0, 0, 6.28); ctx.fill(); ctx.restore(); } ctx.fillStyle = '#FFF'; ctx.beginPath(); ctx.arc(0, 0, R * 0.3, 0, 6.28); ctx.fill(); break; }
+    default: radial(8, R, R * 0.3, petalC, petalC2, 0);
+  }
+  // soft highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.beginPath(); ctx.arc(-R * 0.3, -R * 0.35, R * 0.25, 0, 6.28); ctx.fill();
+  ctx.restore();
+}
+
+/* ============================================================
+   DRAW — scene
+   ============================================================ */
+function drawBackground() {
+  // sky
+  const dawn = sunrise > 0 ? Math.min(1, sunrise / 1.4) : 0;
+  const sky = ctx.createLinearGradient(0, 0, 0, 420);
+  sky.addColorStop(0, mix('#A9DDF0', '#FFD8A8', dawn * 0.5));
+  sky.addColorStop(0.55, mix('#CDEBD6', '#FFE9C6', dawn * 0.4));
+  sky.addColorStop(1, '#EAF3D2');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, 420);
+  // sun glow
+  const sx = 150, sy = 70;
+  const sg = ctx.createRadialGradient(sx, sy, 8, sx, sy, 220); sg.addColorStop(0, 'rgba(255,240,190,0.9)'); sg.addColorStop(0.3, 'rgba(255,228,160,0.4)'); sg.addColorStop(1, 'rgba(255,228,160,0)');
+  ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(sx, sy, 220, 0, 6.28); ctx.fill();
+  ctx.fillStyle = 'rgba(255,250,225,0.95)'; ctx.beginPath(); ctx.arc(sx, sy, 34, 0, 6.28); ctx.fill();
+  // soft sun rays
+  ctx.save(); ctx.translate(sx, sy); ctx.globalCompositeOperation = 'lighter';
+  for (let k = 0; k < 7; k++) { const a = time * 0.05 + k / 7 * 6.28; ctx.rotate(6.28 / 7); ctx.fillStyle = 'rgba(255,240,190,0.05)'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * 300 - 26, Math.sin(a) * 300 - 26); ctx.lineTo(Math.cos(a) * 300 + 26, Math.sin(a) * 300 + 26); ctx.fill(); }
+  ctx.restore();
+  // rainbow arbor
+  if (G.upg.arbor) { ctx.save(); ctx.lineWidth = 9; const rc = ['#FF6B6B', '#FFB84B', '#FFE94B', '#6BE07A', '#5AC8F0', '#B98BE8']; for (let k = 0; k < 6; k++) { ctx.strokeStyle = rc[k]; ctx.globalAlpha = 0.5; ctx.beginPath(); ctx.arc(W / 2, 520, 300 - k * 9, Math.PI, 2 * Math.PI); ctx.stroke(); } ctx.restore(); }
+  // clouds
+  for (const c of clouds) drawCloud(c.x, c.y, c.s);
+  // ground
+  const gr = ctx.createLinearGradient(0, 380, 0, 540); gr.addColorStop(0, '#8CC152'); gr.addColorStop(1, '#5FA33B');
+  ctx.fillStyle = gr; ctx.beginPath(); ctx.moveTo(0, 400); ctx.quadraticCurveTo(W / 2, 384, W, 400); ctx.lineTo(W, 540); ctx.lineTo(0, 540); ctx.fill();
+  // little grass tufts
+  ctx.strokeStyle = '#4E9631'; ctx.lineWidth = 2;
+  for (let k = 0; k < 40; k++) { const gx = (k * 53 + 12) % W, gy = 396 + (hash01(k * 7) * 6); ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx + Math.sin(time + k) * 2, gy - 7); ctx.stroke(); }
+  // pond
+  if (G.upg.pond) drawPond();
+  // pollen
+  for (const p of pollen) { ctx.globalAlpha = p.a; ctx.fillStyle = '#FFF6C8'; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.28); ctx.fill(); }
+  ctx.globalAlpha = 1;
+}
+function drawCloud(x, y, s) { ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.beginPath(); ctx.arc(0, 0, 20, 0, 6.28); ctx.arc(24, 4, 16, 0, 6.28); ctx.arc(-22, 5, 15, 0, 6.28); ctx.arc(6, -10, 15, 0, 6.28); ctx.fill(); ctx.restore(); }
+function drawPond() {
+  const px = 700, py = 372, pw = 220, ph = 54;
+  ctx.save(); ctx.fillStyle = '#5AB6D6'; ctx.beginPath(); ctx.ellipse(px, py, pw / 2, ph / 2, 0, 0, 6.28); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.25)'; for (let k = 0; k < 3; k++) { const rp = ((time * 0.3 + k / 3) % 1); ctx.globalAlpha = 0.3 * (1 - rp); ctx.beginPath(); ctx.ellipse(px, py, (pw / 2) * (0.3 + rp * 0.7), (ph / 2) * (0.3 + rp * 0.7), 0, 0, 6.28); ctx.stroke ? ctx.stroke() : 0; ctx.fill(); }
+  ctx.globalAlpha = 1;
+  // lily pads
+  ctx.fillStyle = '#4EA65C'; for (let k = 0; k < 3; k++) { const lx = px - 60 + k * 60, ly = py + Math.sin(k) * 8; ctx.beginPath(); ctx.arc(lx, ly, 12, 0.4, 6.28); ctx.fill(); ctx.fillStyle = '#F582AE'; ctx.beginPath(); ctx.arc(lx, ly, 4, 0, 6.28); ctx.fill(); ctx.fillStyle = '#4EA65C'; }
+  ctx.restore();
+}
+
+function drawBed() {
+  // wooden frame
+  const f = 14;
+  ctx.fillStyle = '#8A5A34'; rr(BED.x - f, BED.y - f, BED.w + f * 2, BED.h + f * 2, 16); ctx.fill();
+  ctx.fillStyle = '#A06A3E'; rr(BED.x - f + 3, BED.y - f + 3, BED.w + f * 2 - 6, BED.h + f * 2 - 6, 14); ctx.fill();
+  // plank lines
+  ctx.strokeStyle = 'rgba(80,45,20,0.25)'; ctx.lineWidth = 2;
+  for (let x = BED.x; x < BED.x + BED.w; x += 60) { ctx.beginPath(); ctx.moveTo(x, BED.y - f + 4); ctx.lineTo(x, BED.y - 2); ctx.moveTo(x, BED.y + BED.h + 2); ctx.lineTo(x, BED.y + BED.h + f - 4); ctx.stroke(); }
+  const nUnlock = plotsUnlocked();
+  // draw back-to-front for depth
+  for (let r = 0; r < ROW; r++) for (let c = 0; c < COL; c++) {
+    const i = r * COL + c; const s = plotSoilRect(i);
+    if (i < nUnlock) {
+      const p = G.plots[i];
+      // soil
+      const soilBase = G.upg.soil ? '#4A2E1C' : '#6B4327';
+      const g = ctx.createLinearGradient(0, s.y, 0, s.y + s.h); g.addColorStop(0, mix(soilBase, '#000', 0.05)); g.addColorStop(1, mix(soilBase, '#000', 0.22));
+      ctx.fillStyle = g; rr(s.x, s.y, s.w, s.h, 12); ctx.fill();
+      // moisture darken
+      if (p.moist > 0.03) { ctx.save(); rr(s.x, s.y, s.w, s.h, 12); ctx.clip(); ctx.fillStyle = 'rgba(30,15,5,' + (p.moist * 0.5) + ')'; ctx.fillRect(s.x, s.y, s.w, s.h); ctx.fillStyle = 'rgba(120,180,220,' + (p.moist * 0.14) + ')'; ctx.fillRect(s.x, s.y, s.w, s.h * 0.4); ctx.restore(); }
+      // speckle
+      ctx.fillStyle = 'rgba(0,0,0,0.12)'; for (let k = 0; k < 6; k++) { const hx = s.x + hash01(i * 40 + k) * s.w, hy = s.y + hash01(i * 40 + k + 99) * s.h; ctx.beginPath(); ctx.arc(hx, hy, 1.4, 0, 6.28); ctx.fill(); }
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1; rr(s.x, s.y, s.w, s.h, 12); ctx.stroke();
+    } else {
+      // locked slot
+      ctx.save(); ctx.fillStyle = 'rgba(120,78,44,0.28)'; rr(s.x, s.y, s.w, s.h, 12); ctx.fill();
+      ctx.setLineDash([5, 7]); ctx.strokeStyle = 'rgba(90,55,28,0.3)'; ctx.lineWidth = 2; rr(s.x, s.y, s.w, s.h, 12); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(90,55,28,0.28)'; setF(22); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('+', s.cx, s.y + s.h / 2);
+      ctx.restore();
+    }
+    if (i < nUnlock && G.plots[i].type >= 0) drawPlant(G.plots[i], s.cx, s.baseY - 2, i);
+  }
+  // sprinkler heads
+  if (G.upg.sprinkler) drawSprinklers();
+}
+function drawSprinklers() {
+  const n = plotsUnlocked(); const spots = n <= 6 ? [1] : n <= 12 ? [BED.x + BED.w * 0.5] : [BED.x + BED.w * 0.28, BED.x + BED.w * 0.72];
+  const xs = n <= 6 ? [BED.x + BED.w / 2] : n <= 12 ? [BED.x + BED.w / 2] : [BED.x + BED.w * 0.3, BED.x + BED.w * 0.7];
+  for (const sxp of xs) {
+    const sy = BED.y + 6;
+    ctx.strokeStyle = '#6B7A88'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(sxp, sy + 20); ctx.lineTo(sxp, sy); ctx.stroke();
+    ctx.save(); ctx.translate(sxp, sy); ctx.rotate(time * 3); ctx.strokeStyle = '#8A99A8'; ctx.lineWidth = 3; for (let k = 0; k < 3; k++) { ctx.rotate(2.09); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(10, 0); ctx.stroke(); } ctx.restore();
+    // spray
+    ctx.strokeStyle = 'rgba(150,210,240,0.5)'; ctx.lineWidth = 2;
+    for (let k = 0; k < 5; k++) { const a = -0.4 + k * 0.2; const ph = (time * 2 + k * 0.3) % 1; ctx.globalAlpha = 0.5 * (1 - ph); ctx.beginPath(); ctx.arc(sxp + Math.cos(a - 1.57) * 20, sy + 30 + ph * 20, 1.6, 0, 6.28); ctx.stroke(); }
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawCritters() {
+  // bees
+  for (const b of bees) { ctx.save(); ctx.translate(b.x, b.y); ctx.fillStyle = '#F2B417'; ctx.beginPath(); ctx.ellipse(0, 0, 5, 3.4, 0, 0, 6.28); ctx.fill(); ctx.fillStyle = '#3A2A10'; ctx.fillRect(-1.5, -3.4, 1.6, 6.8); ctx.fillRect(1, -3.4, 1.6, 6.8); ctx.fillStyle = 'rgba(255,255,255,0.7)'; const wf = Math.sin(b.ph) * 0.5 + 1; ctx.beginPath(); ctx.ellipse(-2, -3, 3 * wf, 2, -0.6, 0, 6.28); ctx.ellipse(2, -3, 3 * wf, 2, 0.6, 0, 6.28); ctx.fill(); ctx.restore(); }
+  // hive
+  if (G.upg.bees) { const hx = 700, hy = 118; ctx.fillStyle = '#E0A94B'; for (let k = 0; k < 3; k++) { rr(hx - 20 + k, hy + k * 12, 40 - k * 2, 12, 6); ctx.fill(); } ctx.fillStyle = '#7A4A1E'; ctx.beginPath(); ctx.arc(hx, hy + 30, 4, 0, 6.28); ctx.fill(); }
+  // butterflies
+  for (const f of flutters) { ctx.save(); ctx.translate(f.x, f.y); const wf = Math.abs(Math.sin(f.ph)); const c = 'hsl(' + f.hue + ',70%,68%)', c2 = 'hsl(' + ((f.hue + 40) % 360) + ',75%,74%)'; ctx.fillStyle = c; ctx.beginPath(); ctx.ellipse(-4 * wf - 1, -1, 4.5 * wf + 1, 6, -0.4, 0, 6.28); ctx.fill(); ctx.fillStyle = c2; ctx.beginPath(); ctx.ellipse(4 * wf + 1, -1, 4.5 * wf + 1, 6, 0.4, 0, 6.28); ctx.fill(); ctx.fillStyle = '#3A2A20'; ctx.fillRect(-0.8, -5, 1.6, 10); ctx.restore(); }
+}
+
+function drawWateringCan() {
+  if (!(ptr.down && ptr.region === 'bed' && ptr.drag === 'water')) return;
+  const i = plotAt(ptr.x, ptr.y); if (i < 0) return;
+  const s = plotSoilRect(i);
+  const cx = s.cx - 34, cy = s.y - 58;
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(0.5 + Math.sin(time * 8) * 0.03);
+  // body
+  ctx.fillStyle = '#6BB6C9'; rr(-16, -14, 30, 26, 8); ctx.fill();
+  ctx.fillStyle = '#5AA1B4'; rr(-16, -2, 30, 14, 8); ctx.fill();
+  // handle
+  ctx.strokeStyle = '#4E93A6'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(-1, -16, 10, 3.6, 6.1); ctx.stroke();
+  // spout
+  ctx.fillStyle = '#5AA1B4'; ctx.beginPath(); ctx.moveTo(12, -8); ctx.lineTo(34, -20); ctx.lineTo(38, -14); ctx.lineTo(16, 0); ctx.fill();
+  // rose head
+  ctx.fillStyle = '#4E93A6'; ctx.beginPath(); ctx.ellipse(36, -17, 5, 7, -0.6, 0, 6.28); ctx.fill();
+  ctx.restore();
+  // sparkle on spout
+  if (juice() < 0.4) spawnP({ kind: 'spark', x: cx + 34, y: cy - 14, vx: (juice() - 0.5) * 10, vy: 30, life: 0.3 });
+}
+
+function drawParticles() {
+  for (let i = 0; i < P_MAX; i++) { const p = parts[i]; if (!p.on) continue; const k = p.t / p.life, a = 1 - k;
+    if (p.kind === 'drop') { ctx.fillStyle = 'rgba(120,200,240,0.8)'; ctx.beginPath(); ctx.ellipse(p.x, p.y, 2, 4, 0, 0, 6.28); ctx.fill(); }
+    else if (p.kind === 'splash') { ctx.fillStyle = 'rgba(160,215,240,' + a + ')'; ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, 6.28); ctx.fill(); }
+    else if (p.kind === 'petal') { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.globalAlpha = a; ctx.fillStyle = p.col; ctx.beginPath(); ctx.ellipse(0, 0, 5, 3, 0, 0, 6.28); ctx.fill(); ctx.restore(); ctx.globalAlpha = 1; }
+    else if (p.kind === 'coin') { ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = '#FFCF3F'; ctx.beginPath(); ctx.ellipse(p.x, p.y, 6 * Math.abs(Math.cos(p.t * 12)) + 2, 6, 0, 0, 6.28); ctx.fill(); ctx.strokeStyle = '#E0A017'; ctx.lineWidth = 1.4; ctx.stroke(); ctx.restore(); ctx.globalAlpha = 1; }
+    else if (p.kind === 'dirt') { ctx.fillStyle = p.col || '#6b4326'; ctx.beginPath(); ctx.arc(p.x, p.y, 2.4 * a + 0.6, 0, 6.28); ctx.fill(); }
+    else { ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = '#FFF3B0'; ctx.translate(p.x, p.y); const r = 3 * a + 1; ctx.beginPath(); for (let s = 0; s < 4; s++) { const a2 = s / 4 * 6.28 + p.t * 6; ctx.lineTo(Math.cos(a2) * r * 2, Math.sin(a2) * r * 2); ctx.lineTo(Math.cos(a2 + 0.78) * r * 0.6, Math.sin(a2 + 0.78) * r * 0.6); } ctx.fill(); ctx.restore(); ctx.globalAlpha = 1; }
+  }
+}
+
+/* ---- HUD ---- */
+function drawHUD() {
+  // top bar
+  ctx.fillStyle = 'rgba(58,42,26,0.30)'; rr(8, 8, 300, 40, 12); ctx.fill();
+  // coins
+  drawCoin(28, 28, 11);
+  setF(21); ctx.fillStyle = '#FFF6E0'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.save(); if (coinPop > 0) { ctx.translate(60, 28); ctx.scale(1 + coinPop * 0.25, 1 + coinPop * 0.25); ctx.translate(-60, -28); }
+  ctx.fillText(Math.round(dispCoins).toLocaleString(), 46, 29); ctx.restore();
+  // value (brag)
+  ctx.fillStyle = '#F582AE'; setF(20); ctx.fillText('✿', 170, 29);
+  ctx.fillStyle = '#FFF6E0'; setF(21);
+  ctx.save(); if (valuePop > 0) { ctx.translate(190, 28); ctx.scale(1 + valuePop * 0.22, 1 + valuePop * 0.22); ctx.translate(-190, -28); }
+  ctx.fillText(Math.round(dispValue).toLocaleString(), 190, 29); ctx.restore();
+
+  // water meter (barrel-style pill, top center-right)
+  const wx = 320, wy = 12, ww = 150, wh = 32;
+  ctx.fillStyle = 'rgba(58,42,26,0.30)'; rr(wx, wy, ww, wh, 10); ctx.fill();
+  const frac = G.water / G.waterMax;
+  ctx.save(); rr(wx + 4, wy + 4, ww - 8, wh - 8, 7); ctx.clip();
+  const wg = ctx.createLinearGradient(0, wy, 0, wy + wh); wg.addColorStop(0, '#7ECBE8'); wg.addColorStop(1, '#4FA6CB');
+  ctx.fillStyle = wg; ctx.fillRect(wx + 4, wy + 4, (ww - 8) * frac, wh - 8);
+  ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.fillRect(wx + 4, wy + 4, (ww - 8) * frac, (wh - 8) * 0.4);
+  ctx.restore();
+  ctx.fillStyle = '#0B3B4E'; setF(15); ctx.textAlign = 'center'; ctx.fillText('💧 water', wx + ww / 2, wy + wh / 2 + 1);
+
+  // best + day (right)
+  ctx.fillStyle = 'rgba(58,42,26,0.30)'; rr(W - 220, 8, 96, 40, 12); ctx.fill();
+  ctx.fillStyle = '#FFE7A8'; setF(13); ctx.textAlign = 'center'; ctx.fillText('BEST ✿', W - 172, 20);
+  setF(18); ctx.fillStyle = '#FFF6E0'; ctx.fillText(best.toLocaleString(), W - 172, 37);
+
+  // End Day button (sun)
+  const bx = W - 118, by = 8;
+  ctx.fillStyle = ptr.endday && ptr.down ? '#FFB84B' : 'rgba(255,196,75,0.92)'; rr(bx, by, 110, 36, 12); ctx.fill();
+  ctx.fillStyle = '#7A4A10'; setF(16); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('🌙 End Day ' + G.day, bx + 55, by + 19);
+
+  // challenge target banner
+  if (challenge) {
+    ctx.save(); ctx.textAlign = 'center';
+    const met = cBeaten;
+    ctx.fillStyle = met ? 'rgba(107,224,122,0.9)' : 'rgba(58,42,26,0.5)'; rr(W / 2 - 90, 52, 180, 26, 10); ctx.fill();
+    ctx.fillStyle = '#FFF6E0'; setF(15); ctx.fillText((met ? '✓ BEAT ' : 'TARGET ✿ ') + challenge.toLocaleString(), W / 2, 66);
+    ctx.restore();
+  }
+  if (cFlashT > 0) { ctx.save(); ctx.globalAlpha = Math.min(1, cFlashT); ctx.fillStyle = '#FFEC9E'; setF(34); ctx.textAlign = 'center'; ctx.fillText('Challenge beaten! ✿', W / 2, 130); ctx.restore(); }
+}
+function drawCoin(x, y, r) { ctx.save(); ctx.fillStyle = '#FFCF3F'; ctx.beginPath(); ctx.arc(x, y, r, 0, 6.28); ctx.fill(); ctx.strokeStyle = '#E0A017'; ctx.lineWidth = 2; ctx.stroke(); ctx.fillStyle = '#E0A017'; setF(13); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('¢', x, y + 1); ctx.restore(); }
+
+/* ---- tray / shop ---- */
+function drawTray() {
+  // panel
+  ctx.fillStyle = '#7B4E2E'; ctx.fillRect(0, TRAY.y, W, TRAY.h);
+  ctx.fillStyle = '#8A5A34'; ctx.fillRect(0, TRAY.y, W, 4);
+  ctx.fillStyle = '#8E5C36'; ctx.fillRect(0, TRAY.y + 4, W, 34);
+  // tabs
+  drawTab('🌱 Seeds', 16, tab === 'seeds');
+  drawTab('🛠 Garden', 124, tab === 'garden');
+  // selected seed reminder
+  ctx.fillStyle = '#FFE7C4'; setF(15); ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  const sp = PLANTS[G.sel];
+  ctx.fillText('Planting: ' + sp.n, W - 16, TRAY.y + 18);
+
+  // cards
+  ctx.save(); ctx.beginPath(); ctx.rect(0, cardTop() - 2, W, CH + 6); ctx.clip();
+  const items = trayItems();
+  for (let idx = 0; idx < items.length; idx++) {
+    const cx = trayCardX(idx); if (cx > W || cx + CW < 0) continue;
+    if (items[idx].kind === 'seed') drawSeedCard(items[idx].i, cx); else drawUpgCard(items[idx].id, cx);
+  }
+  ctx.restore();
+  // scroll hint chevrons
+  if (scroll[tab] > 4) { ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.moveTo(6, cardTop() + CH / 2); ctx.lineTo(14, cardTop() + CH / 2 - 8); ctx.lineTo(14, cardTop() + CH / 2 + 8); ctx.fill(); }
+  if (scroll[tab] < trayMaxScroll() - 4) { ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.moveTo(W - 6, cardTop() + CH / 2); ctx.lineTo(W - 14, cardTop() + CH / 2 - 8); ctx.lineTo(W - 14, cardTop() + CH / 2 + 8); ctx.fill(); }
+}
+function drawTab(label, x, active) {
+  ctx.fillStyle = active ? '#EAD9B0' : '#6B4326'; rr(x, TRAY.y + 2, 100, 34, 8); ctx.fill();
+  ctx.fillStyle = active ? '#5A3A1E' : '#D9BFA0'; setF(15); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(label, x + 50, TRAY.y + 19);
+}
+function shakeOff(id) { return (shakeCard === id && shakeCardT > 0) ? Math.sin(shakeCardT * 50) * 4 : 0; }
+function drawSeedCard(i, cx) {
+  const pl = PLANTS[i]; const owned = G.owned[i]; const sel = G.sel === i;
+  const affordable = !owned && (i === 0 || G.owned[i - 1]) && G.coins >= pl.price;
+  const cy = cardTop(); const ox = shakeOff('seed' + i);
+  ctx.save(); ctx.translate(ox, 0);
+  // bg
+  ctx.fillStyle = sel ? '#FFF3D0' : owned ? '#EAD9B0' : '#5E3C22';
+  rr(cx, cy, CW, CH, 12); ctx.fill();
+  if (affordable) { ctx.save(); ctx.strokeStyle = '#FFD24B'; ctx.lineWidth = 3; ctx.globalAlpha = 0.6 + Math.sin(time * 5) * 0.4; rr(cx + 1.5, cy + 1.5, CW - 3, CH - 3, 11); ctx.stroke(); ctx.restore(); }
+  if (sel) { ctx.strokeStyle = '#5FA33B'; ctx.lineWidth = 3; rr(cx + 1.5, cy + 1.5, CW - 3, CH - 3, 11); ctx.stroke(); }
+  // icon: a mini bloom
+  ctx.save(); ctx.translate(cx + 30, cy + 34);
+  if (i === 0 || G.owned[i - 1] || owned) { ctx.scale(0.8, 0.8); drawBloom(pl.key, bloomColors(pl.key), 0, 0, 1, false, i); }
+  else { ctx.fillStyle = 'rgba(255,255,255,0.25)'; setF(28); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('🔒', 0, 0); }
+  ctx.restore();
+  // text
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = owned || sel ? '#4A2E16' : '#E8D3B8'; setF(16); ctx.fillText(pl.n, cx + 54, cy + 26);
+  setF(12, 600); ctx.fillStyle = owned || sel ? '#7A5A34' : '#C4A986';
+  ctx.fillText('~' + pl.grow + 's  •  ✿' + pl.value, cx + 54, cy + 44);
+  // status line
+  if (owned) { ctx.fillStyle = sel ? '#3E8E5A' : '#6B8A4A'; setF(14); ctx.fillText(sel ? '● selected' : 'tap to select', cx + 12, cy + 78); }
+  else { ctx.fillStyle = affordable ? '#FFD24B' : '#C89B6E'; setF(15); ctx.fillText('¢ ' + pl.price.toLocaleString() + (affordable ? '  buy' : ''), cx + 12, cy + 78); }
+  ctx.restore();
+}
+function drawUpgCard(id, cx) {
+  const u = UPG.find(x => x.id === id); const l = G.upg[id] || 0; const maxed = l >= u.tiers.length;
+  const price = maxed ? 0 : u.tiers[l].price; const affordable = !maxed && G.coins >= price;
+  const cy = cardTop(); const ox = shakeOff('upg' + id);
+  ctx.save(); ctx.translate(ox, 0);
+  ctx.fillStyle = maxed ? '#CFC08E' : '#EAD9B0'; rr(cx, cy, CW, CH, 12); ctx.fill();
+  if (affordable) { ctx.save(); ctx.strokeStyle = '#FFD24B'; ctx.lineWidth = 3; ctx.globalAlpha = 0.6 + Math.sin(time * 5) * 0.4; rr(cx + 1.5, cy + 1.5, CW - 3, CH - 3, 11); ctx.stroke(); ctx.restore(); }
+  // icon badge
+  ctx.fillStyle = '#5FA33B'; ctx.beginPath(); ctx.arc(cx + 28, cy + 28, 17, 0, 6.28); ctx.fill();
+  ctx.fillStyle = '#FFF6E0'; setF(22); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(u.ic, cx + 28, cy + 29);
+  // title + tier pips
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = '#4A2E16'; setF(15); ctx.fillText(u.n, cx + 52, cy + 24);
+  for (let k = 0; k < u.tiers.length; k++) { ctx.fillStyle = k < l ? '#5FA33B' : 'rgba(90,55,28,0.3)'; ctx.beginPath(); ctx.arc(cx + 56 + k * 12, cy + 36, 4, 0, 6.28); ctx.fill(); }
+  // note (wrapped)
+  ctx.fillStyle = '#6B5030'; setF(11, 600); wrap(u.note(l), cx + 10, cy + 58, CW - 18, 12);
+  // price / status
+  if (maxed) { ctx.fillStyle = '#3E8E5A'; setF(14); ctx.fillText('✓ maxed', cx + 12, cy + 84); }
+  else { ctx.fillStyle = affordable ? '#C98A17' : '#B08A5E'; setF(14); ctx.fillText('¢ ' + price.toLocaleString() + (affordable ? '  buy' : ''), cx + 12, cy + 84); }
+  ctx.restore();
+}
+function wrap(text, x, y, maxw, lh) {
+  const words = text.split(' '); let line = '', yy = y;
+  for (const w of words) { const t = line ? line + ' ' + w : w; if (ctx.measureText(t).width > maxw && line) { ctx.fillText(line, x, yy); line = w; yy += lh; } else line = t; }
+  if (line) ctx.fillText(line, x, yy);
+}
+
+/* ---- hint ---- */
+function drawHint() {
+  let msg = null;
+  if (hintStage === 0) msg = 'Pick a seed below · tap the soil to plant';
+  else if (hintStage === 1) msg = 'Hold on your sprout to water it 💧';
+  else if (hintStage === 3 && !hasHarvested) msg = 'Tap a glowing bloom to harvest!';
+  // show harvest hint automatically when first plant ripens
+  if (!hasHarvested && hintStage < 3) { for (let i = 0; i < plotsUnlocked(); i++) if (G.plots[i].ripe) { msg = 'Tap the glowing bloom to harvest! ✿'; break; } }
+  if (!msg) return;
+  ctx.save(); ctx.textAlign = 'center';
+  const a = 0.9;
+  ctx.globalAlpha = a; ctx.fillStyle = 'rgba(58,42,26,0.82)';
+  setF(20); const tw = ctx.measureText(msg).width;
+  rr(W / 2 - tw / 2 - 18, 350, tw + 36, 38, 14); ctx.fill();
+  ctx.fillStyle = '#FFF6E0'; ctx.fillText(msg, W / 2, 373);
+  ctx.restore();
+}
+
+/* ---- splash ---- */
+function drawSplash() {
+  drawBackground();
+  drawBed();
+  drawCritters();
+  // dim
+  ctx.fillStyle = 'rgba(40,60,35,0.30)'; ctx.fillRect(0, 0, W, H);
+  // title plaque
+  ctx.save(); ctx.textAlign = 'center';
+  const bob = Math.sin(splashT * 1.6) * 5;
+  ctx.translate(W / 2, 150 + bob);
+  ctx.fillStyle = 'rgba(58,42,26,0.55)'; rr(-260, -58, 520, 130, 22); ctx.fill();
+  ctx.fillStyle = '#8A5A34'; rr(-260, -58, 520, 130, 22); ctx.globalAlpha = 0.4; ctx.fill(); ctx.globalAlpha = 1;
+  ctx.fillStyle = '#FFF6E0'; setF(52, 800); ctx.fillText('Green Thumb', 0, 8);
+  ctx.fillStyle = '#CDEBA8'; setF(20); ctx.fillText('grow a beautiful garden', 0, 44);
+  ctx.restore();
+  // prompt
+  ctx.save(); ctx.textAlign = 'center'; ctx.globalAlpha = 0.7 + Math.sin(splashT * 3) * 0.3;
+  ctx.fillStyle = '#FFF6E0'; setF(24, 700); ctx.fillText('tap / click to start', W / 2, 320);
+  ctx.globalAlpha = 1; setF(15); ctx.fillStyle = '#EAD9B0';
+  ctx.fillText('tap soil to plant  ·  hold to water  ·  tap blooms to harvest', W / 2, 356);
+  ctx.restore();
+}
+
+/* ---- day end summary ---- */
+function drawDayEnd() {
+  // scene behind
+  drawBackground(); drawBed(); drawCritters(); drawParticles();
+  ctx.fillStyle = 'rgba(40,55,35,0.55)'; ctx.fillRect(0, 0, W, H);
+  const gv = gardenValue();
+  ctx.save(); ctx.textAlign = 'center';
+  const pop = Math.min(1, dayendT * 4);
+  ctx.translate(W / 2, 150); ctx.scale(pop, pop); ctx.translate(-W / 2, -150);
+  ctx.fillStyle = 'rgba(58,42,26,0.85)'; rr(W / 2 - 230, 96, 460, 250, 22); ctx.fill();
+  ctx.strokeStyle = '#8A5A34'; ctx.lineWidth = 5; rr(W / 2 - 230, 96, 460, 250, 22); ctx.stroke();
+  ctx.fillStyle = '#FFE7A8'; setF(34, 800); ctx.fillText('🌙  Day ' + G.day + ' complete', W / 2, 150);
+  ctx.fillStyle = '#F582AE'; setF(24); ctx.fillText('✿ Garden value', W / 2, 196);
+  ctx.fillStyle = '#FFF6E0'; setF(46, 800); ctx.fillText(gv.toLocaleString(), W / 2, 240);
+  ctx.fillStyle = '#CDEBA8'; setF(18); ctx.fillText('best ✿ ' + best.toLocaleString() + '   ·   ' + G.harvests + ' blooms grown', W / 2, 272);
+  // new day button
+  const bw = 260, bx = W / 2 - bw / 2, by = 296, bh = 40;
+  ctx.fillStyle = '#5FA33B'; rr(bx, by, bw, bh, 14); ctx.fill();
+  ctx.fillStyle = '#FFF6E0'; setF(21, 800); ctx.fillText('☀ New Day  (tap / Enter)', W / 2, by + 27);
+  ctx.restore();
+}
+
+/* ============================================================
+   RENDER + LOOP
+   ============================================================ */
+let vg = null;
+function drawVignette() {
+  if (!vg) { vg = ctx.createRadialGradient(W / 2, 240, 260, W / 2, 240, 620); vg.addColorStop(0, 'rgba(60,40,20,0)'); vg.addColorStop(1, 'rgba(50,34,16,0.22)'); }
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, TRAY.y);
+}
+function render() {
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, offX * dpr, offY * dpr);
+  // letterbox fill (outside virtual area handled by body bg); clear play area
+  ctx.clearRect(0, 0, W, H);
+  if (mode === 'splash') { drawSplash(); return; }
+  drawBackground();
+  drawBed();
+  drawWateringCan();
+  drawCritters();
+  drawParticles();
+  drawVignette();
+  drawHint();
+  drawHUD();
+  drawTray();
+  if (mode === 'dayend') drawDayEnd();
+}
+
+let last = performance.now();
+function frame(now) {
+  let dt = (now - last) / 1000; last = now;
+  if (dt > 0.05) dt = 0.05;
+  update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+
+/* ---- boot ---- */
+loadGame();
+dispValue = gardenValue(); dispCoins = G.coins;
+ensureFlutters(baseFlutters());
+ensureBees((G.upg.bees || 0) ? 2 + (G.upg.bees || 0) : 0);
+requestAnimationFrame(frame);
+post({ gs: 'ready' });
+</script>
+</body>
+</html>

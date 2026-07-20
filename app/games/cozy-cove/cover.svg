@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FBE3B8"/>
+      <stop offset="0.5" stop-color="#F6C99A"/>
+      <stop offset="1" stop-color="#EC9E7A"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8FD0D2"/>
+      <stop offset="1" stop-color="#3F94B8"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFF3D0"/>
+      <stop offset="1" stop-color="#FFF3D0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="640" height="400" fill="url(#sky)"/>
+  <!-- golden sun glow -->
+  <circle cx="470" cy="120" r="150" fill="url(#sun)"/>
+  <circle cx="470" cy="120" r="42" fill="#FFF0C4"/>
+  <!-- clouds -->
+  <g fill="#FFFFFF" opacity="0.85">
+    <ellipse cx="140" cy="70" rx="34" ry="16"/><ellipse cx="170" cy="76" rx="24" ry="13"/><ellipse cx="112" cy="78" rx="20" ry="11"/>
+    <ellipse cx="540" cy="56" rx="26" ry="12"/><ellipse cx="562" cy="60" rx="18" ry="9"/>
+  </g>
+  <!-- sea -->
+  <rect y="150" width="640" height="250" fill="url(#sea)"/>
+  <g stroke="#FFFFFF" stroke-width="2" opacity="0.18">
+    <path d="M0 180 Q40 175 80 180 T160 180 T240 180 T320 180 T400 180 T480 180 T560 180 T640 180" fill="none"/>
+    <path d="M0 210 Q40 205 80 210 T160 210 T240 210 T320 210 T400 210 T480 210 T560 210 T640 210" fill="none"/>
+    <path d="M0 250 Q40 245 80 250 T160 250 T240 250 T320 250 T400 250 T480 250 T560 250 T640 250" fill="none"/>
+  </g>
+  <!-- sun glint on water -->
+  <ellipse cx="470" cy="205" rx="70" ry="8" fill="#FFF0C4" opacity="0.5"/>
+  <!-- island -->
+  <g>
+    <ellipse cx="320" cy="330" rx="290" ry="86" fill="#1E4C5A" opacity="0.22"/>
+    <ellipse cx="320" cy="322" rx="288" ry="84" fill="#E4B878"/>
+    <ellipse cx="320" cy="316" rx="270" ry="76" fill="#F3D19B"/>
+    <ellipse cx="320" cy="308" rx="240" ry="66" fill="#4E9E6A"/>
+    <ellipse cx="320" cy="300" rx="228" ry="60" fill="#8FD08A"/>
+    <ellipse cx="230" cy="290" rx="40" ry="14" fill="#6BB97D" opacity="0.6"/>
+    <ellipse cx="420" cy="304" rx="52" ry="16" fill="#6BB97D" opacity="0.5"/>
+  </g>
+  <!-- foam -->
+  <g fill="#EAF7F2">
+    <circle cx="120" cy="332" r="4"/><circle cx="170" cy="346" r="4"/><circle cx="240" cy="356" r="4"/>
+    <circle cx="330" cy="360" r="4"/><circle cx="420" cy="356" r="4"/><circle cx="500" cy="344" r="4"/><circle cx="540" cy="330" r="4"/>
+  </g>
+  <!-- palm tree (left) -->
+  <g>
+    <path d="M150 300 Q158 260 150 232" stroke="#8A5E38" stroke-width="9" fill="none" stroke-linecap="round"/>
+    <g stroke="#4E9E6A" stroke-width="9" fill="none" stroke-linecap="round">
+      <path d="M150 232 Q126 220 108 226"/><path d="M150 232 Q130 214 118 200"/>
+      <path d="M150 232 Q168 214 182 202"/><path d="M150 232 Q176 222 196 228"/>
+      <path d="M150 232 Q150 210 152 194"/>
+    </g>
+    <circle cx="146" cy="234" r="4" fill="#7A5230"/><circle cx="155" cy="233" r="4" fill="#7A5230"/>
+  </g>
+  <!-- cottage (center-left) -->
+  <g>
+    <rect x="222" y="252" width="80" height="44" rx="6" fill="#F5E6C0" stroke="#4A3B32" stroke-width="2"/>
+    <path d="M214 254 L262 214 L310 254 Z" fill="#EC8B6E"/>
+    <path d="M214 254 L262 214 L222 254 Z" fill="#D2694C"/>
+    <rect x="288" y="220" width="10" height="16" fill="#8A5E38"/>
+    <g fill="#EFEFEF" opacity="0.6"><circle cx="293" cy="212" r="4"/><circle cx="296" cy="200" r="5"/><circle cx="291" cy="188" r="6"/></g>
+    <rect x="252" y="270" width="20" height="26" rx="4" fill="#B07B4E"/><circle cx="267" cy="284" r="2" fill="#F5C242"/>
+    <rect x="228" y="266" width="16" height="16" rx="3" fill="#FFDC8C" stroke="#4A3B32" stroke-width="1.5"/>
+  </g>
+  <!-- fruit tree (right) -->
+  <g>
+    <path d="M470 300 Q464 268 470 244" stroke="#8A5E38" stroke-width="8" fill="none" stroke-linecap="round"/>
+    <ellipse cx="470" cy="238" rx="34" ry="30" fill="#3B7E56"/>
+    <ellipse cx="464" cy="242" rx="28" ry="24" fill="#4E9E6A"/>
+    <ellipse cx="468" cy="232" rx="22" ry="18" fill="#6BB97D"/>
+    <circle cx="456" cy="242" r="5" fill="#EC8B6E"/><circle cx="482" cy="236" r="5" fill="#EC8B6E"/><circle cx="470" cy="250" r="5" fill="#EC8B6E"/>
+  </g>
+  <!-- flowers -->
+  <g>
+    <circle cx="360" cy="316" r="5" fill="#EC7A9B"/><circle cx="374" cy="320" r="5" fill="#F5C242"/><circle cx="348" cy="322" r="5" fill="#F7F3E4"/>
+  </g>
+  <!-- cat neighbor -->
+  <g transform="translate(400,300)">
+    <ellipse cx="0" cy="18" rx="12" ry="6" fill="#1E4C5A" opacity="0.2"/>
+    <path d="M8 6 Q22 2 18 -10" stroke="#E9A24C" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <ellipse cx="0" cy="4" rx="13" ry="15" fill="#E9A24C"/>
+    <ellipse cx="0" cy="8" rx="8" ry="10" fill="#F6D9A6"/>
+    <circle cx="0" cy="-12" r="12" fill="#E9A24C"/>
+    <path d="M-11 -16 L-6 -28 L-2 -18 Z M11 -16 L6 -28 L2 -18 Z" fill="#D98A34"/>
+    <circle cx="-4.5" cy="-13" r="2" fill="#4A3B32"/><circle cx="4.5" cy="-13" r="2" fill="#4A3B32"/>
+    <circle cx="0" cy="-9" r="1.6" fill="#E97FA6"/>
+  </g>
+  <!-- player character (hero, center) -->
+  <g transform="translate(320,296)">
+    <ellipse cx="0" cy="20" rx="14" ry="6" fill="#1E4C5A" opacity="0.22"/>
+    <rect x="-6" y="10" width="5" height="9" fill="#3B6EA5"/><rect x="1" y="10" width="5" height="9" fill="#3B6EA5"/>
+    <rect x="-10" y="-2" width="20" height="18" rx="6" fill="#4E8FD1"/>
+    <rect x="-10" y="-2" width="20" height="8" rx="4" fill="#EC8B6E"/>
+    <circle cx="0" cy="-11" r="10" fill="#F6C99A"/>
+    <path d="M-10 -13 A10 10 0 0 1 10 -13 Z" fill="#6B4A2E"/>
+    <ellipse cx="0" cy="-15" rx="15" ry="5" fill="#EC8B6E"/>
+    <path d="M-8 -18 A8 7 0 0 1 8 -18 Z" fill="#EC8B6E"/>
+    <rect x="-8" y="-16" width="16" height="3" fill="#F5C242"/>
+    <circle cx="-3" cy="-10" r="1.8" fill="#4A3B32"/><circle cx="4" cy="-10" r="1.8" fill="#4A3B32"/>
+    <circle cx="-5" cy="-7" r="2" fill="#EC8B6E" opacity="0.5"/><circle cx="6" cy="-7" r="2" fill="#EC8B6E" opacity="0.5"/>
+  </g>
+  <!-- butterfly -->
+  <g transform="translate(250,220)">
+    <ellipse cx="-4" cy="-2" rx="5" ry="7" fill="#EE8A3C" transform="rotate(-20 -4 -2)"/>
+    <ellipse cx="4" cy="-2" rx="5" ry="7" fill="#EE8A3C" transform="rotate(20 4 -2)"/>
+    <rect x="-1" y="-6" width="2" height="12" fill="#4A3B32"/>
+  </g>
+  <!-- birds -->
+  <g stroke="#4A3B32" stroke-width="2.2" fill="none" opacity="0.6">
+    <path d="M90 110 Q97 104 104 110"/><path d="M104 110 Q111 104 118 110"/>
+    <path d="M540 130 Q546 125 552 130"/><path d="M552 130 Q558 125 564 130"/>
+  </g>
+  <!-- title -->
+  <g font-family="Baloo 2, Chalkboard SE, Comic Neue, sans-serif" font-weight="800" text-anchor="middle">
+    <text x="322" y="72" font-size="58" fill="#4A3B32" opacity="0.30">Cozy Cove</text>
+    <text x="320" y="68" font-size="58" fill="#FFFDF6">Cozy Cove</text>
+    <text x="320" y="98" font-size="20" fill="#EC8B6E">a little seaside life, all your own</text>
+  </g>
+</svg>

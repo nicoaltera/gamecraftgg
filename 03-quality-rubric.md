@@ -70,6 +70,7 @@ Derived from the full flash canon research (`research/top-flash-games-dna.md`, `
 - P4. At least two simultaneous number-go-up axes (per-run score, cumulative currency, upgrade tiers).
 - P5. Structure offers a personal-best chase and, where it fits, a finite completable goal graded on efficiency ("done in X days — think you can do better?"). Victory through persistence is guaranteed; only speed differentiates.
 - P6. The upgrade arc has depth and a long tail: at least one upgrade is a tradeoff or interacts with another (not pure power); the ladder extends well past the completion goal toward a far, aspirational ceiling so mastery players keep climbing (not an empty wall after the obvious buys); and high tiers can introduce new capabilities, not just bigger numbers — while the first tiers stay cheap and one-more-run away.
+- P7. Advancement is dramatically legible and earned: crossing a real milestone (age/tier/evolution/level) produces an unmistakable visual leap + a clear moment (never a subtle change the player might miss); and major milestones are paced to feel earned — accessible first steps, but big advances take real effort, not reached trivially fast. (Also, universal: when an entity's health/status drives the player's decisions, show it glanceably — e.g. health bars on combatants.)
 
 ### Comedy/spectacle pack (physics comedy, destruction, ragdoll, subversion)
 - C1. Failure produces spectacle — the play-tester's report of a failed run should read as entertainment, not frustration (destruction/collapse/ragdoll payoff lands on losing runs too).

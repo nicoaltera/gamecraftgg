@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>The Longest Night</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#0C0B1A;overflow:hidden}
+  canvas{display:block;touch-action:none;-webkit-user-select:none;user-select:none;cursor:pointer}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+/* ===== THE LONGEST NIGHT — GameSight ===== */
+const SLUG='the-longest-night', W=960, H=540;
+/* ---- palette (8) ---- */
+const INK='#14152B', NAVY='#232A57', PLUM='#5B2A6E', CORAL='#FF5A5F',
+      AMBER='#FFC24B', TEAL='#2FB3A8', CREAM='#F4ECD8', ROSE='#E86A8E';
+const DISP=s=>`900 ${s}px "Helvetica Neue",Arial,sans-serif`;   // heavy grotesque display
+const BODY=s=>`${s}px Georgia,"Times New Roman",serif`;         // serif prose w/ character
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+let scale=1,offX=0,offY=0,DPR=1;
+function resize(){
+  DPR=Math.min(window.devicePixelRatio||1,3); const iw=innerWidth, ih=innerHeight;
+  cv.width=iw*DPR; cv.height=ih*DPR; cv.style.width=iw+'px'; cv.style.height=ih+'px';
+  scale=Math.min(iw/W,ih/H); offX=(iw-W*scale)/2; offY=(ih-H*scale)/2;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+addEventListener('resize',resize); resize();
+const clamp=(v,a,b)=>v<a?a:v>b?b:v, lerp=(a,b,t)=>a+(b-a)*t, ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function hx(c){return[parseInt(c.slice(1,3),16),parseInt(c.slice(3,5),16),parseInt(c.slice(5,7),16)]}
+function mix(a,b,t){const A=hx(a),B=hx(b);return`rgb(${A[0]+(B[0]-A[0])*t|0},${A[1]+(B[1]-A[1])*t|0},${A[2]+(B[2]-A[2])*t|0})`}
+const TOUCH=('ontouchstart' in window)||(navigator.maxTouchPoints>0);
+
+/* ============================ AUDIO ============================ */
+let AC=null,master,padGain,padA,padB,padFilt,droneOsc,droneGain;
+function initAudio(){
+  if(AC)return;
+  try{
+    AC=new (window.AudioContext||window.webkitAudioContext)();
+    master=AC.createGain(); master.gain.value=.55; master.connect(AC.destination);
+    padGain=AC.createGain(); padGain.gain.value=0;
+    padFilt=AC.createBiquadFilter(); padFilt.type='lowpass'; padFilt.frequency.value=700; padFilt.Q.value=4;
+    padGain.connect(padFilt); padFilt.connect(master);
+    padA=AC.createOscillator(); padA.type='sawtooth'; padA.frequency.value=110;
+    padB=AC.createOscillator(); padB.type='sawtooth'; padB.frequency.value=164; padB.detune.value=6;
+    padA.connect(padGain); padB.connect(padGain); padA.start(); padB.start();
+    droneGain=AC.createGain(); droneGain.gain.value=0;
+    droneOsc=AC.createOscillator(); droneOsc.type='sine'; droneOsc.frequency.value=55;
+    droneOsc.connect(droneGain); droneGain.connect(master); droneOsc.start();
+  }catch(e){AC=null}
+}
+const pv=f=>f*(0.94+Math.random()*0.12);
+function tone(f,dur,type,vol,slide,dl){
+  if(!AC)return; const t=AC.currentTime+(dl||0), o=AC.createOscillator(),g=AC.createGain();
+  o.type=type||'sine'; o.frequency.setValueAtTime(pv(f),t);
+  if(slide)o.frequency.exponentialRampToValueAtTime(Math.max(30,f+slide),t+dur);
+  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol,t+.012);
+  g.gain.exponentialRampToValueAtTime(.0008,t+dur);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t+dur+.03);
+}
+function noise(dur,f,vol,type){
+  if(!AC)return; const t=AC.currentTime,len=Math.max(1,AC.sampleRate*dur|0),
+  b=AC.createBuffer(1,len,AC.sampleRate),d=b.getChannelData(0);
+  for(let i=0;i<len;i++)d[i]=(Math.random()*2-1)*(1-i/len);
+  const s=AC.createBufferSource(); s.buffer=b;
+  const fl=AC.createBiquadFilter(); fl.type=type||'bandpass'; fl.frequency.value=pv(f);
+  const g=AC.createGain(); g.gain.value=vol; s.connect(fl); fl.connect(g); g.connect(master); s.start(t);
+}
+const sClick=()=>{tone(560,.09,'triangle',.16,120);noise(.03,1600,.06)};
+const sConfirm=()=>{tone(440,.1,'triangle',.16,180);tone(660,.14,'sine',.12,0,.05)};
+const sBack=()=>tone(300,.1,'sine',.13,-60);
+const sHover=()=>tone(720,.04,'sine',.05);
+const sPick=()=>{tone(330,.12,'triangle',.14);tone(494,.14,'sine',.1,0,.04)};
+function sTwist(){[740,540,420,300].forEach((f,i)=>tone(f,.5,'sawtooth',.12,-40,i*.05));noise(.4,300,.12,'lowpass')}
+function sDeath(){tone(140,.8,'sawtooth',.22,-70);noise(.6,180,.16,'lowpass');tone(90,1.1,'sine',.18,-30,.1)}
+function sEscape(){[523,659,784,1047].forEach((f,i)=>tone(f,.4,'triangle',.16,0,i*.09))}
+function sFanfare(){[392,523,659,784,1047,1319].forEach((f,i)=>tone(f,.5,'triangle',.15,0,i*.1));[196,262].forEach((f,i)=>tone(f,1.2,'sine',.1,0,i*.15))}
+let curPad=null;
+function setMood(m){
+  if(!AC)return;
+  const chords={ spooky:[110,146,220], tense:[98,131,155], absurd:[130,164,196],
+    silly:[147,185,220], heartfelt:[131,165,196], dark:[73,98,110], gold:[131,196,262] };
+  const c=chords[m]||chords.spooky;
+  const t=AC.currentTime;
+  padA.frequency.setTargetAtTime(c[0],t,.4); padB.frequency.setTargetAtTime(c[1],t,.4);
+  padGain.gain.setTargetAtTime(.05,t,.6);
+  padFilt.frequency.setTargetAtTime(m==='gold'?1600:m==='dark'?420:700,t,.8);
+  const dr=(m==='tense'||m==='dark')?.12:(m==='spooky'?.05:0);
+  droneGain.gain.setTargetAtTime(dr,t,.7);
+  curPad=m;
+}
+
+/* ============================ SAVE ============================ */
+let save={found:{},bestClicks:0};
+try{const s=localStorage.getItem('gs_save:'+SLUG); if(s)save=Object.assign(save,JSON.parse(s))}catch(e){}
+function persist(){try{
+  localStorage.setItem('gs_save:'+SLUG,JSON.stringify(save));
+  localStorage.setItem('gs_best:'+SLUG,String(foundCount()));
+}catch(e){}}
+addEventListener('message',e=>{if(e.data&&e.data.gs==='reset'){try{localStorage.removeItem('gs_save:'+SLUG);localStorage.removeItem('gs_best:'+SLUG)}catch(_){} location.reload()}});
+function foundCount(){return Object.keys(save.found).length}
+
+const cParam=parseInt(new URLSearchParams(location.search).get('c'),10);
+const cTarget=(isFinite(cParam)&&cParam>0)?cParam:0;
+
+/* ============================ STORY TREE ============================ */
+/* Each node: loc, mood, art, text, choices[], end?{id,name,kind,secret}
+   choice: {label,to,need?,give?}  need hides choice unless item held; give grants item. */
+const NODES={
+/* ---- opening / room hub ---- */
+start:{loc:'THE DARK ROOM',mood:'spooky',art:'room',
+  text:"You wake on a stranger's couch at 3:33 AM.\nIt is not your couch. It is not your room. Judging by the wallpaper, it is not even your decade.\nSomewhere, a clock is deeply certain it is 3:33.",
+  choices:[
+    {label:'Try the front DOOR',to:'door'},
+    {label:'Go to the WINDOW',to:'window'},
+    {label:'Search the COUCH you woke on',to:'couch'},
+    {label:'Follow the HALLWAY',to:'hall'}]},
+hub:{loc:'THE DARK ROOM',mood:'spooky',art:'room',
+  text:"Back in the room. The couch sags where you were, still warm — which is upsetting, because you are cold.\n3:33, insists the clock, like a toddler who has learned exactly one word.",
+  choices:[
+    {label:'The front DOOR',to:'door'},
+    {label:'The WINDOW',to:'window'},
+    {label:'Down the HALLWAY',to:'hall'},
+    {label:'Lie back down. Just five more minutes',to:'bed'}]},
+couch:{loc:'THE COUCH',mood:'silly',art:'bed',
+  text:"You plunge a hand between the cushions. You find: forty-one cents, a fossilised gummy bear, and a small brass KEY that hums faintly, like it knows something you don't.\nThe gummy bear watches you take the key. You do not take the gummy bear. Some things are sacred.",
+  choices:[{label:'Pocket the key, keep exploring',to:'hub',give:'key'}]},
+bed:{loc:'THE COUCH',mood:'silly',art:'bed',
+  text:"You look at the couch. The couch looks at you. It is still warm. It is, honestly, a magnificent couch.\nThe clock says 3:33. It will always say 3:33. There is something almost restful about a night that refuses to end. No morning means no Mondays.",
+  choices:[
+    {label:'Lie down. Just five more minutes',to:'sleep_end'},
+    {label:'No. NO. Get up.',to:'hub'}]},
+sleep_end:{loc:'GOODNIGHT',mood:'heartfelt',art:'bed',
+  end:{id:'sleep',name:'FIVE MORE MINUTES',kind:'twist',secret:false},
+  text:"You lie back down. Just five more minutes.\nThe couch exhales. The clock does not tick, because it never did. The night pulls the dark up to your chin like a parent who has given up on bedtime being a negotiation.\nYou do not escape. You do not want to. Somewhere Gerald mutters 'unbelievable.' The moon rolls its eye. You'll try again tomorrow. There is only tomorrow.\n(This counts as an ending. Barely. We're feeling generous.)"},
+
+/* ---- front door / foyer / Barnaby ---- */
+door:{loc:'THE FRONT DOOR',mood:'tense',art:'door',
+  text:"Six locks, a chain, a deadbolt, and a small brass sign that reads: HAVE YOU TRIED KNOCKING?\nIt has no keyhole. Not one. Not anywhere. The brass key in your pocket hums, disappointed.",
+  choices:[
+    {label:'KNOCK, politely',to:'knock'},
+    {label:'Shoulder it open, like an action hero',to:'shove'},
+    {label:'Read the little sign again',to:'signgag'},
+    {label:'Stand before it, fully shod',to:'shod_end',need:'slipper'},
+    {label:'Back to the room',to:'hub'}]},
+signgag:{loc:'THE FRONT DOOR',mood:'silly',art:'door',
+  text:"HAVE YOU TRIED KNOCKING? asks the sign.\nBelow it, in smaller letters you didn't notice before: 'yes, you, specifically. we've been waiting.'\nThe brass is warm. You decide not to think about who 'we' is.",
+  choices:[{label:'Fine. Consider knocking.',to:'door'}]},
+shove:{loc:'THE FRONT DOOR',mood:'silly',art:'door',
+  text:"You lower your shoulder and charge like a man who has watched exactly one heist film.\nThe door does not move. Your shoulder files a formal complaint. Somewhere upstairs, something laughs — a dry, rattling laugh, like dice in a cup.",
+  choices:[{label:'Rub your shoulder, retreat',to:'hub'}]},
+knock:{loc:'THE FRONT DOOR',mood:'absurd',art:'door',
+  text:"You knock three times, out of habit.\nFrom the OTHER side, three knocks answer — polite, patient, in exactly your rhythm.\n'Come in,' says a voice like dry leaves.\nThe door swings inward. Beyond it is not the street. Beyond it is a foyer that smells of old coats and older manners.",
+  choices:[
+    {label:'Step inside',to:'foyer'},
+    {label:'Slam it shut. Nope. No thank you.',to:'hub'}]},
+foyer:{loc:'THE FOYER',mood:'spooky',art:'foyer',
+  text:"A between-place: mostly coat, mostly shadow.\nA SKELETON in a butler's waistcoat straightens a tie he does not have. His name tag says BARNABY.\n'Good evening,' says Barnaby. 'You're early. Or late. The night's been having trouble with the difference.'",
+  choices:[
+    {label:'Ask Barnaby how to leave',to:'barnaby_help'},
+    {label:'Ask Barnaby for the time',to:'barnaby_time'},
+    {label:'Shake his hand',to:'handshake'},
+    {label:'Back through the door',to:'hub'}]},
+barnaby_time:{loc:'THE FOYER',mood:'silly',art:'foyer',
+  text:"'The time?' Barnaby's jaw drops in what you generously read as a smile. 'It's 3:33. It's been 3:33 for eleven years. I've stopped setting reminders.'\nHe leans in. 'Between us? I miss Tuesdays terribly. There was a rhythm to them.'",
+  choices:[{label:'Nod sympathetically',to:'foyer'}]},
+handshake:{loc:'A FIRM GRIP',mood:'dark',art:'foyer',
+  end:{id:'barnaby',name:'TERRIBLY SORRY',kind:'death',secret:false},
+  text:"You extend your hand. Barnaby beams — a difficult feat, for a skull, but he manages.\nHis grip is firm, warm, and does not stop. 'Terribly sorry,' he says, and he genuinely means it, as the cold climbs your arm like ivy. 'It's the only way I know to make a friend. I don't get many.'\nYou will make an excellent coat rack. Barnaby will dust you daily. He really is very polite about it."},
+barnaby_help:{loc:'THE FOYER',mood:'heartfelt',art:'foyer',
+  text:"Barnaby lowers his voice to a confidential rattle. 'The house keeps the doors shut with the NIGHT, not with locks. Stop the clock at the wrong minute and it eats you whole. Stop it at the RIGHT one—' he taps where a nose would be. 'You'll need the brass key from the couch, and some nerve.'\nHe presses a small BONE into your palm. 'And take this. For the fern. Gerald likes a bone. Don't ask why. Nobody's ever brought him one.'",
+  choices:[{label:'Thank him. Pocket the bone.',to:'hub',give:'bone'}]},
+shod_end:{loc:'PROPERLY SHOD',mood:'gold',art:'outside',
+  end:{id:'shod',name:'PROPERLY SHOD',kind:'escape',secret:true},
+  text:"You found the left slipper sulking on the window ledge. You put it on. For the first time all night, you MATCH.\nYou walk to the front door and simply stand there, radiating the terrible dignity of a fully-shod adult at 3:33 AM.\nThe door — which has intimidated warriors and outlasted lifetimes — takes one long look at your matching slippers, sighs, and quietly opens onto an ordinary street.\n'...Right then,' it mutters. 'Off you pop.' You off you pop. Dignity intact. Slippers matching. The night defeated by sheer put-togetherness."},
+
+/* ---- window / moon ---- */
+window:{loc:'THE WINDOW',mood:'spooky',art:'window',
+  text:"The window looks out on a night that is ALL moon. No street, no sky — just the moon, enormous, close enough to count its seas, watching the house the way you'd watch a snow globe you are thinking about shaking.\nThe latch is open. It is a long way down. Or up. The moon has opinions about which.",
+  choices:[
+    {label:'Climb out onto the ledge',to:'window_out'},
+    {label:'Wave at the moon',to:'moonwave'},
+    {label:'Check the ledge for your missing SLIPPER',to:'slipperhunt'},
+    {label:'Back to the room',to:'hub'}]},
+moonwave:{loc:'THE WINDOW',mood:'silly',art:'window',
+  text:"You wave at the moon.\nThe moon, after a beat, waves back. It has hands now. This is new information about the moon and you are not sure you wanted it.\n'Hi,' the moon mouths, enormous and delighted. 'Hi. HI.' It has clearly been alone for a while.",
+  choices:[{label:'Slowly stop waving',to:'window'}]},
+slipperhunt:{loc:'THE LEDGE',mood:'silly',art:'window',
+  text:"You lean out and pat along the cold ledge. Your fingers close on something soft and personally yours: your LEFT SLIPPER, the traitor, which apparently escaped hours before you woke.\nIt is a little damp with moonlight. You now own a matching pair. This feels more powerful than it should.",
+  choices:[{label:'Take the slipper',to:'window',give:'slipper'}]},
+window_out:{loc:'THE LEDGE',mood:'tense',art:'moon',
+  text:"You climb onto the ledge. There is no 'down.' 'Down' has quietly resigned and left no forwarding address.\nThe moon leans in until it fills everything. 'FINALLY,' it says, in a voice you feel in your teeth. 'Do you have any idea how long I've been holding still?'\nIt offers a hand made of light. Behind it, the longest night is already packing its bags.",
+  choices:[
+    {label:"Take the moon's hand",to:'moon_end'},
+    {label:'Jump WITHOUT it — you never take help',to:'moon_jump'}]},
+moon_end:{loc:'THE MOON',mood:'gold',art:'moon',
+  end:{id:'moon',name:'MOON RESIDENT',kind:'escape',secret:false},
+  text:"You take the hand of light. The moon pulls you up — up is a direction again, thank god — and sets you in a crater like a coin in a palm.\n'Welcome home,' says the moon. 'The night was mine, you know. Snagged on that little house like a kite in a tree, years ago. You unhooked it. Least I can do is take you in.'\nYou live on the moon now. The view is unspeakable. The rent is silence. You have never, in your life, slept better."},
+moon_jump:{loc:'THE LONG WAY DOWN',mood:'dark',art:'moon',
+  end:{id:'gravity',name:'GRAVITY, EVENTUALLY',kind:'death',secret:false},
+  text:"You decline the moon's hand out of pure principle. You have never taken help and you are not about to start on the last night of your life.\nIt is, indeed, the last night of your life. 'Down' hears you coming and reconsiders its resignation at the worst possible moment.\nThe moon watches you fall for a very long time, the way you'd watch a coin drop into a well you know is bottomless. 'Suit yourself,' it sighs. 'Everyone's a critic.'"},
+
+/* ---- hallway hub ---- */
+hall:{loc:'THE HALLWAY',mood:'spooky',art:'hall',
+  text:"A hallway longer than the house has any right to contain. Doors line it like teeth.\nAt the far end a GRANDFATHER CLOCK stands guard, ticking without moving its hands. Halfway down, a STAIRCASE spirals up into dark. A warm hum leaks from the KITCHEN. And a FERN sits in a chipped pot, radiating disapproval.",
+  choices:[
+    {label:'Approach the CLOCK',to:'clock'},
+    {label:'Climb the STAIRCASE',to:'stairs'},
+    {label:'Enter the KITCHEN',to:'kitchen'},
+    {label:'Talk to the FERN',to:'plant'},
+    {label:'Back to the room',to:'hub'}]},
+
+/* ---- clock / dawn ---- */
+clock:{loc:'THE GRANDFATHER CLOCK',mood:'tense',art:'clock',
+  text:"Its hands are frozen at 3:33. The pendulum swings but makes no sound; the ticking comes from somewhere behind it, patient and wet.\nLow in its belly there is a tiny keyhole — exactly, precisely, brass-key-sized.",
+  choices:[
+    {label:'Unlock the belly with the brass KEY',to:'clockopen',need:'key'},
+    {label:'Force the hands forward with your fingers',to:'handsdeath'},
+    {label:'Press an ear to the pendulum, listen',to:'listen'},
+    {label:'Back to the hallway',to:'hall'}]},
+listen:{loc:'THE GRANDFATHER CLOCK',mood:'spooky',art:'clock',
+  text:"You press your ear to the cold case. The pendulum swings, silent. But behind it, faint and enormous, something breathes — slow, tidal, asleep.\nA whisper leaks through the wood, in your own voice, from a half-second ago: '4,017 nights. Pull it this time.'\nYou have never been here before. You have always been here.",
+  choices:[{label:'Pull back, unnerved',to:'clock'}]},
+handsdeath:{loc:'TIME, MISHANDLED',mood:'dark',art:'clock',
+  end:{id:'hands',name:'HANDS OF TIME',kind:'death',secret:false},
+  text:"You grab the minute hand and shove it forward. The clock SCREAMS — a sound like a freight train made entirely of bees.\nTime lurches. You age forty years in four seconds. Your knees give their two weeks' notice. Your back invents a new opinion about the weather.\nA very old version of you sinks into the armchair, finally comfortable, and decides the night can wait until morning. It cannot. But you can."},
+clockopen:{loc:'INSIDE THE CLOCK',mood:'heartfelt',art:'clockopen',
+  text:"The key turns. The belly swings open on a room the size of a phone booth, lined in blue velvet.\nInside: a single brass LEVER labelled 'DAWN — DO NOT' and, below it, smaller, 'okay fine.'\nAlso a sticky note, in your own handwriting: 'You've been here 4,017 nights. You always leave it. Pull it this time. — You.'",
+  choices:[
+    {label:'PULL the lever',to:'dawn'},
+    {label:'Read the sticky note again',to:'notegag'},
+    {label:"Leave it. Some nights aren't ready to end.",to:'hub'}]},
+notegag:{loc:'INSIDE THE CLOCK',mood:'heartfelt',art:'clockopen',
+  text:"You read the note again. The handwriting is unmistakably yours, though shakier each of the 4,016 previous times, apparently.\nAt the very bottom, tiny: 'p.s. yes it's scary. do it anyway. p.p.s. the fern forgives you. p.p.p.s. run out of postscripts.'",
+  choices:[{label:'Look back at the lever',to:'clockopen'}]},
+dawn:{loc:'3:34 AM',mood:'gold',art:'dawn',
+  end:{id:'dawn',name:'3:34 AM',kind:'escape',secret:false},
+  text:"You pull the lever. It resists — 4,017 nights of resisting — and then, all at once, gives.\nBehind the wallpaper, behind the night itself, something enormous rolls over and sighs. A line of gold cracks the horizon of the ceiling.\nThe clock ticks. Once. The hands jerk forward to 3:34 — the first new minute in eleven years.\nYou did not escape the house. You escaped the NIGHT, which was always the thing holding the doors shut. Outside, birds you have never heard begin, tentatively, to guess at a song."},
+
+/* ---- stairs / thirteenth ---- */
+stairs:{loc:'THE STAIRCASE',mood:'spooky',art:'stairs',
+  text:"The staircase spirals up into dark. You climb, counting as you go, because your grandmother swore a house will lie to you but a staircase never will.\nOne. Two. Three... By the time you reach the top there is no top — only more stairs, folding neatly back into the hallway you started in.",
+  choices:[
+    {label:'Climb again — count very carefully this time',to:'stairs_count'},
+    {label:'Give up, back to the hallway',to:'hall'}]},
+stairs_count:{loc:'THE THIRTEENTH STEP',mood:'tense',art:'stairs',
+  text:"You climb again. Ten. Eleven. Twelve. The twelfth step is where every night before has ended — spat back into the hallway.\nBut tonight there is a THIRTEENTH step. There has never been a thirteenth step. It is slightly too warm, and it hums, very softly, the brass key's exact tune.",
+  choices:[
+    {label:'Put your full weight on the 13TH step',to:'thirteenth'},
+    {label:'Step OVER it, superstitiously',to:'stairs_over'}]},
+stairs_over:{loc:'THE STAIRCASE',mood:'silly',art:'stairs',
+  text:"You step over the thirteenth step, the way you'd step over a black cat, a crack, a coworker's feelings.\nYou land on step fourteen — which is, of course, step one, of course it is — and the staircase folds you gently back into the hallway. It seems, if anything, relieved. Like it wasn't ready either.",
+  choices:[{label:'Back to the hallway',to:'hall'}]},
+thirteenth:{loc:'THE THIRTEENTH STEP',mood:'gold',art:'outside',
+  end:{id:'thirteenth',name:'THE THIRTEENTH STEP',kind:'twist',secret:true},
+  text:"You put your full weight on the thirteenth step.\nIt is not a step. It is a TONGUE.\nThe staircase — which was never a staircase — smiles, and you understand, all at once and far too late, that you were never IN the house. You are something the house SWALLOWED, a long time ago. The stairs were the throat. The thirteenth step is the part that decides.\nIt decides to let you go. You are coughed, gently, onto a cool lawn beneath a sky full of unfamiliar stars. Free. Ish. (Nobody escapes the thirteenth step. You are the first. The house will talk about you for years.)"},
+
+/* ---- kitchen / fridge ---- */
+kitchen:{loc:'THE KITCHEN',mood:'absurd',art:'kitchen',
+  text:"The kitchen glows. The FRIDGE hums a little too warmly, its door ajar, spilling gold light and the smell of leftovers from a party you don't remember attending.\nOn the counter: a plate of DEVILLED EGGS under plastic wrap. The fridge door creaks open a little wider. Invitingly. Far, far too invitingly.",
+  choices:[
+    {label:'Look inside the FRIDGE',to:'fridge'},
+    {label:"Eat a devilled egg (you really shouldn't)",to:'egg'},
+    {label:'Back to the hallway',to:'hall'}]},
+egg:{loc:'THE KITCHEN',mood:'silly',art:'kitchen',
+  text:"You eat a devilled egg at 3:33 AM in a stranger's kitchen. It is, disturbingly, the best egg of your entire life.\nA note under the plate reads, in that same handwriting: 'told you.' You did not tell anyone anything. You feel watched. You are always watched. It's that kind of night.",
+  choices:[{label:'Set down the plate very slowly',to:'kitchen'}]},
+fridge:{loc:'THE FRIDGE',mood:'dark',art:'kitchen',
+  end:{id:'snacked',name:'SNACKED',kind:'death',secret:false},
+  text:"You open the fridge all the way. The light is beautiful. The cold is a hug you weren't offered but badly needed.\n'There you are,' says the fridge, with considerably more teeth than a fridge should have. 'We saved you a shelf.'\nYou are a leftover now, labelled in your own handwriting: EAT ME FIRST. You will keep for a surprisingly long time. The party, it turns out, was always BYO-guest."},
+
+/* ---- plant / Gerald ---- */
+plant:{loc:'GERALD THE FERN',mood:'silly',art:'plant',
+  text:"A fern in a chipped pot, radiating the specific disapproval of a creature that has watched you sleep for eleven years.\n'Oh,' says Gerald. 'NOW you want to talk.' He does not have a mouth. He manages regardless.",
+  choices:[
+    {label:'Apologise to Gerald',to:'apologize'},
+    {label:'Offer Gerald the BONE',to:'gerald_bone',need:'bone'},
+    {label:'Ask Gerald for help',to:'gerald_help'},
+    {label:'Water Gerald (you have no water)',to:'gerald_water'},
+    {label:'Back to the hallway',to:'hall'}]},
+apologize:{loc:'GERALD THE FERN',mood:'heartfelt',art:'plant',
+  text:"'I'm sorry,' you say. 'For the sleeping. For the eleven years. For never once turning you toward the light.'\nGerald is quiet a long moment. A single frond dips, which is as close to forgiveness as a fern gets in public. 'Yeah, well,' he says gruffly. 'Bring me a bone and we'll call it even. Don't make it weird.'",
+  choices:[{label:'Nod. Note the bone thing.',to:'plant'}]},
+gerald_help:{loc:'GERALD THE FERN',mood:'silly',art:'plant',
+  text:"'Help,' Gerald repeats, flatly. 'I'm a FERN. My entire skill set is standing here being damp and judgmental.'\nHe rustles. 'You want OUT? Bring me something to sink my roots into. Something that used to walk. THEN we'll talk about ladders.'",
+  choices:[{label:'Something that used to walk. Noted.',to:'plant'}]},
+gerald_water:{loc:'GERALD THE FERN',mood:'silly',art:'plant',
+  text:"You mime watering Gerald from an empty hand.\nGerald watches the invisible water fall into his soil. 'Wow,' he says. 'Nothing. From an empty hand. At three in the morning. You know, I used to have hope for you specifically.'\nHe does not, it should be said, sound entirely serious.",
+  choices:[{label:'Apologise (again)',to:'plant'}]},
+gerald_bone:{loc:'GERALD THE FERN',mood:'heartfelt',art:'plant',
+  text:"You offer Gerald the bone. He goes very still — the way you go still when someone finally gets your birthday right.\n'...Oh,' says Gerald softly. Roots erupt from the pot, drink the bone in one heartbeat, and BLOOM: up the wall, out a crack in the ceiling you never noticed, straight into moonlight. A ladder of living green.\n'Go on,' he says, gruff again, embarrassed by his own kindness. 'Before I remember I'm cross with you. And — hey. Thanks. Nobody ever brings me a bone.'",
+  choices:[
+    {label:"Climb Gerald's ladder",to:'gerald_end'},
+    {label:'Stay a while. Keep Gerald company.',to:'gerald_stay'}]},
+gerald_stay:{loc:'GERALD THE FERN',mood:'heartfelt',art:'plant',
+  text:"You sit down beside the pot instead of climbing. Gerald says nothing for a while. Neither do you. The ladder waits, patient, growing slightly taller out of sheer politeness.\n'...You don't have to go tonight,' Gerald says eventually, very quietly. 'But the ladder won't last till morning. Ferns aren't built for goodbyes. Off you get.'",
+  choices:[{label:'Climb the ladder now',to:'gerald_end'}]},
+gerald_end:{loc:"GERALD'S GARDEN",mood:'gold',art:'outside',
+  end:{id:'gerald',name:'GERALD KNOWS A GUY',kind:'escape',secret:false},
+  text:"You climb. The vine holds you like it means it. At the top, the crack in the ceiling opens onto a garden that has no business fitting up there — moonlit, overgrown, humming green.\nGerald's voice drifts up from below: 'Tell my cousin the monstera I said he's STILL a show-off.'\nYou step out into cool grass. You are free — and faintly, permanently, on the side of plants now. You will never mow a lawn again without whispering an apology first."}
+};
+
+/* ---- ordered ending registry (for the collection + counter) ---- */
+const ENDINGS=[
+  {id:'dawn',name:'3:34 AM',kind:'escape',secret:false},
+  {id:'moon',name:'MOON RESIDENT',kind:'escape',secret:false},
+  {id:'gerald',name:'GERALD KNOWS A GUY',kind:'escape',secret:false},
+  {id:'shod',name:'PROPERLY SHOD',kind:'escape',secret:true},
+  {id:'thirteenth',name:'THE THIRTEENTH STEP',kind:'twist',secret:true},
+  {id:'sleep',name:'FIVE MORE MINUTES',kind:'twist',secret:false},
+  {id:'snacked',name:'SNACKED',kind:'death',secret:false},
+  {id:'barnaby',name:'TERRIBLY SORRY',kind:'death',secret:false},
+  {id:'hands',name:'HANDS OF TIME',kind:'death',secret:false},
+  {id:'gravity',name:'GRAVITY, EVENTUALLY',kind:'death',secret:false}
+];
+const N_ENDINGS=ENDINGS.length;
+
+/* ============================ GRAPH VERIFY (dev) ============================ */
+function verifyGraph(){
+  const ids=Object.keys(NODES); let issues=[];
+  const endIds=new Set();
+  for(const id of ids){const n=NODES[id];
+    if(n.end){endIds.add(id); if(n.choices&&n.choices.length)issues.push(id+': ending has choices');}
+    else{ if(!n.choices||!n.choices.length)issues.push(id+': non-ending has no choices');
+      for(const c of (n.choices||[])) if(!NODES[c.to]) issues.push(id+' -> missing node "'+c.to+'"');}
+  }
+  // reachability from start (ignore item gates)
+  const seen=new Set(['start']),q=['start'];
+  while(q.length){const n=NODES[q.shift()]; for(const c of (n.choices||[])) if(NODES[c.to]&&!seen.has(c.to)){seen.add(c.to);q.push(c.to);}}
+  for(const id of ids) if(!seen.has(id)) issues.push('unreachable: '+id);
+  // termination: every node can reach an ending (backward BFS)
+  const canEnd=new Set([...endIds]); let changed=true;
+  while(changed){changed=false; for(const id of ids){ if(canEnd.has(id))continue;
+    for(const c of (NODES[id].choices||[])) if(canEnd.has(c.to)){canEnd.add(id);changed=true;break;}}}
+  for(const id of ids) if(!canEnd.has(id)) issues.push('cannot reach an ending: '+id);
+  // each ending in registry exists as a node ending
+  const nodeEndIds=new Set([...endIds].map(i=>NODES[i].end.id));
+  for(const e of ENDINGS) if(!nodeEndIds.has(e.id)) issues.push('registry ending missing node: '+e.id);
+  const report={nodes:ids.length,endings:endIds.size,reachable:seen.size,issues};
+  if(issues.length) console.log('[graph] ISSUES',report); else console.log('[graph] OK — '+ids.length+' nodes, '+endIds.size+' endings, all reachable & terminating');
+  return report;
+}
+
+/* ============================ STATE ============================ */
+let mode='splash';           // splash | play | ending | collection
+let cur='start', prev='start', node=NODES.start;
+let items={};                // held items
+let clicks=0;                // choices clicked this run
+let trans=1;                 // scene transition 0..1
+let now=0, dust=[], seedRng=mulberry32(9);
+let curEnd=null, endNew=false, endClicks=0, endReveal=0, celebrate=0, chalBeat=false;
+let btns=[];                 // clickable rects rebuilt each draw
+let hoverBtn=-1;
+const DUST=(()=>{const a=[];for(let i=0;i<46;i++)a.push({x:seedRng()*W,y:seedRng()*H,r:.6+seedRng()*1.8,s:.05+seedRng()*.18,ph:seedRng()*6.28});return a})();
+
+function moodPal(m){
+  switch(m){
+    case 'spooky':   return {a:INK,b:NAVY,ac:TEAL,gl:'#3B4E8C'};
+    case 'tense':    return {a:'#1A1330',b:PLUM,ac:CORAL,gl:'#7A3A5A'};
+    case 'absurd':   return {a:PLUM,b:'#8A2E5A',ac:AMBER,gl:'#C24E7A'};
+    case 'silly':    return {a:'#153A48',b:TEAL,ac:AMBER,gl:'#2FB3A8'};
+    case 'heartfelt':return {a:'#2A1740',b:'#7A3468',ac:AMBER,gl:ROSE};
+    case 'gold':     return {a:'#5A2E2A',b:'#B4772A',ac:AMBER,gl:'#FFE39A'};
+    case 'dark':     return {a:'#0A0912',b:'#241726',ac:CORAL,gl:'#40213A'};
+    default:         return {a:INK,b:NAVY,ac:TEAL,gl:'#3B4E8C'};
+  }
+}
+
+function visibleChoices(n){return (n.choices||[]).filter(c=>!c.need||items[c.need])}
+
+function goto(id){
+  const n=NODES[id]; if(!n)return;
+  prev=cur; cur=id; node=n; trans=0;
+  if(n.mood&&AC)setMood(n.mood);
+  if(n.end){ reachEnding(n.end); }
+}
+function reachEnding(e){
+  mode='ending'; curEnd=e; endReveal=0; endClicks=clicks;
+  endNew=!save.found[e.id];
+  if(endNew){ save.found[e.id]=1; celebrate=1.4; }
+  // fastest-escape (asc) — only escapes count as an "escape run"
+  const isEscape=(e.kind==='escape');
+  if(isEscape){ if(!save.bestClicks||clicks<save.bestClicks) save.bestClicks=clicks; }
+  persist();
+  // post to platform
+  const scores={endings:foundCount()};
+  if(isEscape) scores.clicks=clicks;
+  parent.postMessage({gs:'gameover',scores},'*');
+  // challenge: fewest clicks to escape (asc)
+  if(cTarget&&isEscape&&clicks<=cTarget){ chalBeat=true; parent.postMessage({gs:'challenge_beaten',score:clicks},'*'); }
+  // sound
+  if(e.kind==='escape') sEscape(); else if(e.kind==='death') sDeath(); else sTwist();
+  if(endNew) setTimeout(()=>{ if(e.kind==='death'){} else sFanfare(); },260);
+  setMood(e.kind==='death'?'dark':'gold');
+}
+function restart(){ cur='start'; prev='start'; node=NODES.start; items={}; clicks=0; trans=0; mode='play'; curEnd=null; chalBeat=false; if(AC)setMood(node.mood); }
+function beginPlay(){ mode='play'; trans=0; if(AC)setMood(node.mood); }
+
+/* ============================ INPUT ============================ */
+function toGame(e){return{x:(e.clientX-offX)/scale,y:(e.clientY-offY)/scale}}
+function hit(p){ for(let i=0;i<btns.length;i++){const b=btns[i]; if(p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h)return i;} return -1; }
+function pickBtn(i){
+  const b=btns[i]; if(!b)return; b.fn();
+}
+cv.addEventListener('pointerdown',e=>{
+  e.preventDefault(); initAudio(); if(AC&&AC.state==='suspended')AC.resume(); window.focus();
+  if(!AC){} else if(!curPad) setMood(node.mood);
+  const p=toGame(e); const i=hit(p);
+  if(mode==='splash'){ beginPlay(); sConfirm(); return; }
+  if(i>=0){ pickBtn(i); }
+});
+cv.addEventListener('pointermove',e=>{
+  const p=toGame(e); const i=hit(p);
+  if(i!==hoverBtn){ hoverBtn=i; if(i>=0&&!TOUCH)sHover(); }
+});
+addEventListener('keydown',e=>{
+  const k=e.key;
+  if([' ','Enter','Tab','1','2','3','4','5','6','7','8','9','Escape','c','C'].includes(k))e.preventDefault();
+  initAudio(); if(AC&&AC.state==='suspended')AC.resume();
+  if(!curPad&&AC)setMood(node.mood);
+  if(mode==='splash'){ if(k===' '||k==='Enter'||/^[1-9]$/.test(k)){beginPlay();sConfirm();} return; }
+  if(mode==='ending'){
+    if(k==='Enter'||k===' '){ restart(); sConfirm(); }
+    else if(k==='Tab'||k==='c'||k==='C'){ mode='collection'; sClick(); }
+    return;
+  }
+  if(mode==='collection'){ if(k==='Escape'||k==='Enter'||k===' '||k==='Tab'){ mode='ending'; sClick(); } return; }
+  // play: number keys pick a visible choice
+  if(/^[1-9]$/.test(k)){
+    const idx=parseInt(k,10)-1; const vc=visibleChoices(node);
+    if(vc[idx]){ chooseChoice(vc[idx]); }
+  }
+});
+function chooseChoice(c){
+  clicks++;
+  if(c.give){ items[c.give]=1; sPick(); } else sClick();
+  goto(c.to);
+  if(AC&&AC.state==='suspended')AC.resume();
+  parent.postMessage({gs:'score',score:foundCount()},'*');
+}
+addEventListener('blur',()=>{hoverBtn=-1});
+
+/* ============================ DRAWING HELPERS ============================ */
+function rr(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();}
+function poly(g,pts){g.beginPath();g.moveTo(pts[0][0],pts[0][1]);for(let i=1;i<pts.length;i++)g.lineTo(pts[i][0],pts[i][1]);g.closePath();}
+function shadowOn(g,dx,dy,bl,al){g.shadowColor='rgba(6,4,14,'+(al==null?.45:al)+')';g.shadowBlur=bl==null?22:bl;g.shadowOffsetX=dx==null?16:dx;g.shadowOffsetY=dy==null?24:dy;}
+function shadowOff(g){g.shadowColor='transparent';g.shadowBlur=0;g.shadowOffsetX=0;g.shadowOffsetY=0;}
+/* extruded "cut-paper" block: side face then top face */
+function block(g,pts,dx,dy,top,side){
+  poly(g,pts.map(p=>[p[0]+dx,p[1]+dy])); g.fillStyle=side; g.fill();
+  // connect near+far silhouette roughly by filling the shifted + connecting quads
+  for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length];
+    poly(g,[[a[0],a[1]],[b[0],b[1]],[b[0]+dx,b[1]+dy],[a[0]+dx,a[1]+dy]]); g.fillStyle=side; g.fill();}
+  poly(g,pts); g.fillStyle=top; g.fill();
+}
+function wrap(g,text,x,y,maxW,lh){
+  const paras=text.split('\n'); let cy=y;
+  for(const para of paras){
+    const words=para.split(' '); let line='';
+    for(const w of words){ const t=line?line+' '+w:w;
+      if(g.measureText(t).width>maxW&&line){ g.fillText(line,x,cy); line=w; cy+=lh; } else line=t; }
+    if(line){ g.fillText(line,x,cy); cy+=lh; }
+    cy+=lh*.35;
+  }
+  return cy;
+}
+function measureWrap(g,text,maxW,lh){
+  const paras=text.split('\n'); let n=0;
+  for(const para of paras){ const words=para.split(' '); let line='',lines=1;
+    for(const w of words){ const t=line?line+' '+w:w;
+      if(g.measureText(t).width>maxW&&line){ lines++; line=w; } else line=t; }
+    n+=lines; }
+  return n;
+}
+
+/* ============================ SCENE TABLEAUS ============================ */
+/* drawn into the right field, focal near (735,275). g already translated for parallax. */
+function floor(g,pal,x0,x1,horizon,col){
+  poly(g,[[x0,horizon],[x1,horizon],[x1+120,H+40],[x0-120,H+40]]);
+  g.fillStyle=col; g.fill();
+}
+function moon(g,cx,cy,r,glow){
+  const grd=g.createRadialGradient(cx-r*.3,cy-r*.3,r*.2,cx,cy,r);
+  grd.addColorStop(0,'#FFF6E0');grd.addColorStop(.7,CREAM);grd.addColorStop(1,'#D8C79A');
+  shadowOn(g,0,0,60,.0); g.shadowColor=glow; g.shadowBlur=70;
+  g.beginPath();g.arc(cx,cy,r,0,6.28);g.fillStyle=grd;g.fill(); shadowOff(g);
+  g.fillStyle='rgba(180,160,110,.45)';
+  [[.3,-.2,.16],[-.25,.28,.12],[.05,.42,.08],[-.4,-.1,.07]].forEach(m=>{g.beginPath();g.arc(cx+m[0]*r,cy+m[1]*r,m[2]*r,0,6.28);g.fill();});
+}
+function stars(g,pal,n,seed){const r=mulberry32(seed);for(let i=0;i<n;i++){const x=560+r()*400,y=r()*300,tw=.4+.6*Math.abs(Math.sin(now*1.5+i));g.globalAlpha=tw*.9;g.fillStyle=i%5===0?pal.ac:CREAM;g.fillRect(x,y,1.7,1.7);}g.globalAlpha=1;}
+function scene(art,pal){
+  const g=ctx; const cx=735;
+  switch(art){
+    case 'room':{
+      floor(g,pal,540,960,360,mix(pal.a,'#000000',.25));
+      stars(g,pal,26,3);
+      // window with moon
+      shadowOn(g); g.fillStyle=mix(pal.b,'#000',.15); rr(g,610,70,150,200,8); g.fill(); shadowOff(g);
+      g.save();g.beginPath();rr(g,618,78,134,184,6);g.clip();
+      const sg=g.createLinearGradient(0,60,0,270);sg.addColorStop(0,mix(pal.b,'#000',.3));sg.addColorStop(1,pal.a);g.fillStyle=sg;g.fillRect(600,60,180,230);
+      moon(g,700,150,42,pal.gl);g.restore();
+      g.strokeStyle=CREAM;g.lineWidth=5;g.strokeRect(618,78,134,184);g.beginPath();g.moveTo(685,78);g.lineTo(685,262);g.moveTo(618,170);g.lineTo(752,170);g.stroke();
+      // couch (extruded cut-paper)
+      shadowOn(g,18,26,26,.4);
+      block(g,[[600,330],[860,330],[860,430],[600,430]],-14,-10,pal.ac,mix(pal.ac,'#000',.35));
+      shadowOff(g);
+      block(g,[[590,300],[615,300],[615,430],[590,430]],-14,-10,mix(pal.ac,'#fff',.12),mix(pal.ac,'#000',.4));
+      block(g,[[600,300],[860,300],[860,340],[600,340]],-14,-10,mix(pal.ac,'#fff',.14),mix(pal.ac,'#000',.35));
+      // clock silhouette right
+      g.fillStyle=mix(pal.a,'#000',.35);rr(g,880,250,44,190,6);g.fill();
+      break;
+    }
+    case 'bed':{
+      floor(g,pal,540,960,380,mix(pal.a,'#000',.28));
+      stars(g,pal,18,5);
+      shadowOn(g,20,26,30,.42);
+      block(g,[[590,300],[900,300],[900,440],[590,440]],-16,-12,pal.ac,mix(pal.ac,'#000',.38));
+      shadowOff(g);
+      block(g,[[580,270],[610,270],[610,440],[580,440]],-16,-12,mix(pal.ac,'#fff',.1),mix(pal.ac,'#000',.42));
+      // pillow
+      shadowOn(g,8,10,14,.35);rr(g,620,282,120,52,16);g.fillStyle=CREAM;g.fill();shadowOff(g);
+      // the sacred gummy bear
+      g.fillStyle=AMBER;g.beginPath();g.arc(820,300,9,0,6.28);g.fill();g.beginPath();g.arc(820,290,6,0,6.28);g.fill();
+      g.fillStyle=mix(AMBER,'#000',.5);g.fillRect(817,288,2,2);g.fillRect(822,288,2,2);
+      break;
+    }
+    case 'door':{
+      floor(g,pal,540,960,400,mix(pal.a,'#000',.3));
+      // big dimensional door
+      shadowOn(g,22,10,30,.5);
+      block(g,[[640,90],[840,90],[840,440],[640,440]],-20,0,mix(pal.b,'#3a2a1a',.5),mix(pal.a,'#000',.4));
+      shadowOff(g);
+      // panels
+      g.fillStyle=mix(pal.b,'#000',.25);[[665,120],[760,120],[665,270],[760,270]].forEach(p=>{rr(g,p[0],p[1],80,120,6);g.fill();});
+      // locks (spectacle of locks)
+      g.fillStyle=AMBER;for(let i=0;i<6;i++){g.beginPath();g.arc(825,140+i*46,7,0,6.28);g.fill();}
+      g.fillStyle=mix(pal.a,'#000',.5);rr(g,648,255,190,14,4);g.fill(); // chain
+      // sign
+      shadowOn(g,4,6,8,.4);rr(g,690,300,120,40,6);g.fillStyle=CREAM;g.fill();shadowOff(g);
+      g.fillStyle=INK;g.font=DISP(11);g.textAlign='center';g.fillText('HAVE YOU TRIED',750,318);g.fillText('KNOCKING?',750,332);g.textAlign='left';
+      break;
+    }
+    case 'foyer':{
+      floor(g,pal,540,960,390,mix(pal.a,'#000',.3));
+      // coat rack shapes
+      g.fillStyle=mix(pal.a,'#000',.2);for(let i=0;i<3;i++){const x=600+i*30;rr(g,x,150,26,240,10);g.fill();}
+      // skeleton butler (dimensional, friendly)
+      const bx=770,by=200;
+      shadowOn(g,16,20,22,.4);
+      // waistcoat
+      block(g,[[bx-34,by+40],[bx+34,by+40],[bx+30,by+170],[bx-30,by+170]],-10,-6,mix(pal.b,'#222',.4),mix(pal.a,'#000',.4));
+      shadowOff(g);
+      g.fillStyle=CREAM;
+      // skull
+      g.beginPath();g.arc(bx,by,30,0,6.28);g.fill();g.fillRect(bx-16,by+18,32,20);
+      g.fillStyle=INK;g.beginPath();g.arc(bx-11,by-4,7,0,6.28);g.arc(bx+11,by-4,7,0,6.28);g.fill();
+      g.fillStyle=INK;g.beginPath();g.moveTo(bx-2,by+6);g.lineTo(bx+2,by+6);g.lineTo(bx,by+14);g.closePath();g.fill();
+      // grin
+      g.strokeStyle=INK;g.lineWidth=3;g.beginPath();g.moveTo(bx-14,by+26);g.lineTo(bx+14,by+26);g.stroke();
+      for(let i=-2;i<=2;i++){g.beginPath();g.moveTo(bx+i*6,by+22);g.lineTo(bx+i*6,by+30);g.stroke();}
+      // bow tie
+      g.fillStyle=CORAL;poly(g,[[bx-16,by+44],[bx-2,by+52],[bx-16,by+60]]);g.fill();poly(g,[[bx+16,by+44],[bx+2,by+52],[bx+16,by+60]]);g.fill();
+      // arm/hand offered
+      g.strokeStyle=CREAM;g.lineWidth=8;g.lineCap='round';g.beginPath();g.moveTo(bx+28,by+90);g.lineTo(bx+70,by+120);g.stroke();g.fillStyle=CREAM;g.beginPath();g.arc(bx+74,by+124,9,0,6.28);g.fill();
+      // name tag
+      g.fillStyle=AMBER;rr(g,bx-34,by+70,52,15,3);g.fill();g.fillStyle=INK;g.font=DISP(8.5);g.textAlign='center';g.textBaseline='middle';g.fillText('BARNABY',bx-8,by+78);g.textBaseline='alphabetic';g.textAlign='left';
+      break;
+    }
+    case 'window':{
+      const sg=g.createLinearGradient(0,0,0,H);sg.addColorStop(0,mix(pal.a,'#000',.2));sg.addColorStop(1,pal.a);g.fillStyle=sg;g.fillRect(540,0,420,H);
+      stars(g,pal,40,7);
+      moon(g,760,220,120,pal.gl);
+      // window frame in front
+      g.strokeStyle=mix(pal.a,'#000',.3);g.lineWidth=26;g.strokeRect(560,40,360,440);
+      g.strokeStyle=CREAM;g.lineWidth=8;g.strokeRect(560,40,360,440);
+      g.beginPath();g.moveTo(740,40);g.lineTo(740,480);g.moveTo(560,260);g.lineTo(920,260);g.stroke();
+      break;
+    }
+    case 'moon':{
+      const sg=g.createLinearGradient(0,0,0,H);sg.addColorStop(0,'#1B1440');sg.addColorStop(1,mix(pal.b,'#000',.3));g.fillStyle=sg;g.fillRect(540,0,420,H);
+      stars(g,pal,60,11);
+      // giant close moon surface
+      moon(g,760,120,220,pal.gl);
+      // craters as dimensional bowls
+      g.fillStyle='rgba(150,130,90,.4)';[[700,120,26],[820,150,18],[760,60,14],[680,60,10]].forEach(c=>{g.beginPath();g.arc(c[0],c[1],c[2],0,6.28);g.fill();});
+      // hand of light
+      g.strokeStyle=AMBER;g.lineWidth=6;g.globalAlpha=.5+.3*Math.sin(now*3);g.beginPath();g.moveTo(760,300);g.lineTo(760,420);g.stroke();g.globalAlpha=1;
+      g.fillStyle=AMBER;g.globalAlpha=.7;g.beginPath();g.arc(760,300,16,0,6.28);g.fill();g.globalAlpha=1;
+      break;
+    }
+    case 'hall':{
+      // one-point perspective corridor
+      const vx=760,vy=250;
+      g.fillStyle=mix(pal.a,'#000',.2);g.fillRect(540,0,420,H);
+      // floor + ceiling wedges to vanishing point
+      g.fillStyle=mix(pal.a,'#000',.4);poly(g,[[540,H],[960,H],[vx,vy]]);g.fill();
+      g.fillStyle=mix(pal.b,'#000',.35);poly(g,[[540,0],[960,0],[vx,vy]]);g.fill();
+      g.fillStyle=mix(pal.b,'#000',.2);poly(g,[[540,0],[540,H],[vx,vy]]);g.fill();
+      g.fillStyle=mix(pal.b,'#000',.28);poly(g,[[960,0],[960,H],[vx,vy]]);g.fill();
+      // receding doors as teeth
+      for(let i=0;i<4;i++){const t=i/4,tt=(i+.6)/4;
+        const x0=lerp(560,vx,t),x1=lerp(560,vx,tt),yt=lerp(70,vy-20,t),yb=lerp(470,vy+20,t);
+        g.fillStyle=mix(pal.ac,'#000',.15+t*.4);poly(g,[[x0,yt],[x1,lerp(70,vy-20,tt)],[x1,lerp(470,vy+20,tt)],[x0,yb]]);g.fill();
+        const rx0=lerp(960,vx,t),rx1=lerp(960,vx,tt);
+        g.fillStyle=mix(pal.ac,'#000',.2+t*.4);poly(g,[[rx0,yt],[rx1,lerp(70,vy-20,tt)],[rx1,lerp(470,vy+20,tt)],[rx0,yb]]);g.fill();
+      }
+      // clock glow at the end
+      g.fillStyle=AMBER;g.globalAlpha=.5+.2*Math.sin(now*2);g.beginPath();g.arc(vx,vy,10,0,6.28);g.fill();g.globalAlpha=1;
+      break;
+    }
+    case 'clock':{
+      floor(g,pal,540,960,410,mix(pal.a,'#000',.3));
+      const cxx=750;
+      shadowOn(g,20,14,28,.5);
+      block(g,[[cxx-70,80],[cxx+70,80],[cxx+64,440],[cxx-64,440]],-16,-4,mix('#3a2416',pal.b,.3),mix(pal.a,'#000',.45));
+      shadowOff(g);
+      // face
+      g.fillStyle=CREAM;g.beginPath();g.arc(cxx,150,50,0,6.28);g.fill();
+      g.strokeStyle=INK;g.lineWidth=3;for(let i=0;i<12;i++){const a=i/12*6.28;g.beginPath();g.moveTo(cxx+Math.cos(a)*44,150+Math.sin(a)*44);g.lineTo(cxx+Math.cos(a)*40,150+Math.sin(a)*40);g.stroke();}
+      // hands frozen at 3:33 (~ -60deg hour, -18deg minute)
+      g.lineWidth=5;g.strokeStyle=INK;g.beginPath();g.moveTo(cxx,150);g.lineTo(cxx+Math.cos(-0.9)*22,150+Math.sin(-0.9)*22);g.stroke();
+      g.lineWidth=3;g.beginPath();g.moveTo(cxx,150);g.lineTo(cxx+Math.cos(-0.31)*38,150+Math.sin(-0.31)*38);g.stroke();
+      g.fillStyle=CORAL;g.beginPath();g.arc(cxx,150,5,0,6.28);g.fill();
+      // pendulum
+      const pa=Math.sin(now*1.6)*.4;
+      g.strokeStyle=AMBER;g.lineWidth=4;g.beginPath();g.moveTo(cxx,250);g.lineTo(cxx+Math.sin(pa)*40,360);g.stroke();
+      g.fillStyle=AMBER;g.beginPath();g.arc(cxx+Math.sin(pa)*40,360,16,0,6.28);g.fill();
+      // keyhole
+      g.fillStyle=INK;g.beginPath();g.arc(cxx,300,6,0,6.28);g.fill();g.fillRect(cxx-2,300,4,14);
+      break;
+    }
+    case 'clockopen':{
+      floor(g,pal,540,960,410,mix(pal.a,'#000',.3));
+      const cxx=750;
+      shadowOn(g,20,14,28,.5);
+      block(g,[[cxx-80,80],[cxx+80,80],[cxx+72,440],[cxx-72,440]],-16,-4,mix('#3a2416',pal.b,.3),mix(pal.a,'#000',.45));
+      shadowOff(g);
+      // open velvet cavity
+      const vg=g.createRadialGradient(cxx,300,10,cxx,300,120);vg.addColorStop(0,'#2A4C9C');vg.addColorStop(1,'#0E1A44');
+      g.fillStyle=vg;rr(g,cxx-56,190,112,220,10);g.fill();
+      // lever
+      g.strokeStyle=AMBER;g.lineWidth=10;g.lineCap='round';const lv=celebrate>0?-.5:.4;g.beginPath();g.moveTo(cxx,340);g.lineTo(cxx+Math.sin(lv)*44,250);g.stroke();
+      g.fillStyle=CORAL;g.beginPath();g.arc(cxx+Math.sin(lv)*44,250,15,0,6.28);g.fill();
+      g.lineCap='butt';
+      // sticky note
+      g.save();g.translate(cxx-30,300);g.rotate(-.12);shadowOn(g,3,4,6,.4);g.fillStyle=AMBER;rr(g,0,0,54,44,3);g.fill();shadowOff(g);g.restore();
+      // glow of dawn hint
+      g.fillStyle=AMBER;g.globalAlpha=.15+.1*Math.sin(now*2);g.beginPath();g.arc(cxx,150,60,0,6.28);g.fill();g.globalAlpha=1;
+      break;
+    }
+    case 'stairs':{
+      g.fillStyle=mix(pal.a,'#000',.2);g.fillRect(540,0,420,H);
+      // Escher-ish stack of extruded steps spiralling
+      const base=430;
+      for(let i=0;i<11;i++){
+        const x=600+ (i%2===0? i*14 : i*14+4);
+        const y=base-i*34;
+        const w=180-i*8;
+        const glow=(i===10)?1:0;
+        shadowOn(g,10,14,16,.4);
+        block(g,[[x,y],[x+w,y],[x+w,y+26],[x,y+26]],-14,-8, glow?AMBER:mix(pal.ac,'#000',.05+i*.02), mix(pal.ac,'#000',.4));
+        shadowOff(g);
+        if(glow){ // the 13th step glimmer
+          g.fillStyle='rgba(255,194,75,.4)';g.beginPath();g.arc(x+w/2,y+13,26+4*Math.sin(now*4),0,6.28);g.fill();
+        }
+      }
+      stars(g,pal,16,13);
+      break;
+    }
+    case 'kitchen':{
+      floor(g,pal,540,960,400,mix(pal.a,'#000',.28));
+      // counter
+      shadowOn(g,14,18,20,.4);block(g,[[560,340],[720,340],[720,440],[560,440]],-14,-8,mix(pal.b,'#000',.2),mix(pal.a,'#000',.4));shadowOff(g);
+      // deviled eggs plate
+      g.fillStyle=CREAM;g.beginPath();g.ellipse(630,338,40,12,0,0,6.28);g.fill();
+      g.fillStyle=AMBER;[[615,334],[630,332],[645,334]].forEach(e=>{g.beginPath();g.ellipse(e[0],e[1],9,6,0,0,6.28);g.fill();});
+      // the hungry fridge, glowing, too many teeth
+      const fx=790,fy=150;
+      shadowOn(g,18,20,26,.45);block(g,[[fx,fy],[fx+120,fy],[fx+120,fy+280],[fx,fy+280]],-16,-8,mix(pal.ac,'#fff',.05),mix(pal.a,'#000',.45));shadowOff(g);
+      // open door spilling gold
+      const gg=g.createLinearGradient(fx+60,fy,fx+180,fy+200);gg.addColorStop(0,'#FFE9A8');gg.addColorStop(1,'rgba(255,180,60,0)');
+      g.fillStyle=gg;poly(g,[[fx+90,fy+30],[fx+220,fy+70],[fx+220,fy+230],[fx+90,fy+250]]);g.fill();
+      g.fillStyle=CREAM;poly(g,[[fx+88,fy+30],[fx+150,fy+50],[fx+150,fy+250],[fx+88,fy+250]]);g.fill();
+      // teeth
+      g.fillStyle=CREAM;for(let i=0;i<5;i++){poly(g,[[fx+96+i*11,fy+40],[fx+107+i*11,fy+40],[fx+101+i*11,fy+58]]);g.fill();}
+      break;
+    }
+    case 'plant':{
+      floor(g,pal,540,960,410,mix(pal.a,'#000',.3));
+      const px=760;
+      // pot (extruded, chipped)
+      shadowOn(g,14,16,20,.42);block(g,[[px-46,330],[px+46,330],[px+36,430],[px-36,430]],-12,-6,CORAL,mix(CORAL,'#000',.4));shadowOff(g);
+      g.fillStyle=mix(CORAL,'#000',.3);poly(g,[[px+30,338],[px+40,338],[px+34,352]]);g.fill(); // chip
+      // fronds
+      g.strokeStyle=TEAL;g.lineWidth=6;g.lineCap='round';
+      for(let i=-3;i<=3;i++){const a=-Math.PI/2+i*.32+Math.sin(now*1.2+i)*.05;g.beginPath();g.moveTo(px,332);const ex=px+Math.cos(a)*(90+Math.abs(i)*6),ey=332+Math.sin(a)*(90+Math.abs(i)*6);g.quadraticCurveTo(px+Math.cos(a)*40,332+Math.sin(a)*40-10,ex,ey);g.stroke();
+        g.fillStyle=mix(TEAL,'#fff',.1);g.beginPath();g.arc(ex,ey,7,0,6.28);g.fill();}
+      g.lineCap='butt';
+      // Gerald's disapproving eyes
+      g.fillStyle=CREAM;g.beginPath();g.arc(px-12,300,8,0,6.28);g.arc(px+12,300,8,0,6.28);g.fill();
+      g.fillStyle=INK;g.beginPath();g.arc(px-12,302,3,0,6.28);g.arc(px+12,302,3,0,6.28);g.fill();
+      // furrowed brow
+      g.strokeStyle=INK;g.lineWidth=3;g.beginPath();g.moveTo(px-20,290);g.lineTo(px-6,294);g.moveTo(px+20,290);g.lineTo(px+6,294);g.stroke();
+      break;
+    }
+    case 'outside':{
+      const sg=g.createLinearGradient(0,0,0,H);sg.addColorStop(0,mix(pal.a,AMBER,.15));sg.addColorStop(1,pal.b);g.fillStyle=sg;g.fillRect(540,0,420,H);
+      stars(g,pal,30,17);
+      // sunrise / free horizon
+      const hg=g.createLinearGradient(0,300,0,420);hg.addColorStop(0,AMBER);hg.addColorStop(1,'rgba(255,194,75,0)');
+      g.fillStyle=hg;g.fillRect(540,300,420,120);
+      g.fillStyle=mix(pal.b,AMBER,.4);g.beginPath();g.arc(760,360,60,Math.PI,0);g.fill();
+      // grass
+      g.fillStyle=mix(TEAL,'#000',.2);g.fillRect(540,360,420,H);
+      g.strokeStyle=mix(TEAL,'#fff',.1);g.lineWidth=3;for(let i=0;i<30;i++){const x=545+i*14;g.beginPath();g.moveTo(x,H);g.lineTo(x+Math.sin(now+i)*4,H-20-((i*37)%18));g.stroke();}
+      break;
+    }
+    case 'dawn':{
+      const sg=g.createLinearGradient(0,0,0,H);sg.addColorStop(0,'#FF9E5A');sg.addColorStop(.5,AMBER);sg.addColorStop(1,'#FFE39A');g.fillStyle=sg;g.fillRect(540,0,420,H);
+      // rising sun
+      g.fillStyle='#FFF3C8';g.globalAlpha=.9;g.beginPath();g.arc(760,300,90+6*Math.sin(now*1.5),0,6.28);g.fill();g.globalAlpha=1;
+      for(let i=0;i<12;i++){const a=i/12*6.28+now*.2;g.strokeStyle='rgba(255,255,255,.5)';g.lineWidth=6;g.beginPath();g.moveTo(760+Math.cos(a)*100,300+Math.sin(a)*100);g.lineTo(760+Math.cos(a)*150,300+Math.sin(a)*150);g.stroke();}
+      // a couple of birds
+      g.strokeStyle=mix('#5A3A2A',AMBER,.2);g.lineWidth=3;[[620,140],[680,120],[840,160]].forEach(b=>{g.beginPath();g.moveTo(b[0]-10,b[1]);g.quadraticCurveTo(b[0],b[1]-8,b[0]+10,b[1]);g.stroke();});
+      break;
+    }
+    default:{ floor(g,pal,540,960,360,mix(pal.a,'#000',.25)); }
+  }
+}
+
+/* ============================ HUD / LAYOUT ============================ */
+function kindTag(k){return k==='escape'?'ESCAPE':k==='death'?'DEMISE':'TWIST'}
+function kindCol(k){return k==='escape'?TEAL:k==='death'?CORAL:AMBER}
+
+function drawPlay(){
+  const g=ctx; btns.length=0;
+  const pal=moodPal(node.mood);
+  const e=ease(clamp(trans,0,1));
+  // ---- full-bleed backdrop ----
+  const bg=g.createLinearGradient(0,0,0,H); bg.addColorStop(0,pal.a); bg.addColorStop(1,mix(pal.b,'#000',.25));
+  g.fillStyle=bg; g.fillRect(0,0,W,H);
+  // ambient dust
+  for(const d of DUST){ d.ph+=d.s*.02; const y=(d.y+Math.sin(now*.4+d.ph)*8); g.globalAlpha=.10+.10*Math.sin(now+d.ph); g.fillStyle=CREAM; g.beginPath(); g.arc(d.x,y,d.r,0,6.28); g.fill(); }
+  g.globalAlpha=1;
+  // ---- right tableau (parallax slide in) ----
+  g.save();
+  g.beginPath(); g.rect(500,0,460,H); g.clip();
+  g.translate((1-e)*60,0);
+  scene(node.art,pal);
+  g.restore();
+  // ---- left field with angled seam ----
+  g.save();
+  poly(g,[[0,0],[540,0],[500,H],[0,H]]);
+  const lf=g.createLinearGradient(0,0,540,H); lf.addColorStop(0,mix(pal.a,'#000',.15)); lf.addColorStop(1,mix(pal.a,'#000',.42));
+  g.fillStyle=lf; g.fill();
+  // coral seam stripe
+  poly(g,[[540,0],[548,0],[508,H],[500,H]]); g.fillStyle=pal.ac; g.fill();
+  g.restore();
+  // content slides in from left
+  g.save(); g.translate(-40*(1-e),0); g.globalAlpha=e;
+  const LX=44, MAXW=452;
+  // location label
+  g.fillStyle=pal.ac; g.font=DISP(11); g.textAlign='left'; g.fillText('3:33 AM  ·  THE LONGEST NIGHT',LX,40);
+  g.fillStyle=CREAM; g.font=DISP(30);
+  // label may be long; scale down if needed
+  let ls=30; while(g.measureText(node.loc).width>MAXW&&ls>18){ls-=1;g.font=DISP(ls);}
+  g.fillText(node.loc,LX,74);
+  g.fillStyle=pal.ac; g.fillRect(LX,86,54,4);
+  // prose
+  const vc=visibleChoices(node);
+  const cardH=Math.min(46,Math.max(38,(232)/vc.length - 8)); const gap=8;
+  const choicesH=vc.length*cardH+(vc.length-1)*gap;
+  const choicesTop=524-choicesH;
+  g.fillStyle='rgba(244,236,216,.94)'; g.font=BODY(16.5);
+  g.textBaseline='alphabetic';
+  wrap(g,node.text,LX,120,MAXW,24);
+  g.restore();
+  // ---- choice cards (fade/slide staggered) ----
+  g.font=DISP(15);
+  for(let i=0;i<vc.length;i++){
+    const c=vc[i]; const y=choicesTop+i*(cardH+gap);
+    const st=ease(clamp((trans-.15-i*.06)/.5,0,1));
+    if(st<=0) continue;
+    const x=44 - (1-st)*30; const w=470; const al=st;
+    const hov=(hoverBtn>=0&&btns[hoverBtn]&&btns[hoverBtn].ci===i);
+    g.globalAlpha=al;
+    shadowOn(g,hov?4:8,hov?6:11,hov?8:14,.4);
+    rr(g,x,y,w,cardH,10); g.fillStyle=hov?CREAM:'rgba(244,236,216,.92)'; g.fill();
+    shadowOff(g);
+    if(hov){ g.strokeStyle=pal.ac; g.lineWidth=3; rr(g,x,y,w,cardH,10); g.stroke(); }
+    // number badge
+    g.fillStyle=pal.ac; rr(g,x+8,y+cardH/2-14,28,28,7); g.fill();
+    g.fillStyle=INK; g.font=DISP(15); g.textAlign='center'; g.textBaseline='middle'; g.fillText(String(i+1),x+22,y+cardH/2+1);
+    // label
+    g.fillStyle=INK; g.font=DISP(cardH<42?13:14.5); g.textAlign='left';
+    let lbl=c.label; while(g.measureText(lbl).width>w-58&&lbl.length>6){lbl=lbl.slice(0,-2);} if(lbl!==c.label)lbl=lbl.slice(0,-1)+'…';
+    g.fillText(lbl,x+46,y+cardH/2+1);
+    if(hov){ g.fillStyle=pal.ac; g.fillText('›',x+w-20,y+cardH/2+1); }
+    g.textBaseline='alphabetic';
+    g.globalAlpha=1;
+    // register hit rect (real position, only when settled enough to click)
+    if(st>.5) btns.push({x:44,y,w:470,h:cardH,ci:i,fn:()=>chooseChoice(c)});
+  }
+  // ---- top-right HUD: endings counter ----
+  drawEndCounter(g,pal);
+  // challenge banner
+  if(cTarget){
+    g.font=DISP(12); g.textAlign='right';
+    g.fillStyle=chalBeat?TEAL:AMBER;
+    g.fillText(chalBeat?('DARE MET ✔  ≤'+cTarget+' CLICKS'):('DARE: ESCAPE IN ≤ '+cTarget+' CLICKS'),W-20,H-16);
+    g.textAlign='left';
+  }
+  // first-time controls hint
+  g.font=BODY(12.5); g.fillStyle='rgba(244,236,216,.7)'; g.textAlign='left';
+  g.fillText(TOUCH?'Tap a choice · click your way out, find every ending':'Click a choice · or press 1–'+Math.min(9,vc.length)+' · find every way out',44,536);
+}
+
+function drawEndCounter(g,pal){
+  g.textAlign='right'; g.textBaseline='alphabetic';
+  g.font=DISP(13); g.fillStyle=CREAM; g.fillText('ENDINGS FOUND',W-20,34);
+  g.font=DISP(30); g.fillStyle=AMBER; g.fillText(foundCount()+' / '+N_ENDINGS,W-20,66);
+  // pips
+  let px=W-20;
+  for(let i=ENDINGS.length-1;i>=0;i--){ const e=ENDINGS[i]; const got=save.found[e.id];
+    g.beginPath(); g.arc(px-6,80,5,0,6.28); g.fillStyle=got?kindCol(e.kind):'rgba(244,236,216,.18)'; g.fill(); px-=15; }
+  g.textAlign='left';
+}
+
+function drawSplash(){
+  const g=ctx; btns.length=0;
+  const pal=moodPal('spooky');
+  const bg=g.createLinearGradient(0,0,0,H); bg.addColorStop(0,INK); bg.addColorStop(1,NAVY);
+  g.fillStyle=bg; g.fillRect(0,0,W,H);
+  for(const d of DUST){ const y=(d.y+Math.sin(now*.4+d.ph)*8); g.globalAlpha=.10+.10*Math.sin(now+d.ph); g.fillStyle=CREAM; g.beginPath(); g.arc(d.x,y,d.r,0,6.28); g.fill(); }
+  g.globalAlpha=1;
+  stars(g,pal,50,3);
+  // moon behind title
+  moon(g,720,180,150,'#3B4E8C');
+  // couch silhouette (lower-right, clear of the type column)
+  shadowOn(g,16,20,24,.4);
+  block(g,[[600,452],[890,452],[890,522],[600,522]],-14,-10,PLUM,mix(PLUM,'#000',.4)); shadowOff(g);
+  block(g,[[600,430],[624,430],[624,522],[600,522]],-14,-10,mix(PLUM,'#fff',.1),mix(PLUM,'#000',.42));
+  // small sleeper under a blanket
+  g.fillStyle=CREAM; rr(g,636,438,150,26,12); g.fill();
+  g.fillStyle=CORAL; rr(g,700,442,86,20,10); g.fill();
+  // title
+  g.textAlign='left';
+  g.fillStyle=CORAL; g.font=DISP(74);
+  g.fillText('THE',80,180);
+  g.fillStyle=CREAM; g.font=DISP(96);
+  g.fillText('LONGEST',80,262);
+  g.fillStyle=AMBER; g.font=DISP(96);
+  g.fillText('NIGHT',80,352);
+  g.fillStyle=TEAL; g.fillRect(84,372,220,6);
+  // clock reads 3:33
+  g.fillStyle=CREAM; g.font=DISP(15); g.fillText('IT IS 3:33 AM. IT HAS BEEN, FOR ELEVEN YEARS.',88,404);
+  // prompt
+  const pulse=.6+.4*Math.sin(now*3);
+  g.globalAlpha=pulse; g.fillStyle=AMBER; g.font=DISP(20);
+  g.fillText(TOUCH?'TAP TO WAKE UP':'CLICK OR PRESS ANY KEY TO WAKE UP',88,452); g.globalAlpha=1;
+  g.fillStyle='rgba(244,236,216,.75)'; g.font=BODY(14);
+  g.fillText('Click your way out. Pick choices (or press 1–6). Every wrong turn is a story.',88,484);
+  g.fillText(foundCount()+' of '+N_ENDINGS+' endings discovered.  A real branching tree — find them all.',88,508);
+  // whole screen is a start button
+  btns.push({x:0,y:0,w:W,h:H,ci:-1,fn:()=>{beginPlay();sConfirm();}});
+}
+
+function drawEnding(){
+  const g=ctx; btns.length=0;
+  const e=curEnd; endReveal=Math.min(1,endReveal+ .02);
+  const isDeath=e.kind==='death';
+  const pal=moodPal(isDeath?'dark':'gold');
+  // dramatic bg
+  const bg=g.createLinearGradient(0,0,0,H); bg.addColorStop(0,pal.a); bg.addColorStop(1,mix(pal.b,'#000',.2));
+  g.fillStyle=bg; g.fillRect(0,0,W,H);
+  // tableau behind (dim)
+  g.save(); g.globalAlpha=.5; g.beginPath(); g.rect(0,0,W,H); g.clip(); scene(NODES[cur].art,moodPal(NODES[cur].mood)); g.restore();
+  g.fillStyle=isDeath?'rgba(10,8,18,.72)':'rgba(20,10,4,.64)'; g.fillRect(0,0,W,H);
+  const cx=W/2;
+  // celebrate: confetti drifting down (not over the title)
+  if(celebrate>0){ celebrate=Math.max(0,celebrate-1/60);
+    const prog=1.4-celebrate;
+    for(let i=0;i<44;i++){ const cxp=(i*97)%W; const yy=(((i*53)%H)+prog*440)%(H+40)-20;
+      g.globalAlpha=Math.min(1,celebrate*.9); g.fillStyle=[CORAL,AMBER,TEAL,ROSE,CREAM][i%5];
+      g.save(); g.translate(cxp,yy); g.rotate(now*4+i); g.fillRect(-3,-3,6,6); g.restore(); }
+    g.globalAlpha=1;
+  }
+  g.textAlign='center';
+  // NEW ENDING banner
+  if(endNew){ const p=.7+.3*Math.sin(now*5); g.globalAlpha=Math.min(1,endReveal*2)*p; g.fillStyle=AMBER; g.font=DISP(22); g.fillText('★ NEW ENDING DISCOVERED ★',cx,84); g.globalAlpha=1; }
+  // kind tag
+  g.globalAlpha=Math.min(1,endReveal*2);
+  g.fillStyle=kindCol(e.kind); g.font=DISP(15);
+  g.fillText((e.secret?'SECRET ':'')+kindTag(e.kind)+(e.kind==='escape'?' — YOU GOT OUT':e.kind==='death'?' — YOU DID NOT':' — WELL, THEN'),cx,120);
+  // ending name (big, may wrap)
+  let ns=54; g.font=DISP(ns); while(g.measureText(e.name).width>W-120&&ns>26){ns-=2;g.font=DISP(ns);}
+  g.fillStyle='rgba(0,0,0,.6)'; g.fillText(e.name,cx+3,179);
+  g.fillStyle=CREAM; g.fillText(e.name,cx,176);
+  g.fillStyle=kindCol(e.kind); g.fillRect(cx-70,192,140,5);
+  g.globalAlpha=1;
+  // ending prose (capped; long endings fade behind the bottom band)
+  g.fillStyle='rgba(244,236,216,.96)'; g.font=BODY(15.5); g.textAlign='center';
+  const lines=[]; NODES[cur].text.split('\n').forEach(p=>{ let line=''; p.split(' ').forEach(w=>{const t=line?line+' '+w:w; if(g.measureText(t).width>780&&line){lines.push(line);line=w;}else line=t;}); lines.push(line); lines.push(''); });
+  let ly=224; const shown=Math.floor(endReveal*lines.length*1.4);
+  for(let i=0;i<lines.length&&i<shown;i++){ if(ly>426)break; g.fillText(lines[i],cx,ly); ly+=lines[i]?22:9; }
+  // bottom band so long prose fades out cleanly behind the stats + buttons
+  const band=g.createLinearGradient(0,418,0,H); band.addColorStop(0,'rgba(0,0,0,0)'); band.addColorStop(.28,isDeath?'rgba(10,8,18,.94)':'rgba(20,10,4,.94)'); band.addColorStop(1,mix(pal.b,'#000',.42));
+  g.fillStyle=band; g.fillRect(0,418,W,H-418);
+  // stats
+  g.font=DISP(15); g.fillStyle=AMBER; g.textAlign='center';
+  g.fillText('ENDINGS FOUND   '+foundCount()+' / '+N_ENDINGS,cx,456);
+  g.font=BODY(13.5); g.fillStyle='rgba(244,236,216,.82)';
+  let sub='reached in '+endClicks+' click'+(endClicks===1?'':'s');
+  if(e.kind==='escape'&&save.bestClicks) sub+='   ·   fastest escape: '+save.bestClicks+' clicks';
+  g.fillText(sub,cx,475);
+  if(cTarget&&chalBeat){ g.fillStyle=TEAL; g.font=DISP(11.5); g.fillText('DARE MET — ESCAPED IN ≤ '+cTarget+' CLICKS',cx,491); }
+  // buttons
+  const bw=228,bh=38,y2=498;
+  drawButton(g,cx-bw-8,y2,bw,bh,'EXPLORE AGAIN  ⏎',CORAL,()=>{restart();sConfirm();},pal);
+  drawButton(g,cx+8,y2,bw,bh,'ENDINGS  '+foundCount()+'/'+N_ENDINGS+'  ⇥',NAVY,()=>{mode='collection';sClick();},pal);
+  g.textAlign='left';
+}
+function drawButton(g,x,y,w,h,label,col,fn,pal){
+  const hov=(hoverBtn>=0&&btns[hoverBtn]&&btns[hoverBtn].bx===x&&btns[hoverBtn].by===y);
+  shadowOn(g,hov?3:6,hov?5:9,hov?7:12,.45); rr(g,x,y,w,h,10); g.fillStyle=hov?mix(col,'#fff',.12):col; g.fill(); shadowOff(g);
+  g.fillStyle=CREAM; g.font=DISP(15); g.textAlign='center'; g.textBaseline='middle'; g.fillText(label,x+w/2,y+h/2+1); g.textBaseline='alphabetic'; g.textAlign='left';
+  btns.push({x,y,w,h,bx:x,by:y,fn});
+}
+
+function drawCollection(){
+  const g=ctx; btns.length=0;
+  const bg=g.createLinearGradient(0,0,0,H); bg.addColorStop(0,INK); bg.addColorStop(1,NAVY);
+  g.fillStyle=bg; g.fillRect(0,0,W,H);
+  stars(g,moodPal('spooky'),40,3);
+  g.textAlign='center';
+  g.fillStyle=CREAM; g.font=DISP(34); g.fillText('WAYS OUT OF THE LONGEST NIGHT',W/2,58);
+  g.fillStyle=AMBER; g.font=DISP(18); g.fillText(foundCount()+' / '+N_ENDINGS+' DISCOVERED',W/2,86);
+  const cols=2, cw=430, ch=64, gx=(W-cols*cw-30)/2, gy=110;
+  for(let i=0;i<ENDINGS.length;i++){
+    const e=ENDINGS[i]; const got=save.found[e.id];
+    const x=gx+(i%cols)*(cw+30), y=gy+Math.floor(i/cols)*(ch+12);
+    shadowOn(g,5,7,10,.4); rr(g,x,y,cw,ch,10); g.fillStyle=got?'rgba(244,236,216,.94)':'rgba(244,236,216,.08)'; g.fill(); shadowOff(g);
+    if(got){
+      g.fillStyle=kindCol(e.kind); rr(g,x,y,8,ch,4); g.fill();
+      g.textAlign='left'; g.fillStyle=INK; g.font=DISP(18); g.fillText(e.name,x+22,y+30);
+      g.fillStyle=kindCol(e.kind); g.font=DISP(11); g.fillText((e.secret?'★ SECRET  ·  ':'')+kindTag(e.kind),x+22,y+50);
+    }else{
+      g.textAlign='left'; g.fillStyle='rgba(244,236,216,.5)'; g.font=DISP(18);
+      g.fillText(e.secret?'??? — a secret way':'??? — undiscovered',x+22,y+30);
+      g.fillStyle='rgba(244,236,216,.3)'; g.font=DISP(11); g.fillText('keep exploring',x+22,y+50);
+    }
+  }
+  g.textAlign='center';
+  drawButton(g,W/2-115,H-52,230,40,'BACK  ⇥ / ESC',CORAL,()=>{mode='ending';sClick();},moodPal('spooky'));
+  g.textAlign='left';
+}
+
+/* ============================ LOOP ============================ */
+let last=0;
+function frame(ts){
+  const dt=Math.min(.033,(ts-last)/1000||.016); last=ts; now+=dt;
+  if(trans<1) trans=Math.min(1,trans+dt*2.4);
+  const g=ctx;
+  g.save();
+  g.fillStyle=INK; g.fillRect(0,0,innerWidth,innerHeight);
+  g.translate(offX,offY); g.scale(scale,scale);
+  g.beginPath(); g.rect(0,0,W,H); g.clip();
+  if(mode==='splash') drawSplash();
+  else if(mode==='play') drawPlay();
+  else if(mode==='ending') drawEnding();
+  else if(mode==='collection') drawCollection();
+  g.restore();
+  requestAnimationFrame(frame);
+}
+verifyGraph();
+requestAnimationFrame(frame);
+parent.postMessage({gs:'ready'},'*');
+</script>
+</body>
+</html>

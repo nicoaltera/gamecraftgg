@@ -1,0 +1,1424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Microbe Bloom</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#0B140F; overflow:hidden; }
+  canvas { display:block; touch-action:none; -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; cursor: default; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<script>
+'use strict';
+/* ============================================================
+   MICROBE BLOOM — eat and grow.
+   You are the tiniest glowing microbe in a huge, beautiful
+   microscopic world. Drift toward smaller microbes to ENGULF
+   them and grow; each meal makes you bigger, and a bigger you
+   can eat progressively bigger prey. But anything LARGER than
+   you will eat YOU — one touch of a bigger blob and you're gone.
+   One life. How big can you bloom?
+   Pure Canvas2D + WebAudio. Fixed 960x540 virtual, letterboxed,
+   dpr-crisp. Huge 3200x3200 world; camera follows you and zooms
+   OUT as you grow.
+
+   CONTROLS: WASD / arrow keys drive the germ (8-way, inertia);
+   SPACE / SHIFT dashes (ejects mass, lunges in your heading).
+   Touch: left-thumb virtual joystick + DASH button.
+
+   ART: "TOXIC PETRI PARTY" — gross-cute cartoon germs. Flat acid
+   fills, thick near-black ink outlines, wobbling cilia fringe,
+   googly eyes that glare (predators) or panic (prey), goofy grins
+   and fangs. Dark swampy petri-dish backdrop. YOU are the lime
+   germ with the crown + YOU tag.
+   ============================================================ */
+
+const W = 960, H = 540;
+const SLUG = 'microbe-bloom';
+const WORLD = 3200;
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+
+/* ---------- letterbox / dpr ---------- */
+let scale = 1, offX = 0, offY = 0, dpr = 1, vw = W, vh = H;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const w = window.innerWidth, h = window.innerHeight;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  cv.style.width = w + 'px'; cv.style.height = h + 'px';
+  scale = Math.min(w / W, h / H);
+  offX = (w - W * scale) / 2; offY = (h - H * scale) / 2;
+  vw = w; vh = h;
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* map a client (css px) point to virtual 960x540 coords */
+function toVirtual(cx, cy) {
+  return { x: (cx - offX) / scale, y: (cy - offY) / scale };
+}
+
+/* ---------- seeded rng ---------- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+let juice = mulberry32(0x1005EED);
+let rng = mulberry32(20260719);
+function rr(a, b) { return a + (b - a) * rng(); }
+
+/* ---------- bridge ---------- */
+function post(m) { try { parent.postMessage(m, '*'); } catch (e) {} }
+const params = new URLSearchParams(location.search);
+const challenge = Math.max(0, parseInt(params.get('c') || '0', 10) || 0);
+
+/* ---------- persistence ---------- */
+function loadBest() { try { return parseInt(localStorage.getItem('gs_best:' + SLUG) || '0', 10) || 0; } catch (e) { return 0; } }
+function saveBest(v) { try { localStorage.setItem('gs_best:' + SLUG, String(v)); } catch (e) {} }
+let best = loadBest();
+
+/* ============================================================
+   AUDIO — WebAudio synth. Starts on first gesture.
+   ============================================================ */
+const AU = {
+  ctx: null, master: null, bubbleTimer: 0,
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    try {
+      const C = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new C();
+      const comp = this.ctx.createDynamicsCompressor();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = 0.42;
+      this.master.connect(comp); comp.connect(this.ctx.destination);
+    } catch (e) { this.ctx = null; }
+  },
+  now() { return this.ctx ? this.ctx.currentTime : 0; },
+  // soft "gloop" on eat — pitch rises with your size
+  gloop(sizeFrac) {
+    if (!this.ctx) return;
+    const t = this.now();
+    const base = 220 + sizeFrac * 520 + juice() * 40;
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(base * 1.6, t);
+    o.frequency.exponentialRampToValueAtTime(base * 0.7, t + 0.13);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.22, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+    o.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t + 0.22);
+  },
+  whoosh() {
+    if (!this.ctx) return;
+    const t = this.now();
+    const dur = 0.32;
+    const buf = this.ctx.createBuffer(1, (this.ctx.sampleRate * dur) | 0, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) { const k = i / d.length; d[i] = (juice() * 2 - 1) * (1 - k) * (1 - k); }
+    const s = this.ctx.createBufferSource(); s.buffer = buf;
+    const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(360, t); bp.frequency.exponentialRampToValueAtTime(1400, t + dur);
+    bp.Q.value = 0.9;
+    const g = this.ctx.createGain(); g.gain.setValueAtTime(0.32, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(bp); bp.connect(g); g.connect(this.master); s.start(t);
+  },
+  death() {
+    if (!this.ctx) return;
+    const t = this.now();
+    // low descending tone
+    const o = this.ctx.createOscillator(); const g = this.ctx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(330, t); o.frequency.exponentialRampToValueAtTime(60, t + 1.1);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3, t + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.3);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 1.35);
+    // shimmer
+    for (let i = 0; i < 5; i++) {
+      const o2 = this.ctx.createOscillator(); const g2 = this.ctx.createGain();
+      o2.type = 'triangle';
+      o2.frequency.setValueAtTime(500 + i * 240 + juice() * 60, t);
+      g2.gain.setValueAtTime(0.0001, t + i * 0.03);
+      g2.gain.exponentialRampToValueAtTime(0.05, t + i * 0.03 + 0.02);
+      g2.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.03 + 0.5);
+      o2.connect(g2); g2.connect(this.master); o2.start(t); o2.stop(t + 0.6 + i * 0.03);
+    }
+  },
+  milestone() {
+    if (!this.ctx) return;
+    const t = this.now();
+    [0, 0.09, 0.18].forEach((dt, i) => {
+      const o = this.ctx.createOscillator(); const g = this.ctx.createGain();
+      o.type = 'sine'; o.frequency.value = 523 * Math.pow(1.26, i);
+      g.gain.setValueAtTime(0.0001, t + dt); g.gain.exponentialRampToValueAtTime(0.14, t + dt + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dt + 0.28);
+      o.connect(g); g.connect(this.master); o.start(t + dt); o.stop(t + dt + 0.3);
+    });
+  },
+  // gentle ambient bubble
+  bubble() {
+    if (!this.ctx) return;
+    const t = this.now();
+    const o = this.ctx.createOscillator(); const g = this.ctx.createGain();
+    o.type = 'sine';
+    const f = 300 + juice() * 500;
+    o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f * 1.7, t + 0.12);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.03 + juice() * 0.02, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.2);
+  }
+};
+
+/* ============================================================
+   PALETTE + KINDS
+   ============================================================ */
+const INK = '#07130C';              // gross ink outline (near-black swamp green)
+const PLAYER_COL = '#C6FF3A';       // unmistakable ACID LIME — reserved for YOU only
+const PLAYER_GLOW = '#EBFF9E';
+const BG0 = '#0B140F', BG1 = '#122A1C', BG2 = '#16371F';
+// declared palette: TOXIC PETRI PARTY (gross-cute acid germs)
+// ["#0B140F","#16371F","#C6FF3A","#4DD0FF","#7C5CFF","#FF5CE1","#FF8A2E","#FF3355"]
+
+// size bands for AI microbes (color === size tier; cool->hot = small->deadly)
+const BANDS = [
+  { name: 'cyan',    word: 'cyan',    col: '#4DD0FF', hi: '#CFF4FF', max: 14 },
+  { name: 'violet',  word: 'violet',  col: '#7C5CFF', hi: '#DAD0FF', max: 34 },
+  { name: 'magenta', word: 'magenta', col: '#FF5CE1', hi: '#FFD2F6', max: 80 },
+  { name: 'orange',  word: 'orange',  col: '#FF8A2E', hi: '#FFDDB0', max: 190 },
+  { name: 'red',     word: 'red',     col: '#FF3355', hi: '#FFC2CC', max: Infinity },
+];
+function bandForMass(m) {
+  for (let i = 0; i < BANDS.length; i++) if (m < BANDS[i].max) return BANDS[i];
+  return BANDS[BANDS.length - 1];
+}
+// player look tier by size — YOU stays LIME (unmistakable); accents warm as you climb
+const PLAYER_TIERS = [
+  { at: 0,    ring: '#C6FF3A', halo: '#C6FF3A' },
+  { at: 34,   ring: '#DFFF5A', halo: '#B6FF2E' },
+  { at: 120,  ring: '#F2FF6E', halo: '#9CFF4A' },
+  { at: 380,  ring: '#FFF59A', halo: '#D6FF3A' },
+  { at: 900,  ring: '#FFE14D', halo: '#FFD86B' },
+];
+
+/* ---------- geometry helpers ---------- */
+const MASS_START = 12;
+const K_R = 2.62;                              // radius = sqrt(mass) * K_R
+function radiusOf(mass) { return Math.sqrt(mass) * K_R; }
+function speedOf(mass) {
+  const s = 300 * Math.pow(24 / (mass + 12), 0.3);
+  return Math.max(72, Math.min(300, s));
+}
+
+/* ============================================================
+   STATE
+   ============================================================ */
+const STATE = { SPLASH: 0, PLAY: 1, DEAD: 2 };
+let state = STATE.SPLASH;
+
+const cam = { x: WORLD / 2, y: WORLD / 2, zoom: 1 };
+let player = null;
+let microbes = [];
+let pellets = [];
+let particles = [];
+let nebulae = [];
+
+let size = MASS_START;        // current integer size (brag metric)
+let peak = MASS_START;        // peak size this run
+let runTime = 0;
+let lastScorePost = 0;
+let challengeBeaten = false;
+let shake = 0;
+let deathT = 0;               // time since death (for burst anim)
+let hintT = 0;                // control-hint fade
+
+// milestone toasts
+let milestoneShown = {};      // band.name -> true
+const toast = { text: '', sub: '', t: 0 };
+
+/* ---------- pools ---------- */
+const pelletPool = [];
+function getPellet() { return pelletPool.pop() || {}; }
+function freePellet(p) { if (pelletPool.length < 400) pelletPool.push(p); }
+const partPool = [];
+function getPart() { return partPool.pop() || {}; }
+function freePart(p) { if (partPool.length < 600) partPool.push(p); }
+
+/* ---------- spawning ---------- */
+const MICROBE_TARGET = 44;
+const PELLET_TARGET = 320;
+
+function spawnPelletAt(x, y, mass, vx, vy) {
+  const p = getPellet();
+  p.x = x; p.y = y; p.mass = mass; p.r = 2.6 + mass * 0.9;
+  p.vx = vx || rr(-6, 6); p.vy = vy || rr(-6, 6);
+  const bi = (juice() * 4) | 0;
+  p.col = ['#4DD0FF', '#FF5CE1', '#FF8A2E', '#7C5CFF'][bi];
+  p.ph = juice() * 6.28; p.wob = 0.7 + juice() * 0.6;
+  pellets.push(p);
+  return p;
+}
+function seedPellets() {
+  while (pellets.length < PELLET_TARGET) {
+    spawnPelletAt(rr(30, WORLD - 30), rr(30, WORLD - 30), 1);
+  }
+}
+
+function newMicrobe(mass, x, y) {
+  return {
+    x, y, mass, r: radiusOf(mass),
+    vx: 0, vy: 0,
+    hx: rr(-1, 1), hy: rr(-1, 1),      // wander heading
+    headX: 0, headY: 1,                // facing (eyes look this way)
+    wanderT: rr(0, 3),
+    boldness: 0.35 + juice() * 0.85,   // >1 aggressive, <0.6 timid
+    ph: juice() * 6.28,                // wobble phase
+    seed: juice() * 100,
+    pop: 0,                            // absorb pop anim
+    alive: true,
+  };
+}
+// spawn a microbe far enough from player; sometimes a deliberate predator
+function spawnMicrobe(forcePredator) {
+  let x, y, tries = 0;
+  do {
+    x = rr(40, WORLD - 40); y = rr(40, WORLD - 40);
+    tries++;
+  } while (player && Math.hypot(x - player.x, y - player.y) < 520 && tries < 20);
+
+  let mass;
+  const pm = player ? player.mass : MASS_START;
+  if (forcePredator || rng() < 0.34) {
+    // relative to player so there is always a real threat AND catchable prey
+    mass = rng() < 0.5 ? pm * rr(1.25, 2.35) : pm * rr(0.35, 0.85);
+  } else {
+    // world distribution, weighted small
+    const u = rng();
+    if (u < 0.5) mass = rr(6, 16);
+    else if (u < 0.78) mass = rr(16, 40);
+    else if (u < 0.92) mass = rr(40, 110);
+    else if (u < 0.985) mass = rr(110, 260);
+    else mass = rr(260, 520);
+  }
+  mass = Math.max(5, Math.min(1400, mass));
+  microbes.push(newMicrobe(mass, x, y));
+}
+function maintainPopulation() {
+  while (pellets.length < PELLET_TARGET) spawnPelletAt(rr(30, WORLD - 30), rr(30, WORLD - 30), 1);
+  while (microbes.length < MICROBE_TARGET) spawnMicrobe(false);
+}
+
+/* ---------- particles ---------- */
+function burst(x, y, col, n, spd, life) {
+  for (let i = 0; i < n; i++) {
+    if (particles.length > 420) break;
+    const a = juice() * 6.283, s = spd * (0.3 + juice());
+    const p = getPart();
+    p.x = x; p.y = y; p.vx = Math.cos(a) * s; p.vy = Math.sin(a) * s;
+    p.life = life * (0.6 + juice() * 0.7); p.max = p.life;
+    p.r = 1.5 + juice() * 3.5; p.col = col; p.kind = 0;
+    particles.push(p);
+  }
+}
+function ring(x, y, col, r0) {
+  if (particles.length > 440) return;
+  const p = getPart();
+  p.x = x; p.y = y; p.vx = 0; p.vy = 0;
+  p.life = 0.5; p.max = 0.5; p.r = r0; p.col = col; p.kind = 1;
+  particles.push(p);
+}
+
+/* ============================================================
+   RUN LIFECYCLE
+   ============================================================ */
+function startRun() {
+  rng = mulberry32((Date.now() ^ 0x9e3779b9) >>> 0);
+  microbes.length = 0; pellets.length = 0; particles.length = 0;
+  player = newMicrobe(MASS_START, WORLD / 2, WORLD / 2);
+  player.isPlayer = true;
+  player.dashCd = 0; player.dashMeter = 1;
+  player.headX = 0; player.headY = 1;
+  cam.x = player.x; cam.y = player.y; cam.zoom = targetZoom();
+  size = MASS_START; peak = MASS_START; runTime = 0; deathT = 0;
+  milestoneShown = {}; toast.t = 0; challengeBeaten = false;
+  // check milestones already satisfied at start (green)
+  seedPellets();
+  for (let i = 0; i < MICROBE_TARGET; i++) spawnMicrobe(false);
+  checkMilestones(true);
+  hintT = 5.0;
+  state = STATE.PLAY;
+  ring(player.x, player.y, PLAYER_GLOW, 60);
+}
+
+function die(byMass) {
+  if (state !== STATE.PLAY) return;
+  state = STATE.DEAD;
+  deathT = 0;
+  shake = 18;
+  AU.death();
+  burst(player.x, player.y, PLAYER_GLOW, 46, 220, 0.9);
+  burst(player.x, player.y, PLAYER_COL, 30, 150, 1.1);
+  ring(player.x, player.y, PLAYER_GLOW, player.r);
+  if (peak > best) { best = peak; saveBest(best); }
+  post({ gs: 'gameover', score: peak });
+}
+
+/* ---------- milestones ---------- */
+function checkMilestones(silent) {
+  for (let i = 0; i < BANDS.length; i++) {
+    const b = BANDS[i];
+    // typical mass of this band for the "can now eat" threshold
+    const lo = i === 0 ? 6 : BANDS[i - 1].max;
+    const typ = i < BANDS.length - 1 ? (lo + b.max) / 2 : lo * 1.6;
+    if (!milestoneShown[b.name] && player.mass > typ * 1.15) {
+      milestoneShown[b.name] = true;
+      if (!silent) {
+        toast.text = 'You can now engulf the ' + b.word.toUpperCase() + ' ones!';
+        toast.sub = '';
+        toast.t = 2.6;
+        AU.milestone();
+      }
+    }
+  }
+}
+
+/* ============================================================
+   INPUT — WASD / arrows drive the germ. Touch = left-thumb joystick.
+   DASH = SPACE / SHIFT (key) or the DASH button (touch).
+   ============================================================ */
+let hasMouse = false;
+let dashHeld = false;
+let dashBtn = { x: 0, y: 0, r: 0 };   // set in layout (touch)
+const keys = Object.create(null);     // pressed movement keys (lowercased)
+// virtual joystick (touch, left thumb)
+const stick = { active: false, id: null, baseX: 0, baseY: 0, curX: 0, curY: 0, x: 0, y: 0 };
+const STICK_R = 56;                   // max throw radius in virtual px
+
+function anyStart() {
+  AU.init();
+  if (state === STATE.SPLASH) startRun();
+  else if (state === STATE.DEAD && deathT > 0.5) startRun();
+}
+
+cv.addEventListener('mousemove', () => { hasMouse = true; });
+cv.addEventListener('mousedown', () => {
+  AU.init();
+  if (state === STATE.SPLASH || state === STATE.DEAD) { anyStart(); return; }
+});
+
+const MOVE_KEYS = { w:1, a:1, s:1, d:1, arrowup:1, arrowdown:1, arrowleft:1, arrowright:1 };
+const DASH_KEYS = { ' ':1, spacebar:1, shift:1 };
+window.addEventListener('keydown', (e) => {
+  const k = (e.key || '').toLowerCase();
+  // keep arrows / space from scrolling the page
+  if (k === ' ' || k === 'spacebar' || k === 'arrowup' || k === 'arrowdown' || k === 'arrowleft' || k === 'arrowright') e.preventDefault();
+  hasMouse = true; // a physical keyboard implies a desktop-style device
+  if (e.repeat) return;
+  if (MOVE_KEYS[k]) { keys[k] = true; if (state === STATE.PLAY) return; anyStart(); return; }
+  if (DASH_KEYS[k]) {
+    if (state === STATE.PLAY) dashHeld = true; else anyStart();
+    return;
+  }
+  if (k === 'enter') { if (state !== STATE.PLAY) anyStart(); }
+});
+window.addEventListener('keyup', (e) => {
+  const k = (e.key || '').toLowerCase();
+  if (MOVE_KEYS[k]) keys[k] = false;
+  if (DASH_KEYS[k]) dashHeld = false;
+});
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; dashHeld = false; stick.active = false; });
+
+function pointInDash(v) {
+  return dashBtn.r > 0 && Math.hypot(v.x - dashBtn.x, v.y - dashBtn.y) < dashBtn.r * 1.3;
+}
+function setStickFrom(v) {
+  let dx = v.x - stick.baseX, dy = v.y - stick.baseY;
+  const d = Math.hypot(dx, dy);
+  if (d > STICK_R) { dx = dx / d * STICK_R; dy = dy / d * STICK_R; }
+  stick.curX = stick.baseX + dx; stick.curY = stick.baseY + dy;
+  // analog vector in -1..1 (magnitude scales with throw)
+  stick.x = dx / STICK_R; stick.y = dy / STICK_R;
+}
+cv.addEventListener('touchstart', (e) => {
+  e.preventDefault(); AU.init();
+  if (state === STATE.SPLASH || state === STATE.DEAD) { anyStart(); return; }
+  for (const t of e.changedTouches) {
+    const v = toVirtual(t.clientX, t.clientY);
+    if (pointInDash(v)) { dashHeld = true; continue; }
+    if (!stick.active) {
+      stick.active = true; stick.id = t.identifier;
+      stick.baseX = v.x; stick.baseY = v.y; setStickFrom(v);
+    }
+  }
+}, { passive: false });
+cv.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (stick.active && t.identifier === stick.id) { setStickFrom(toVirtual(t.clientX, t.clientY)); }
+  }
+}, { passive: false });
+function endTouch(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (stick.active && t.identifier === stick.id) { stick.active = false; stick.id = null; stick.x = 0; stick.y = 0; }
+  }
+  if (e.touches.length === 0) dashHeld = false;
+}
+cv.addEventListener('touchend', endTouch, { passive: false });
+cv.addEventListener('touchcancel', endTouch, { passive: false });
+
+/* ---------- movement input vector (keyboard or joystick) ---------- */
+function moveVector() {
+  let ix = 0, iy = 0;
+  if (keys['w'] || keys['arrowup']) iy -= 1;
+  if (keys['s'] || keys['arrowdown']) iy += 1;
+  if (keys['a'] || keys['arrowleft']) ix -= 1;
+  if (keys['d'] || keys['arrowright']) ix += 1;
+  if (ix !== 0 || iy !== 0) {
+    const l = Math.hypot(ix, iy); ix /= l; iy /= l;     // normalize diagonals (full speed)
+    return { x: ix, y: iy, mag: 1 };
+  }
+  if (stick.active) {
+    let sx2 = stick.x, sy2 = stick.y;
+    let mag = Math.hypot(sx2, sy2);
+    if (mag > 1) { sx2 /= mag; sy2 /= mag; mag = 1; }
+    if (mag > 0.06) return { x: sx2, y: sy2, mag };      // analog throw
+  }
+  return { x: 0, y: 0, mag: 0 };
+}
+
+/* ---------- dash — lunge in current heading, eject a bit of mass ---------- */
+function tryDash() {
+  const cost = Math.max(4, player.mass * 0.06);
+  if (player.dashCd > 0 || player.dashMeter < 0.999) return;
+  if (player.mass - cost < MASS_START * 0.55) return;
+  // direction: current heading (last steering dir), else velocity
+  let dx = player.headX, dy = player.headY;
+  let d = Math.hypot(dx, dy);
+  if (d < 0.01) { dx = player.vx; dy = player.vy; d = Math.hypot(dx, dy) || 1; }
+  dx /= d; dy /= d;
+  player.mass -= cost; player.r = radiusOf(player.mass);
+  player.vx += dx * 380; player.vy += dy * 380;
+  player.dashCd = 0.55; player.dashMeter = 0;
+  // eject a visible glob behind
+  const gm = cost * 0.5;
+  const gx = player.x - dx * (player.r + 6), gy = player.y - dy * (player.r + 6);
+  const ej = spawnPelletAt(gx, gy, Math.min(6, gm), -dx * 120, -dy * 120);
+  ej.col = PLAYER_GLOW;
+  burst(gx, gy, PLAYER_GLOW, 8, 90, 0.4);
+  AU.whoosh();
+}
+
+/* ============================================================
+   CAMERA ZOOM — bigger microbe sees more of the world
+   ============================================================ */
+function targetZoom() {
+  const r = player ? player.r : radiusOf(MASS_START);
+  return Math.max(0.34, Math.min(1.18, 40 / (r + 26)));
+}
+
+/* ============================================================
+   UPDATE
+   ============================================================ */
+function update(dt) {
+  runTime += dt;
+  shake *= Math.pow(0.001, dt);
+  if (toast.t > 0) toast.t -= dt;
+  if (hintT > 0) hintT -= dt;
+
+  // ambient bubbles
+  AU.bubbleTimer -= dt;
+  if (AU.bubbleTimer <= 0 && state === STATE.PLAY) { AU.bubble(); AU.bubbleTimer = 0.5 + juice() * 1.4; }
+
+  if (state === STATE.DEAD) { deathT += dt; updateParticles(dt); return; }
+  if (state !== STATE.PLAY) { updateParticles(dt); return; }
+
+  // ----- dash meter -----
+  if (player.dashCd > 0) player.dashCd = Math.max(0, player.dashCd - dt);
+  player.dashMeter = Math.min(1, player.dashMeter + dt / 0.55);
+  if (dashHeld) tryDash();
+
+  // ----- player movement: WASD / arrows / joystick with acceleration + inertia -----
+  const mv = moveVector();
+  if (mv.mag > 0.001) { player.headX = mv.x; player.headY = mv.y; }  // remember heading for dash + eyes
+  const sp = speedOf(player.mass);                                  // bigger = slower (unchanged)
+  const desVx = mv.x * sp * mv.mag, desVy = mv.y * sp * mv.mag;
+  const accel = 7.5;                                                // snappy but with weight
+  player.vx += (desVx - player.vx) * Math.min(1, accel * dt);
+  player.vy += (desVy - player.vy) * Math.min(1, accel * dt);
+  // when not steering, coast + bleed off any dash impulse
+  if (mv.mag < 0.01) { const damp = Math.pow(0.5, dt); player.vx *= damp; player.vy *= damp; }
+  player.x += player.vx * dt; player.y += player.vy * dt;
+  clampWorld(player);
+  player.r = radiusOf(player.mass);
+  if (player.pop > 0) player.pop = Math.max(0, player.pop - dt * 4);
+
+  // ----- AI microbes -----
+  for (let i = 0; i < microbes.length; i++) updateAI(microbes[i], dt);
+
+  // ----- eating: player vs pellets -----
+  for (let i = pellets.length - 1; i >= 0; i--) {
+    const p = pellets[i];
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vx *= Math.pow(0.2, dt); p.vy *= Math.pow(0.2, dt);
+    const d = Math.hypot(p.x - player.x, p.y - player.y);
+    if (d < player.r + p.r * 0.5) {
+      eatMass(player, p.mass);
+      burst(p.x, p.y, p.col, 5, 60, 0.35);
+      pellets.splice(i, 1); freePellet(p);
+      AU.gloop(Math.min(1, player.mass / 700));
+    }
+  }
+
+  // ----- AI eats pellets -----
+  for (let m = 0; m < microbes.length; m++) {
+    const M = microbes[m];
+    for (let i = pellets.length - 1; i >= 0; i--) {
+      const p = pellets[i];
+      if (Math.abs(p.x - M.x) > M.r + 8 || Math.abs(p.y - M.y) > M.r + 8) continue;
+      const d = Math.hypot(p.x - M.x, p.y - M.y);
+      if (d < M.r + p.r * 0.5) { eatMass(M, p.mass); pellets.splice(i, 1); freePellet(p); }
+    }
+  }
+
+  // ----- player vs microbes (eat / die / bounce) -----
+  for (let i = microbes.length - 1; i >= 0; i--) {
+    const m = microbes[i];
+    const d = Math.hypot(m.x - player.x, m.y - player.y);
+    if (d > m.r + player.r) continue;
+    if (player.mass > m.mass * 1.15) {
+      // player is the bigger one: engulf once its center is covered (no bounce)
+      if (d < player.r - m.r * 0.35) {
+        eatMass(player, m.mass * 0.9);
+        absorbFx(player, m);
+        microbes.splice(i, 1);
+        AU.gloop(Math.min(1, player.mass / 700));
+      }
+    } else if (m.mass > player.mass * 1.15) {
+      // predator: it engulfs you once your center is covered (no bounce)
+      if (d < m.r - player.r * 0.35) { absorbFx(m, player); die(m.mass); return; }
+    } else {
+      // equal-ish: soft deflect
+      deflect(player, m, d);
+    }
+  }
+
+  // ----- microbe vs microbe (world stays alive) -----
+  for (let a = 0; a < microbes.length; a++) {
+    const A = microbes[a];
+    for (let b = a + 1; b < microbes.length; b++) {
+      const B = microbes[b];
+      const dx2 = B.x - A.x, dy2 = B.y - A.y;
+      const d = Math.hypot(dx2, dy2);
+      if (d > A.r + B.r) continue;
+      if (A.mass > B.mass * 1.15) {
+        if (d < A.r - B.r * 0.35) { eatMass(A, B.mass * 0.9); absorbFx(A, B); microbes.splice(b, 1); b--; }
+      } else if (B.mass > A.mass * 1.15) {
+        if (d < B.r - A.r * 0.35) { eatMass(B, A.mass * 0.9); absorbFx(B, A); microbes.splice(a, 1); a--; break; }
+      } else {
+        deflect(A, B, d);
+      }
+    }
+  }
+
+  // ----- size / score / milestones -----
+  size = Math.floor(player.mass);
+  if (size > peak) peak = size;
+  checkMilestones(false);
+  if (challenge > 0 && !challengeBeaten && peak > challenge) {
+    challengeBeaten = true;
+    post({ gs: 'challenge_beaten', score: peak });
+    toast.text = 'CHALLENGE BEATEN!'; toast.sub = 'You passed ' + challenge; toast.t = 2.4;
+    AU.milestone();
+  }
+  const nowMs = performance.now();
+  if (nowMs - lastScorePost > 260) { post({ gs: 'score', score: peak }); lastScorePost = nowMs; }
+
+  maintainPopulation();
+
+  // ----- camera -----
+  const tz = targetZoom();
+  cam.zoom += (tz - cam.zoom) * Math.min(1, 3 * dt);
+  cam.x += (player.x - cam.x) * Math.min(1, 8 * dt);
+  cam.y += (player.y - cam.y) * Math.min(1, 8 * dt);
+
+  updateParticles(dt);
+}
+
+function eatMass(e, m) {
+  e.mass += m; e.r = radiusOf(e.mass); e.pop = 1;
+}
+function absorbFx(eater, prey) {
+  const b = bandForMass(prey.mass);
+  burst(prey.x, prey.y, prey.isPlayer ? PLAYER_COL : b.col, 8 + Math.min(20, prey.r | 0), 90, 0.5);
+  ring(prey.x, prey.y, prey.isPlayer ? PLAYER_GLOW : b.hi, prey.r);
+  eater.pop = 1;
+  if (eater.isPlayer) shake = Math.min(10, shake + 1.5 + prey.r * 0.05);
+}
+function deflect(a, b, d) {
+  if (d < 0.01) d = 0.01;
+  const overlap = (a.r + b.r - d) * 0.5;
+  const nx = (b.x - a.x) / d, ny = (b.y - a.y) / d;
+  const ta = b.mass / (a.mass + b.mass), tb = a.mass / (a.mass + b.mass);
+  a.x -= nx * overlap * ta; a.y -= ny * overlap * ta;
+  b.x += nx * overlap * tb; b.y += ny * overlap * tb;
+  clampWorld(a); clampWorld(b);
+}
+function clampWorld(e) {
+  const r = e.r;
+  if (e.x < r) { e.x = r; e.vx = Math.abs(e.vx) * 0.4; }
+  if (e.x > WORLD - r) { e.x = WORLD - r; e.vx = -Math.abs(e.vx) * 0.4; }
+  if (e.y < r) { e.y = r; e.vy = Math.abs(e.vy) * 0.4; }
+  if (e.y > WORLD - r) { e.y = WORLD - r; e.vy = -Math.abs(e.vy) * 0.4; }
+}
+
+/* ---------- AI ---------- */
+const SENSE = 320;
+function updateAI(m, dt) {
+  m.r = radiusOf(m.mass);
+  if (m.pop > 0) m.pop = Math.max(0, m.pop - dt * 4);
+  const sp = speedOf(m.mass) * 0.92;
+
+  // find nearest threat (bigger) and nearest prey (smaller microbe/player) within sense
+  let threatX = 0, threatY = 0, threatD = 1e9;
+  let preyX = 0, preyY = 0, preyD = 1e9;
+
+  // consider player
+  const pd = Math.hypot(player.x - m.x, player.y - m.y);
+  if (pd < SENSE) {
+    if (player.mass > m.mass * 1.15 && pd < threatD) { threatD = pd; threatX = player.x; threatY = player.y; }
+    else if (m.mass > player.mass * 1.15 && pd < preyD) { preyD = pd; preyX = player.x; preyY = player.y; }
+  }
+  // sample a few other microbes (cheap: check all, n small)
+  for (let i = 0; i < microbes.length; i++) {
+    const o = microbes[i]; if (o === m) continue;
+    const dd = Math.hypot(o.x - m.x, o.y - m.y);
+    if (dd > SENSE) continue;
+    if (o.mass > m.mass * 1.2 && dd < threatD) { threatD = dd; threatX = o.x; threatY = o.y; }
+    else if (m.mass > o.mass * 1.2 && dd < preyD * m.boldness) { preyD = dd; preyX = o.x; preyY = o.y; }
+  }
+
+  let tx, ty, urgency = 1;
+  if (threatD < SENSE) {
+    // flee — direction away from threat
+    tx = m.x - threatX; ty = m.y - threatY; urgency = 1.15;
+  } else if (preyD < SENSE * (0.6 + m.boldness * 0.6)) {
+    // chase prey
+    tx = preyX - m.x; ty = preyY - m.y; urgency = 1.0;
+  } else {
+    // wander
+    m.wanderT -= dt;
+    if (m.wanderT <= 0) { const a = juice() * 6.283; m.hx = Math.cos(a); m.hy = Math.sin(a); m.wanderT = 1.5 + juice() * 2.5; }
+    tx = m.hx; ty = m.hy; urgency = 0.5;
+  }
+  const dn = Math.hypot(tx, ty) || 1;
+  const desVx = (tx / dn) * sp * urgency, desVy = (ty / dn) * sp * urgency;
+  m.vx += (desVx - m.vx) * Math.min(1, 5 * dt);
+  m.vy += (desVy - m.vy) * Math.min(1, 5 * dt);
+  m.x += m.vx * dt; m.y += m.vy * dt;
+  const vl = Math.hypot(m.vx, m.vy);
+  if (vl > 4) { m.headX = m.vx / vl; m.headY = m.vy / vl; }   // eyes look where it swims
+  clampWorld(m);
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt;
+    if (p.life <= 0) { particles.splice(i, 1); freePart(p); continue; }
+    if (p.kind === 0) {
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= Math.pow(0.1, dt); p.vy *= Math.pow(0.1, dt);
+    } else {
+      p.r += 240 * dt; // expanding ring
+    }
+  }
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+let font = '"Baloo 2","Comic Neue","Trebuchet MS",sans-serif';
+
+function draw() {
+  const cw = cv.width, ch = cv.height;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // letterbox fill
+  ctx.fillStyle = '#03070C';
+  ctx.fillRect(0, 0, cw, ch);
+  // virtual transform
+  ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offX * dpr, offY * dpr);
+  // clip to virtual frame
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+
+  // background fluid
+  drawBackground();
+
+  // shake offset (screen space within virtual)
+  ctx.save();
+  if (shake > 0.2) {
+    ctx.translate((juice() * 2 - 1) * shake, (juice() * 2 - 1) * shake);
+  }
+
+  drawWorld();
+
+  ctx.restore(); // shake
+
+  drawHUD();
+
+  ctx.restore(); // clip
+}
+
+function drawBackground() {
+  // swampy petri-dish agar — murky toxic radial
+  const g = ctx.createRadialGradient(W * 0.5, H * 0.44, 40, W * 0.5, H * 0.5, W * 0.9);
+  g.addColorStop(0, BG2);
+  g.addColorStop(0.5, BG1);
+  g.addColorStop(1, BG0);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // dark vignette so the bold germs pop
+  const vg = ctx.createRadialGradient(W * 0.5, H * 0.5, H * 0.35, W * 0.5, H * 0.5, W * 0.72);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+}
+
+// world -> screen (virtual) helpers
+function sx(wx) { return (wx - cam.x) * cam.zoom + W / 2; }
+function sy(wy) { return (wy - cam.y) * cam.zoom + H / 2; }
+
+function drawWorld() {
+  const z = cam.zoom;
+  const halfW = (W / 2) / z, halfH = (H / 2) / z;
+  const left = cam.x - halfW, right = cam.x + halfW, top = cam.y - halfH, bot = cam.y + halfH;
+  const margin = 80;
+
+  // drifting toxic goo clouds (murky haze)
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < nebulae.length; i++) {
+    const n = nebulae[i];
+    const nx = sx(n.x), ny = sy(n.y), nr = n.r * z;
+    if (nx < -nr - 40 || nx > W + nr + 40 || ny < -nr - 40 || ny > H + nr + 40) continue;
+    const gg = ctx.createRadialGradient(nx, ny, 0, nx, ny, nr);
+    gg.addColorStop(0, n.col + '22');
+    gg.addColorStop(0.55, n.col + '0C');
+    gg.addColorStop(1, n.col + '00');
+    ctx.fillStyle = gg;
+    ctx.beginPath(); ctx.arc(nx, ny, nr, 0, 6.283); ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  // world boundary membrane
+  drawWorldEdge();
+
+  // pellets = little food spores: flat acid dot + ink outline + shine
+  for (let i = 0; i < pellets.length; i++) {
+    const p = pellets[i];
+    if (p.x < left - margin || p.x > right + margin || p.y < top - margin || p.y > bot + margin) continue;
+    const px = sx(p.x), py = sy(p.y);
+    const pr = Math.max(1.6, p.r * 1.6 * z) * (1 + 0.16 * Math.sin(runTime * 3 * p.wob + p.ph));
+    ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(px, py, pr, 0, 6.283); ctx.fill();
+    if (pr > 3) {
+      ctx.lineWidth = Math.max(1, pr * 0.24); ctx.strokeStyle = INK; ctx.stroke();
+      ctx.globalAlpha = 0.85; ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(px - pr * 0.28, py - pr * 0.28, pr * 0.34, 0, 6.283); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // microbes (draw smaller-behind-bigger for nice overlap)
+  microbes.sort((a, b) => a.mass - b.mass);
+  const pm = player ? player.mass : MASS_START;
+  for (let i = 0; i < microbes.length; i++) {
+    const m = microbes[i];
+    if (m.x < left - margin - m.r || m.x > right + margin + m.r || m.y < top - margin - m.r || m.y > bot + margin + m.r) continue;
+    const b = bandForMass(m.mass);
+    // expression reads threat/prey at a glance: bigger-than-you glares, prey panics
+    let mood = 'plain';
+    if (state === STATE.PLAY) {
+      if (m.mass > pm * 1.15) mood = 'angry';
+      else if (pm > m.mass * 1.15) mood = 'scared';
+    }
+    drawGerm(sx(m.x), sy(m.y), m.r * z, b.col, b.hi, m, false, mood);
+    // predator danger ring relative to player
+    if (state === STATE.PLAY) drawRelCue(m, sx(m.x), sy(m.y), m.r * z, b);
+  }
+
+  // player particles behind? draw particles then player on top
+  drawParticles();
+
+  // player
+  if (player && state !== STATE.DEAD) {
+    drawPlayer();
+  } else if (player && state === STATE.DEAD) {
+    // fading burst husk
+    const a = Math.max(0, 1 - deathT * 1.4);
+    if (a > 0) {
+      ctx.globalAlpha = a;
+      drawGerm(sx(player.x), sy(player.y), player.r * z * (1 + deathT * 0.6), PLAYER_COL, PLAYER_GLOW, player, true, 'dead');
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // off-screen threat/prey arrows
+  if (state === STATE.PLAY) drawEdgeCues(left, right, top, bot);
+}
+
+function drawWorldEdge() {
+  const z = cam.zoom;
+  const x0 = sx(0), y0 = sy(0), x1 = sx(WORLD), y1 = sy(WORLD);
+  ctx.save();
+  // chunky petri-dish rim: dark ink band + acid-lime hazard dashes
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = Math.max(4, 14 * z);
+  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  ctx.strokeStyle = 'rgba(198,255,58,0.45)';
+  ctx.lineWidth = Math.max(2, 6 * z);
+  ctx.setLineDash([Math.max(10, 40 * z), Math.max(8, 26 * z)]);
+  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawRelCue(m, x, y, r, b) {
+  if (!player) return;
+  if (r < 7) return;
+  const bigger = m.mass > player.mass * 1.15;
+  if (!bigger) return;
+  // danger: pulsing red hazard dashes around anything that can eat YOU
+  ctx.save();
+  ctx.globalAlpha = 0.75 + 0.25 * Math.sin(runTime * 6 + m.seed);
+  ctx.strokeStyle = '#FF3355';
+  ctx.lineWidth = Math.max(1.6, r * 0.06);
+  ctx.setLineDash([Math.max(4, r * 0.45), Math.max(4, r * 0.4)]);
+  ctx.beginPath(); ctx.arc(x, y, r + Math.max(4, r * 0.18), 0, 6.283); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawParticles() {
+  const z = cam.zoom;
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    const x = sx(p.x), y = sy(p.y);
+    const a = p.life / p.max;
+    if (p.kind === 0) {
+      // goo droplet: flat splat with a thin ink edge
+      ctx.globalAlpha = Math.min(1, a * 1.2);
+      const pr = Math.max(0.8, p.r * z);
+      ctx.fillStyle = p.col;
+      ctx.beginPath(); ctx.arc(x, y, pr, 0, 6.283); ctx.fill();
+      if (pr > 2.4) { ctx.globalAlpha = a * 0.5; ctx.lineWidth = Math.max(0.8, pr * 0.28); ctx.strokeStyle = INK; ctx.stroke(); }
+    } else {
+      // chomp shockwave ring
+      ctx.globalAlpha = a * 0.7;
+      ctx.strokeStyle = p.col; ctx.lineWidth = Math.max(1.5, 4 * z * a);
+      ctx.beginPath(); ctx.arc(x, y, p.r * z, 0, 6.283); ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// gross-cute germ: wobbly ink-outlined body + cilia fringe + googly face
+const BLOB_SEG = 22;
+function drawGerm(x, y, r, col, hi, ent, isPlayer, mood) {
+  if (r < 1) r = 1;
+  const pop = ent && ent.pop ? ent.pop : 0;
+  const rr2 = r * (1 + pop * 0.14);
+  const seed = ent ? ent.seed : 0;
+  const t = runTime * 1.6 + seed;
+  const inkW = Math.max(1.5, rr2 * 0.11);
+
+  // ---- cilia fringe (behind body so tips poke out) ----
+  if (rr2 > 7) {
+    const n = Math.min(20, Math.max(9, (rr2 * 0.45) | 0));
+    ctx.strokeStyle = INK; ctx.lineWidth = Math.max(1, rr2 * 0.05); ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * 6.283;
+      const wob = 0.2 * Math.sin(t * 3 + a * 3 + seed);
+      const l = rr2 * (0.16 + 0.07 * Math.sin(t * 3 + i));
+      const bx = x + Math.cos(a) * rr2 * 0.96, by = y + Math.sin(a) * rr2 * 0.96;
+      const tx = x + Math.cos(a + wob) * (rr2 + l), ty = y + Math.sin(a + wob) * (rr2 + l);
+      ctx.moveTo(bx, by); ctx.lineTo(tx, ty);
+    }
+    ctx.stroke();
+  }
+
+  // ---- wobbly body ----
+  ctx.beginPath();
+  for (let i = 0; i <= BLOB_SEG; i++) {
+    const a = (i / BLOB_SEG) * 6.283;
+    const wob = 1 + 0.055 * Math.sin(a * 3 + t) + 0.035 * Math.sin(a * 5 - t * 1.3);
+    const rx = x + Math.cos(a) * rr2 * wob;
+    const ry = y + Math.sin(a) * rr2 * wob;
+    if (i === 0) ctx.moveTo(rx, ry); else ctx.lineTo(rx, ry);
+  }
+  ctx.closePath();
+  // flat bold fill with a little top-light for form
+  const bg = ctx.createLinearGradient(x, y - rr2, x, y + rr2);
+  bg.addColorStop(0, hi);
+  bg.addColorStop(0.42, col);
+  bg.addColorStop(1, col);
+  ctx.fillStyle = bg; ctx.fill();
+  // thick ink outline — the signature look
+  ctx.lineWidth = inkW; ctx.strokeStyle = INK; ctx.lineJoin = 'round';
+  ctx.stroke();
+  // squishy top shine
+  ctx.globalAlpha = 0.5; ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.ellipse(x - rr2 * 0.28, y - rr2 * 0.42, rr2 * 0.32, rr2 * 0.16, -0.5, 0, 6.283); ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // ---- face ----
+  const dirx = ent ? ent.headX : 0, diry = ent ? ent.headY : 1;
+  drawFace(x, y, rr2, dirx, diry, mood || 'plain', isPlayer);
+}
+
+// googly eyes + expressive mouth; pupils glance toward heading
+function drawFace(x, y, r, dirx, diry, mood, isPlayer) {
+  if (r < 8) return;
+  const ex = r * 0.36, ey = -r * 0.10, er = r * 0.27;
+  const dead = mood === 'dead';
+  const dl = Math.hypot(dirx, diry) || 1;
+  const lookx = (dirx / dl) * er * 0.42, looky = (diry / dl) * er * 0.42;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // angry down-brows
+  if (mood === 'angry') {
+    ctx.lineWidth = Math.max(1.8, r * 0.08); ctx.strokeStyle = INK;
+    ctx.beginPath();
+    ctx.moveTo(x - ex - er * 0.9, y + ey - er * 1.05); ctx.lineTo(x - ex + er * 0.7, y + ey - er * 0.25);
+    ctx.moveTo(x + ex + er * 0.9, y + ey - er * 1.05); ctx.lineTo(x + ex - er * 0.7, y + ey - er * 0.25);
+    ctx.stroke();
+  }
+  for (const s of [-1, 1]) {
+    const cx2 = x + s * ex, cy2 = y + ey;
+    ctx.beginPath(); ctx.arc(cx2, cy2, er, 0, 6.283);
+    ctx.fillStyle = '#F7FFF0'; ctx.fill();
+    ctx.lineWidth = Math.max(1.2, r * 0.05); ctx.strokeStyle = INK; ctx.stroke();
+    if (dead) {
+      // X eyes
+      ctx.lineWidth = Math.max(1.6, r * 0.07);
+      const q = er * 0.6;
+      ctx.beginPath();
+      ctx.moveTo(cx2 - q, cy2 - q); ctx.lineTo(cx2 + q, cy2 + q);
+      ctx.moveTo(cx2 + q, cy2 - q); ctx.lineTo(cx2 - q, cy2 + q);
+      ctx.stroke();
+    } else {
+      const pr = mood === 'scared' ? er * 0.34 : er * 0.5;
+      ctx.beginPath(); ctx.arc(cx2 + lookx, cy2 + looky, pr, 0, 6.283);
+      ctx.fillStyle = INK; ctx.fill();
+    }
+  }
+  // mouth
+  const my = y + r * 0.44;
+  ctx.strokeStyle = INK; ctx.lineWidth = Math.max(1.4, r * 0.06);
+  if (mood === 'angry') {
+    // snarling fangs
+    const mw = r * 0.5;
+    ctx.beginPath(); ctx.moveTo(x - mw, my - r * 0.05);
+    ctx.lineTo(x - mw * 0.5, my + r * 0.12); ctx.lineTo(x, my - r * 0.03);
+    ctx.lineTo(x + mw * 0.5, my + r * 0.12); ctx.lineTo(x + mw, my - r * 0.05);
+    ctx.stroke();
+  } else if (mood === 'scared') {
+    ctx.beginPath(); ctx.arc(x, my, r * 0.14, 0, 6.283); ctx.stroke();
+  } else if (dead) {
+    ctx.beginPath(); ctx.moveTo(x - r * 0.22, my + r * 0.08); ctx.lineTo(x + r * 0.22, my + r * 0.08); ctx.stroke();
+  } else {
+    // goofy grin (player grins wider)
+    const gw = isPlayer ? 0.36 : 0.28;
+    ctx.beginPath(); ctx.arc(x, my - r * 0.12, r * gw, 0.12 * Math.PI, 0.88 * Math.PI); ctx.stroke();
+  }
+}
+
+function playerTier() {
+  let tier = PLAYER_TIERS[0];
+  for (let i = 0; i < PLAYER_TIERS.length; i++) if (peak >= PLAYER_TIERS[i].at) tier = PLAYER_TIERS[i];
+  return tier;
+}
+
+function drawPlayer() {
+  const z = cam.zoom;
+  const x = sx(player.x), y = sy(player.y), r = player.r * z;
+  const tier = playerTier();
+  // pulsing halo — WHICH ONE AM I cue #1 (always-on glow)
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const pulse = 1 + 0.09 * Math.sin(runTime * 4);
+  const gg = ctx.createRadialGradient(x, y, r * 0.5, x, y, r * 2.5 * pulse);
+  gg.addColorStop(0, tier.halo + '70');
+  gg.addColorStop(0.5, tier.halo + '2A');
+  gg.addColorStop(1, tier.halo + '00');
+  ctx.fillStyle = gg;
+  ctx.beginPath(); ctx.arc(x, y, r * 2.5 * pulse, 0, 6.283); ctx.fill();
+  ctx.restore();
+
+  // body — lime germ with a big goofy grin (mood 'happy')
+  drawGerm(x, y, player.r * z, PLAYER_COL, PLAYER_GLOW, player, true, 'happy');
+
+  // little crown — WHICH ONE AM I extra flair (only YOU wears it)
+  if (r > 12) {
+    ctx.save();
+    ctx.fillStyle = tier.ring; ctx.strokeStyle = INK; ctx.lineWidth = Math.max(1.4, r * 0.05); ctx.lineJoin = 'round';
+    const cw = r * 0.9, cy2 = y - r * 0.92, ch = r * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x - cw, cy2 + ch);
+    ctx.lineTo(x - cw, cy2); ctx.lineTo(x - cw * 0.5, cy2 + ch * 0.5); ctx.lineTo(x, cy2 - ch * 0.4);
+    ctx.lineTo(x + cw * 0.5, cy2 + ch * 0.5); ctx.lineTo(x + cw, cy2); ctx.lineTo(x + cw, cy2 + ch);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+
+  // bright double ring — WHICH ONE AM I cue #2 (crisp outline, no other blob has it)
+  ctx.save();
+  ctx.lineWidth = Math.max(2, r * 0.09);
+  ctx.strokeStyle = tier.ring;
+  ctx.shadowColor = tier.ring; ctx.shadowBlur = 14;
+  ctx.beginPath(); ctx.arc(x, y, r + Math.max(2, r * 0.14), 0, 6.283); ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.setLineDash([Math.max(3, r * 0.4), Math.max(3, r * 0.35)]);
+  ctx.lineWidth = Math.max(1.4, r * 0.05);
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.save(); ctx.translate(x, y); ctx.rotate(runTime * 0.6); ctx.translate(-x, -y);
+  ctx.beginPath(); ctx.arc(x, y, r + Math.max(6, r * 0.3), 0, 6.283); ctx.stroke();
+  ctx.restore();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // "YOU" tag — cue #3 (persistent label, bobbing)
+  const tagY = y - r - Math.max(16, r * 0.5) - 6 + Math.sin(runTime * 3) * 2;
+  ctx.save();
+  ctx.font = '700 13px ' + font;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const tw = ctx.measureText('YOU').width + 14;
+  ctx.fillStyle = 'rgba(7,19,12,0.85)';
+  roundRect(x - tw / 2, tagY - 10, tw, 20, 10); ctx.fill();
+  ctx.strokeStyle = tier.ring; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = tier.ring;
+  ctx.fillText('YOU', x, tagY + 1);
+  // little pointer triangle
+  ctx.beginPath();
+  ctx.moveTo(x - 5, tagY + 10); ctx.lineTo(x + 5, tagY + 10); ctx.lineTo(x, tagY + 16);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+// off-screen arrows pointing to the nearest big threat (danger) and biggest nearby prey
+function drawEdgeCues(left, right, top, bot) {
+  let threat = null, td = 1e9, prey = null, pd = 1e9;
+  for (let i = 0; i < microbes.length; i++) {
+    const m = microbes[i];
+    const on = m.x > left && m.x < right && m.y > top && m.y < bot;
+    if (on) continue;
+    const d = Math.hypot(m.x - player.x, m.y - player.y);
+    if (d > 900) continue;
+    if (m.mass > player.mass * 1.15) { if (d < td) { td = d; threat = m; } }
+  }
+  if (threat) drawArrowTo(threat, '#FF3355', td);
+}
+function drawArrowTo(m, col, dist) {
+  const dx = m.x - player.x, dy = m.y - player.y;
+  const ang = Math.atan2(dy, dx);
+  const cx = W / 2, cy = H / 2;
+  const rad = Math.min(W, H) * 0.42;
+  const ax = cx + Math.cos(ang) * rad, ay = cy + Math.sin(ang) * rad;
+  ctx.save();
+  ctx.translate(ax, ay); ctx.rotate(ang);
+  const a = Math.max(0.3, 1 - dist / 900);
+  ctx.globalAlpha = a * (0.6 + 0.4 * Math.sin(runTime * 6));
+  ctx.fillStyle = col;
+  ctx.shadowColor = col; ctx.shadowBlur = 10;
+  ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(-8, -7); ctx.lineTo(-8, 7); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+/* ---------- HUD ---------- */
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+function drawHUD() {
+  // SIZE (brag metric) top-left
+  if (state !== STATE.SPLASH) {
+    ctx.save();
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    const pop = player && player.pop ? player.pop : 0;
+    ctx.font = '800 ' + (30 + pop * 5).toFixed(0) + 'px ' + font;
+    ctx.fillStyle = PLAYER_GLOW;
+    ctx.shadowColor = PLAYER_COL; ctx.shadowBlur = 14;
+    ctx.fillText(String(size), 20, 16);
+    ctx.shadowBlur = 0;
+    ctx.font = '700 13px ' + font; ctx.fillStyle = 'rgba(198,255,58,0.8)';
+    ctx.fillText('SIZE', 22, 52);
+    ctx.font = '700 14px ' + font; ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillText('BEST  ' + Math.max(best, peak), 78, 52);
+    // tier name
+    const b = bandForMass(player ? player.mass : MASS_START);
+    ctx.textAlign = 'right';
+    ctx.font = '700 14px ' + font; ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.restore();
+  }
+
+  // challenge target
+  if (challenge > 0 && state !== STATE.SPLASH) {
+    ctx.save();
+    ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+    ctx.font = '800 16px ' + font;
+    ctx.fillStyle = challengeBeaten ? '#C6FF3A' : '#FF8A2E';
+    ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 10;
+    ctx.fillText((challengeBeaten ? '✓ ' : 'TARGET ') + challenge, W - 20, 18);
+    ctx.restore();
+  }
+
+  // dash meter + touch joystick
+  if (state === STATE.PLAY && player) { drawDashMeter(); drawJoystick(); }
+
+  // control hint (fades)
+  if (state === STATE.PLAY && hintT > 0) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, hintT / 1.2);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    ctx.font = '700 15px ' + font;
+    ctx.fillStyle = 'rgba(235,255,158,0.95)';
+    const isTouch = ('ontouchstart' in window) && !hasMouse;
+    const msg = isTouch ? 'Left-thumb joystick to swim · tap DASH to lunge'
+                        : 'WASD / arrows to move · SPACE to dash';
+    ctx.fillText(msg, W / 2, H - 18);
+    ctx.font = '700 13px ' + font;
+    ctx.fillStyle = 'rgba(255,90,120,0.9)';
+    ctx.fillText('Eat smaller germs to grow — dodge anything bigger!', W / 2, H - 40);
+    ctx.restore();
+  }
+
+  // milestone toast
+  if (toast.t > 0) {
+    ctx.save();
+    const a = Math.min(1, toast.t / 0.4) * Math.min(1, (2.6 - toast.t + 0.4));
+    ctx.globalAlpha = Math.max(0, Math.min(1, a));
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = '800 24px ' + font;
+    ctx.fillStyle = '#EBFF9E';
+    ctx.shadowColor = '#C6FF3A'; ctx.shadowBlur = 18;
+    ctx.fillText(toast.text, W / 2, 90);
+    if (toast.sub) { ctx.font = '700 15px ' + font; ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.shadowBlur = 0; ctx.fillText(toast.sub, W / 2, 116); }
+    ctx.restore();
+  }
+
+  if (state === STATE.SPLASH) drawSplash();
+  if (state === STATE.DEAD) drawDead();
+}
+
+// virtual joystick (only while a thumb is down)
+function drawJoystick() {
+  if (!stick.active) return;
+  ctx.save();
+  // base ring
+  ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(198,255,58,0.5)';
+  ctx.fillStyle = 'rgba(11,20,15,0.35)';
+  ctx.beginPath(); ctx.arc(stick.baseX, stick.baseY, STICK_R, 0, 6.283); ctx.fill(); ctx.stroke();
+  // knob
+  ctx.beginPath(); ctx.arc(stick.curX, stick.curY, STICK_R * 0.44, 0, 6.283);
+  ctx.fillStyle = PLAYER_COL; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.restore();
+}
+
+function drawDashMeter() {
+  const isTouch = ('ontouchstart' in window) && !hasMouse;
+  if (isTouch) {
+    // draw dash button bottom-right (thumb zone)
+    dashBtn.x = W - 78; dashBtn.y = H - 74; dashBtn.r = 42;
+    const ready = player.dashMeter > 0.999 && player.dashCd <= 0;
+    ctx.save();
+    ctx.beginPath(); ctx.arc(dashBtn.x, dashBtn.y, dashBtn.r, 0, 6.283);
+    ctx.fillStyle = ready ? 'rgba(198,255,58,0.24)' : 'rgba(255,255,255,0.08)';
+    ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = ready ? PLAYER_COL : 'rgba(255,255,255,0.3)';
+    ctx.stroke();
+    // fill arc = meter
+    ctx.beginPath();
+    ctx.arc(dashBtn.x, dashBtn.y, dashBtn.r - 6, -1.57, -1.57 + 6.283 * player.dashMeter);
+    ctx.strokeStyle = PLAYER_GLOW; ctx.lineWidth = 4; ctx.stroke();
+    ctx.fillStyle = ready ? PLAYER_GLOW : 'rgba(255,255,255,0.5)';
+    ctx.font = '800 15px ' + font; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('DASH', dashBtn.x, dashBtn.y);
+    ctx.restore();
+  } else {
+    dashBtn.r = 0;
+    // small gauge bottom-left
+    const bx = 20, by = H - 30, bw = 128, bh = 12;
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    roundRect(bx, by, bw, bh, 6); ctx.fill();
+    const ready = player.dashMeter > 0.999;
+    ctx.fillStyle = ready ? PLAYER_COL : 'rgba(198,255,58,0.55)';
+    roundRect(bx, by, bw * player.dashMeter, bh, 6); ctx.fill();
+    ctx.fillStyle = 'rgba(235,255,180,0.9)';
+    ctx.font = '700 11px ' + font; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    ctx.fillText('DASH · SPACE', bx, by - 3);
+    ctx.restore();
+  }
+}
+
+// splash uses live preview world (already drawn behind), overlay title
+function drawSplash() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(11,20,15,0.58)';
+  ctx.fillRect(0, 0, W, H);
+  // title germ — the lime hero with grin + crown + YOU tag
+  const cx = W / 2, cy = 196;
+  const tt = performance.now() / 1000;
+  const tier = PLAYER_TIERS[0];
+  const hero = { seed: 3.1, headX: Math.sin(tt * 1.3) * 0.6, headY: 1, pop: 0 };
+  // pulsing halo
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const gg = ctx.createRadialGradient(cx, cy, 20, cx, cy, 120);
+  gg.addColorStop(0, '#C6FF3A55'); gg.addColorStop(1, '#C6FF3A00');
+  ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(cx, cy, 120, 0, 6.283); ctx.fill();
+  ctx.restore();
+  const hr = 48 + Math.sin(tt * 2) * 3;
+  drawGerm(cx, cy, hr, PLAYER_COL, PLAYER_GLOW, hero, true, 'happy');
+  // crown
+  ctx.save();
+  ctx.fillStyle = tier.ring; ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+  const cw = hr * 0.9, cyy = cy - hr * 0.92, ch = hr * 0.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - cw, cyy + ch); ctx.lineTo(cx - cw, cyy); ctx.lineTo(cx - cw * 0.5, cyy + ch * 0.5);
+  ctx.lineTo(cx, cyy - ch * 0.4); ctx.lineTo(cx + cw * 0.5, cyy + ch * 0.5); ctx.lineTo(cx + cw, cyy); ctx.lineTo(cx + cw, cyy + ch);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.restore();
+  // double ring
+  ctx.save();
+  ctx.lineWidth = 5; ctx.strokeStyle = tier.ring; ctx.shadowColor = tier.ring; ctx.shadowBlur = 16;
+  ctx.beginPath(); ctx.arc(cx, cy, hr + 8, 0, 6.283); ctx.stroke();
+  ctx.restore();
+
+  ctx.textAlign = 'center';
+  ctx.font = '900 58px ' + font;
+  ctx.fillStyle = '#EBFF9E';
+  ctx.shadowColor = '#C6FF3A'; ctx.shadowBlur = 22;
+  ctx.fillText('MICROBE BLOOM', W / 2, 330);
+  ctx.shadowBlur = 0;
+  ctx.font = '700 19px ' + font;
+  ctx.fillStyle = 'rgba(220,255,180,0.92)';
+  ctx.fillText('Eat smaller germs to grow. How big can you bloom?', W / 2, 366);
+
+  ctx.font = '700 15px ' + font;
+  ctx.fillStyle = '#C6FF3A';
+  ctx.fillText("You're the LIME germ with the crown + YOU tag · WASD / arrows to move", W / 2, 398);
+
+  const blink = 0.6 + 0.4 * Math.sin(tt * 4);
+  ctx.globalAlpha = blink;
+  ctx.font = '800 20px ' + font;
+  ctx.fillStyle = '#FF5CE1';
+  ctx.fillText('press any WASD / arrow key · click · tap to begin', W / 2, 452);
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function drawDead() {
+  const a = Math.min(0.74, deathT * 0.9);
+  ctx.save();
+  ctx.fillStyle = 'rgba(11,20,15,' + a + ')';
+  ctx.fillRect(0, 0, W, H);
+  if (deathT < 0.4) { ctx.restore(); return; }
+  const app = Math.min(1, (deathT - 0.4) / 0.4);
+  ctx.globalAlpha = app;
+  ctx.textAlign = 'center';
+  ctx.font = '900 52px ' + font;
+  ctx.fillStyle = '#FF3355';
+  ctx.shadowColor = '#FF3355'; ctx.shadowBlur = 20;
+  ctx.fillText('CHOMPED!', W / 2, 176);
+  ctx.shadowBlur = 0;
+
+  ctx.font = '800 66px ' + font;
+  ctx.fillStyle = PLAYER_GLOW;
+  ctx.shadowColor = PLAYER_COL; ctx.shadowBlur = 16;
+  ctx.fillText(String(peak), W / 2, 262);
+  ctx.shadowBlur = 0;
+  ctx.font = '700 16px ' + font; ctx.fillStyle = 'rgba(200,255,244,0.85)';
+  ctx.fillText('peak size', W / 2, 300);
+
+  ctx.font = '700 20px ' + font; ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  const nb = Math.max(best, peak);
+  ctx.fillText('best  ' + nb, W / 2, 338);
+  if (peak >= best && peak > MASS_START) {
+    ctx.fillStyle = '#C6FF3A'; ctx.font = '800 18px ' + font;
+    ctx.fillText('★ new best!', W / 2, 366);
+  }
+
+  const blink = 0.6 + 0.4 * Math.sin(performance.now() / 160);
+  ctx.globalAlpha = app * blink;
+  ctx.font = '800 20px ' + font; ctx.fillStyle = '#C6FF3A';
+  ctx.fillText('press any WASD / arrow key · click · tap to bloom again', W / 2, 424);
+  ctx.restore();
+}
+
+/* ============================================================
+   INIT WORLD DECOR + MAIN LOOP
+   ============================================================ */
+function initNebulae() {
+  nebulae.length = 0;
+  const cols = ['#4DD0FF', '#7C5CFF', '#FF5CE1', '#C6FF3A', '#FF8A2E'];
+  for (let i = 0; i < 14; i++) {
+    nebulae.push({
+      x: rr(0, WORLD), y: rr(0, WORLD),
+      r: rr(280, 620), col: cols[(juice() * cols.length) | 0],
+    });
+  }
+}
+initNebulae();
+
+// build an idle demo world behind the splash so it looks alive
+function initSplashWorld() {
+  player = newMicrobe(MASS_START, WORLD / 2, WORLD / 2);
+  player.isPlayer = true; player.dashMeter = 1; player.dashCd = 0;
+  cam.x = player.x; cam.y = player.y; cam.zoom = targetZoom();
+  seedPellets();
+  for (let i = 0; i < MICROBE_TARGET; i++) spawnMicrobe(false);
+}
+initSplashWorld();
+
+let last = performance.now();
+let raf = 0;
+function loop(now) {
+  let dt = (now - last) / 1000; last = now;
+  if (dt > 0.05) dt = 0.05;   // clamp to avoid tunneling on tab-return
+  // on splash, gently drift the world (no player control)
+  if (state === STATE.SPLASH) {
+    for (let i = 0; i < microbes.length; i++) updateAI(microbes[i], dt);
+    for (let i = 0; i < pellets.length; i++) { const p = pellets[i]; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= Math.pow(0.2, dt); p.vy *= Math.pow(0.2, dt); }
+    maintainPopulation();
+    updateParticles(dt);
+    runTime += dt;
+    if (toast.t > 0) toast.t -= dt;
+  } else {
+    update(dt);
+  }
+  draw();
+  raf = requestAnimationFrame(loop);
+}
+raf = requestAnimationFrame(loop);
+
+// reset support (platform "start over")
+window.addEventListener('message', (e) => {
+  if (e.data && e.data.gs === 'reset') { best = loadBest(); state = STATE.SPLASH; initSplashWorld(); }
+});
+
+/* ---------- ready ---------- */
+post({ gs: 'ready' });
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "title": "Best in Show",
+  "slug": "best-in-show",
+  "description": "Show your adorable pup in a dog pageant — pose, groom, and pull off tricks on cue to wow three judges and win the rosette.",
+  "verb": "wow the judges",
+  "dials": [
+    "mastery",
+    "progression",
+    "comedy"
+  ],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "pts",
+  "scoreOrder": "desc",
+  "palette": [
+    "#FFE1C4",
+    "#8FD98A",
+    "#FFF3E0",
+    "#FF8FB0",
+    "#FF5C6C",
+    "#FFC94D",
+    "#5B4A6A",
+    "#8AD0EA"
+  ],
+  "author": "gamesight"
+}

@@ -1,0 +1,13 @@
+{
+  "title": "Green Thumb",
+  "slug": "green-thumb",
+  "description": "Tend a cozy garden — plant seeds, water them, watch them bloom, harvest for coins, and grow your plot into a lush dream garden.",
+  "verb": "grow your garden",
+  "dials": ["progression"],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "✿",
+  "scoreOrder": "desc",
+  "palette": ["#FDF3DC", "#F7C873", "#5B3A29", "#7BAE4B", "#3E8E5A", "#F582AE", "#8AD1E8"],
+  "author": "gamesight"
+}

@@ -1,0 +1,13 @@
+{
+  "title": "Microbe Bloom",
+  "slug": "microbe-bloom",
+  "description": "You're the tiniest googly-eyed germ in a huge toxic petri dish — chomp smaller germs to grow, dodge anything bigger, and see how big you can bloom. WASD / arrows to move.",
+  "verb": "eat and grow",
+  "dials": ["mastery", "progression"],
+  "orientation": "landscape",
+  "mode": "sp",
+  "scoreLabel": "size",
+  "scoreOrder": "desc",
+  "palette": ["#0B140F", "#16371F", "#C6FF3A", "#4DD0FF", "#7C5CFF", "#FF5CE1", "#FF8A2E", "#FF3355"],
+  "author": "gamesight"
+}

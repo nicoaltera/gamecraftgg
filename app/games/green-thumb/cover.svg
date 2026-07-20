@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#A9DDF0"/>
+      <stop offset="0.55" stop-color="#CDEBD6"/>
+      <stop offset="1" stop-color="#EAF3D2"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFF6D2"/>
+      <stop offset="0.4" stop-color="#FFE4A0" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#FFE4A0" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8CC152"/>
+      <stop offset="1" stop-color="#5FA33B"/>
+    </linearGradient>
+    <linearGradient id="soil" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6B4327"/>
+      <stop offset="1" stop-color="#432815"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF6E0"/>
+      <stop offset="1" stop-color="#FFE7A8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- sky + sun -->
+  <rect width="640" height="300" fill="url(#sky)"/>
+  <circle cx="120" cy="70" r="170" fill="url(#sun)"/>
+  <circle cx="120" cy="70" r="30" fill="#FFFAE1"/>
+  <!-- clouds -->
+  <g fill="#ffffff" opacity="0.85">
+    <g transform="translate(470,58)"><circle r="22"/><circle cx="26" cy="6" r="17"/><circle cx="-24" cy="6" r="16"/><circle cx="6" cy="-12" r="16"/></g>
+    <g transform="translate(300,40) scale(0.8)"><circle r="20"/><circle cx="24" cy="5" r="15"/><circle cx="-22" cy="5" r="14"/></g>
+  </g>
+
+  <!-- ground -->
+  <path d="M0 300 Q320 280 640 300 L640 400 L0 400 Z" fill="url(#ground)"/>
+
+  <!-- raised garden bed -->
+  <rect x="60" y="250" width="520" height="120" rx="18" fill="#8A5A34"/>
+  <rect x="66" y="256" width="508" height="108" rx="14" fill="#A06A3E"/>
+  <rect x="80" y="272" width="480" height="84" rx="12" fill="url(#soil)"/>
+
+  <!-- plants row -->
+  <g stroke-linecap="round">
+    <!-- daisy -->
+    <g transform="translate(140,300)">
+      <path d="M0 60 Q-4 30 0 0" stroke="#3E8E5A" stroke-width="5" fill="none"/>
+      <path d="M0 40 q-16 -6 -26 4" stroke="#4EA65C" stroke-width="6" fill="none"/>
+      <g transform="translate(0,-2)"><g fill="#FFFDF5"><ellipse rx="6" ry="15" transform="rotate(0)"/><ellipse rx="6" ry="15" transform="rotate(45)"/><ellipse rx="6" ry="15" transform="rotate(90)"/><ellipse rx="6" ry="15" transform="rotate(135)"/></g><circle r="8" fill="#FFC24B"/></g>
+    </g>
+    <!-- tulip -->
+    <g transform="translate(215,300)">
+      <path d="M0 62 Q3 30 0 4" stroke="#3E8E5A" stroke-width="5" fill="none"/>
+      <path d="M0 44 q16 -6 26 2" stroke="#4EA65C" stroke-width="6" fill="none"/>
+      <path d="M-14 8 Q-19 -26 0 -30 Q19 -26 14 8 Q0 0 -14 8Z" fill="#E84B6E"/>
+      <path d="M0 4 Q-7 -20 0 -26 Q7 -20 0 4Z" fill="#FFB0C4"/>
+    </g>
+    <!-- sunflower -->
+    <g transform="translate(305,286)">
+      <path d="M0 78 Q-5 40 0 0" stroke="#3E8E5A" stroke-width="7" fill="none"/>
+      <path d="M0 46 q-18 -6 -30 6" stroke="#4EA65C" stroke-width="7" fill="none"/>
+      <g transform="translate(0,-6)"><g fill="#FFC21F"><ellipse rx="7" ry="22" transform="rotate(0)"/><ellipse rx="7" ry="22" transform="rotate(30)"/><ellipse rx="7" ry="22" transform="rotate(60)"/><ellipse rx="7" ry="22" transform="rotate(90)"/><ellipse rx="7" ry="22" transform="rotate(120)"/><ellipse rx="7" ry="22" transform="rotate(150)"/></g><circle r="15" fill="#5A3A22"/></g>
+    </g>
+    <!-- rose -->
+    <g transform="translate(400,296)">
+      <path d="M0 66 Q4 32 0 2" stroke="#3E8E5A" stroke-width="6" fill="none"/>
+      <path d="M0 40 q16 -4 26 6" stroke="#4EA65C" stroke-width="6" fill="none"/>
+      <g transform="translate(0,-4)"><circle r="16" fill="#C21F3E"/><circle r="12" fill="#E23B5A"/><circle r="7" fill="#FF7D95"/><circle r="3" fill="#FFD1DA"/></g>
+    </g>
+    <!-- lavender -->
+    <g transform="translate(478,300)">
+      <path d="M-6 60 Q-8 30 -6 6" stroke="#3E8E5A" stroke-width="4" fill="none"/>
+      <path d="M8 60 Q10 30 8 6" stroke="#3E8E5A" stroke-width="4" fill="none"/>
+      <g fill="#9A6DD7"><ellipse cx="-6" cy="0" rx="5" ry="6"/><ellipse cx="-6" cy="-11" rx="5" ry="6" fill="#B98BE8"/><ellipse cx="-6" cy="-22" rx="4" ry="5"/><ellipse cx="8" cy="2" rx="5" ry="6"/><ellipse cx="8" cy="-9" rx="5" ry="6" fill="#B98BE8"/><ellipse cx="8" cy="-20" rx="4" ry="5"/></g>
+    </g>
+    <!-- marigold -->
+    <g transform="translate(540,302)">
+      <path d="M0 58 Q-3 30 0 6" stroke="#3E8E5A" stroke-width="5" fill="none"/>
+      <g transform="translate(0,0)"><g fill="#FF8C1F"><ellipse rx="6" ry="14" transform="rotate(0)"/><ellipse rx="6" ry="14" transform="rotate(40)"/><ellipse rx="6" ry="14" transform="rotate(80)"/><ellipse rx="6" ry="14" transform="rotate(120)"/><ellipse rx="6" ry="14" transform="rotate(160)"/></g><circle r="6" fill="#B5560E"/></g>
+    </g>
+  </g>
+
+  <!-- watering can -->
+  <g transform="translate(520,190) rotate(8)">
+    <rect x="-24" y="-20" width="46" height="40" rx="10" fill="#6BB6C9"/>
+    <rect x="-24" y="0" width="46" height="20" rx="10" fill="#5AA1B4"/>
+    <path d="M-2 -24 a16 16 0 0 1 0 0" fill="none"/>
+    <path d="M-14 -22 q16 -8 24 6" stroke="#4E93A6" stroke-width="6" fill="none"/>
+    <polygon points="20,-12 52,-30 58,-22 26,-2" fill="#5AA1B4"/>
+    <ellipse cx="55" cy="-26" rx="7" ry="10" fill="#4E93A6" transform="rotate(-30 55 -26)"/>
+    <g fill="#8AD1E8"><circle cx="60" cy="-14" r="3"/><circle cx="66" cy="-4" r="2.6"/><circle cx="58" cy="-2" r="2.2"/></g>
+  </g>
+
+  <!-- butterflies -->
+  <g transform="translate(210,120)"><g fill="#F582AE"><ellipse cx="-6" cy="-1" rx="8" ry="11" transform="rotate(-20)"/></g><g fill="#FFB0C4"><ellipse cx="6" cy="-1" rx="8" ry="11" transform="rotate(20)"/></g><rect x="-1.2" y="-9" width="2.4" height="18" fill="#3A2A20"/></g>
+  <g transform="translate(430,150) scale(0.9)"><g fill="#8AD1E8"><ellipse cx="-6" cy="-1" rx="8" ry="11" transform="rotate(-20)"/></g><g fill="#BEE9F5"><ellipse cx="6" cy="-1" rx="8" ry="11" transform="rotate(20)"/></g><rect x="-1.2" y="-9" width="2.4" height="18" fill="#3A2A20"/></g>
+  <g transform="translate(120,175) scale(0.75)"><g fill="#F7C873"><ellipse cx="-6" cy="-1" rx="8" ry="11" transform="rotate(-20)"/></g><g fill="#FFE3A0"><ellipse cx="6" cy="-1" rx="8" ry="11" transform="rotate(20)"/></g><rect x="-1.2" y="-9" width="2.4" height="18" fill="#3A2A20"/></g>
+
+  <!-- title -->
+  <g transform="translate(320,95)" text-anchor="middle" font-family="'Comic Neue','Chalkboard SE','Marker Felt','Segoe Print',sans-serif">
+    <rect x="-190" y="-46" width="380" height="96" rx="20" fill="#3A2A1A" opacity="0.42"/>
+    <text x="0" y="6" font-size="52" font-weight="800" fill="url(#title)" stroke="#5B3A29" stroke-width="1.2">Green Thumb</text>
+    <text x="0" y="36" font-size="19" font-weight="700" fill="#CDEBA8">grow a beautiful garden</text>
+  </g>
+</svg>
