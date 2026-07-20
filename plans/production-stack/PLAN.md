@@ -1,128 +1,134 @@
 # GameSight — Production Plan
 
-_Final. 2026-07-20. One developer. Cheap, safe, survives virality, deploys in two commands._
+_Final. 2026-07-20. One developer. The full loop ships day 1, and it charges money day 1._
 
-Option matrices and citations live in `research/`. This document is the decision.
+Option matrices and citations are in `research/`. This is the decision.
 
 ---
 
-## Launch needs three services
+## The loop
 
-| | What it is | Why |
+**prompt → agents build it → play it → share it → friends play free → some sign up → they prompt.**
+
+Playing is free forever — that's the viral surface. **Generating is the paid action.** New accounts get ~2 free games to feel the loop, then it costs credits. The revenue loop and the viral loop are the same loop.
+
+---
+
+## Five services, each irreducible
+
+| | Does | Why it can't go |
 |---|---|---|
-| **Vercel** | Hosts the Next.js app | `git push` deploys. Preview per branch, instant rollback. Pro ($20/mo) — Hobby forbids commercial use. |
-| **Turso** | **The database.** Hosted SQLite (libSQL) | It is the same engine the app already uses, so today's schema ports nearly verbatim. Host-agnostic HTTP — never welds us to Vercel. |
-| **Cloudflare R2** | Bucket holding the game bundles, on its own domain | One choice solves four problems: storage for generated games, a separate origin (the safety boundary), CDN serving, and **$0 egress**. |
+| **Vercel** | Hosts the Next.js app | `git push` deploys, preview per branch, instant rollback. Pro ($20/mo) — Hobby forbids commercial use. |
+| **Turso** | **The database** — hosted SQLite (libSQL) | Same engine the app already speaks, so the schema ports nearly verbatim. HTTP, so it never welds us to a host. |
+| **Cloudflare R2** | Game bundles, on their own domain | Untrusted code from strangers ships daily → the separate origin is mandatory. **$0 egress** is what makes a viral day free. |
+| **Modal** | Runs the generation pipeline | 10–25 min job with Chromium + filesystem can't run on Vercel (~13 min cap, no browser). `.spawn()` is also the queue, and a throwaway container keeps a shell-wielding agent off production. |
+| **Polar** | Credits + subscriptions | Money day 1. Merchant-of-Record, so a solo dev never registers for VAT anywhere. Native credit primitives. |
 
-That's the whole launch stack. One domain each for the app and the games.
+**Better Auth** is a library, not a service — no account, no bill; its `user` table is just another Turso table. Google sign-in is free console config.
 
-**Two more arrive later, only when the feature that needs them ships:**
-
-- **Modal** (Phase 2) — runs the generation pipeline. A 15–25 minute job with Chromium and a filesystem can't run on Vercel; this is the one thing that genuinely needs its own runtime.
-- **Polar** (Phase 3) — credits and subscriptions. Merchant-of-Record, so a solo dev never registers for VAT anywhere.
-
-**Not services:** **Better Auth** is a library inside the app (no account, no bill — the `user` table lives in Turso). Google sign-in is free console config. Email pings are optional and deferred — the cooking tray already notifies in-browser.
-
-**Peak: five services, arriving one at a time.** Nothing on this list can be removed without losing a required property — I tried, and the two near-misses are documented at the bottom.
+Five managed services, zero servers to patch.
 
 ---
 
-## Where the data lives
+## Data
 
-| Data | Home | Notes |
-|---|---|---|
-| Games, scores, leaderboards, ratings, users, credits, generation jobs | **Turso** | One SQLite database. Same tables as today plus `user` and a credits/balance table. |
-| Game bundles (`index.html`, `cover.svg`) | **R2** | Immutable static files, served by CDN from the game origin. |
-| Sessions | **Turso** (via Better Auth) | |
+**Turso:** games, scores, leaderboards, ratings, users, sessions, credits, generation jobs.
+**R2:** game bundles (`index.html`, `cover.svg`) — immutable, CDN-served.
 
-**Schema management: none needed.** `migrate()` is already idempotent — `CREATE TABLE IF NOT EXISTS` plus additive `ALTER`s, run automatically on first connection. It self-migrates on deploy. No migration tool, no extra command.
-
-One real change in production: `syncGamesFromDisk()` gets deleted. It's a local-dev convenience that reads the `games/` folder; in production the database is the source of truth for game metadata, written by the push script (seed games) and the worker (generated games).
+**No schema tooling.** `migrate()` is already idempotent and runs on first connection, so it self-migrates on deploy. `syncGamesFromDisk()` gets deleted — in production the DB is the source of truth for metadata, written by the push script (seed games) and the worker (generated ones).
 
 ---
 
-## Why this survives virality
+## Money
 
-The three kinds of load cost wildly different amounts, so each goes to the cheapest thing that can serve it:
+**Free:** playing, sharing, remixing, leaderboards, ratings. Gating any of it would kill growth.
+**Costs credits:** generating a game, and editing one (an edit re-runs the pipeline).
 
-| Load | Volume when it pops | Where it goes | Marginal cost |
+**Three ways in:** free starter credits on signup (the funnel — the loop must be felt to be bought) · a one-time credit pack (impulse, at the "one more" moment) · a subscription granting monthly credits plus perks that cost us nothing (priority queue, fuller verify budget, creator profile).
+
+**Two rules that protect margin:**
+1. **Debit at job start, refund on failure.** A rejected build still burns tokens; charging only on success makes every failure a pure loss.
+2. **Cycle budget is the cost dial.** Cost ≈ (designer + builder + playtest + judges) × cycles. If measured cost is too high, cut in this order: cheaper playtest narration → cheaper judges → fewer cycles.
+
+**The pricing rule, not the number: a credit sells for 3–4× measured token cost.** The number is blocked on the benchmark below.
+
+---
+
+## Why it survives virality
+
+| Load | When it pops | Goes to | Marginal cost |
 |---|---|---|---|
-| Playing games (bandwidth) | Enormous | R2 static bundles via CDN | **$0** — R2 charges no egress |
-| Feed + leaderboards (reads) | High | Cached Next routes (revalidate 30–60s) | ~1 query per interval, not per visitor |
+| Playing (bandwidth) | Enormous | R2 via CDN | **$0** — no egress fee |
+| Feed + leaderboards | High | Cached Next routes (30–60s) | ~1 query per interval, not per visitor |
 | Score writes | Modest | Turso, indexed | Cheap |
-| Generation (LLM tokens) | Self-limiting | Modal, behind credits | Paid by the user |
+| Generation (tokens) | Self-limiting | Modal, behind credits | **Paid by the user** |
 
-The expensive path is free, the metered path is cached, and the genuinely costly path is paywalled. A viral day is a bandwidth event, and bandwidth is the thing we made cost nothing. No human has to intervene.
+The expensive path is free, the metered path is cached, and the costly path is revenue. The paywall doubles as the rate limiter.
 
 ---
 
 ## Safety
 
-Four boundaries, most important first:
+1. **Untrusted game code can't touch the app.** Separate registrable domain (R2), `iframe sandbox` *without* `allow-same-origin`, strict CSP (`connect-src 'none'` — games make no network calls). _Built; needs the domain._
+2. **The build agent can't touch production.** The risk is the builder/judge agents holding filesystem + shell access, not the game. Fresh Modal container per job.
+3. **Generation can't become a surprise bill.** Sign-in + credits debited up front + per-account daily cap + **one running job per account**.
+4. **Bad content has two gates.** Prompt moderation before tokens are spent; the judge's content check before anything publishes (the `published.json` gate), plus the built report-and-unlist path.
+5. **Existing hardening carries over.** Session-gated scores, anti-cheat quarantine, body-size limits, play-time-gated reports, owner-only publish.
 
-1. **Untrusted game code can't touch the app.** Games are machine-generated JS running in every player's browser. Served from a **separate registrable domain** (R2), embedded with `iframe sandbox` *without* `allow-same-origin`, under a strict CSP (`connect-src 'none'` — a game makes no network calls at all). Cross-origin is the boundary; CSP is defence in depth. _Built; needs the domain._
-2. **The build agent can't touch production.** The risk isn't the game, it's the builder and judge agents holding filesystem and shell access. They run in a **fresh Modal container per job**, never on the machine serving traffic.
-3. **Generation can't become a surprise bill.** Sign-in required, credits debited before the job starts, hard per-account daily cap. Bounded by design, not by monitoring.
-4. **Existing hardening carries over.** Session-gated scores, anti-cheat quarantine, body-size limits, play-time-gated reports, owner-only publish. _Built._
-
-Secrets live only in Vercel and Modal env. No key ever reaches a game bundle.
+Secrets live only in Vercel and Modal env; none ever reaches a game bundle.
 
 ---
 
-## Deploying
+## Deploy
 
 ```
-git push               # → Vercel builds + deploys the app
-npm run push-games     # → upload bundles to R2 + upsert their rows in Turso
+git push                  # → Vercel builds + deploys the app
+modal deploy worker.py    # → the generation worker
+npm run push-games        # → seed bundles to R2 + upsert their rows
 ```
 
-Plus `modal deploy worker.py` once Phase 2 lands. The database needs no deploy step — it self-migrates.
+The database needs no deploy step.
 
 ---
 
-## Rollout
+## Build order
 
-**Phase 0 — Public and playable.** Port `lib/db.ts` to `@libsql/client`. Push the 16 games to R2 behind their own domain with the CSP. Deploy to Vercel. **Ship with creation turned off** — launch as a games site. This is the key simplification: it takes auth, billing, and hosted generation off the critical path, so nothing gates going live.
+One launch, so these are work items. Deployable to a private Vercel URL from step 3 — dogfood the real thing early.
 
-**Phase 1 — Accounts.** Better Auth + Google. On first sign-in, adopt the browser's existing localStorage games into the new `user.id` in one transaction.
+1. **Token benchmark** — blocking; sets pricing and whether the cycle budget must shrink.
+2. **Turso port** — `lib/db.ts` → `@libsql/client` (18 files, 12 `prepare()` calls; mechanical, the only tedious part).
+3. **R2 + game origin** — bucket, domain, CSP, push script.
+4. **Modal worker** — pipeline in a container; generation survives tab-close. The cooking tray already polls the right row, so **no UI change**.
+5. **Better Auth + Google** — real ownership; adopt each browser's localStorage games into `user.id` on first sign-in.
+6. **Polar + caps** — checkout, webhook, balance, debit/refund, daily cap, one-job-per-account.
+7. **Smoke-test the full loop in production, money included.** Then open the doors.
 
-**Phase 2 — Hosted generation.** Modal image (`run.mjs` + `claude` CLI + Playwright/Chromium). The generate route `.spawn()`s and returns immediately; the worker uploads to R2 and writes the terminal state. The cooking tray and `/build/[id]` already poll that row, so **the UI needs no change** to support leaving.
-
-**Phase 3 — Credits.** Polar: a subscription granting N credits per cycle, a `game_generated` meter, free starter credits. Gate generation on `balance > 0`. Turn creation on.
-
-**Deferred deliberately:** Apple sign-in ($99/yr plus a secret that silently expires every 6 months), email/web push, party multiplayer.
+**Deferred:** Apple sign-in ($99/yr + a secret that silently expires every 6 months), email/push pings (the tray covers it), party multiplayer.
 
 ---
 
-## Cost
+## Cost, and the one blocking task
 
 | Stage | Monthly |
 |---|---|
-| Launch | **$20** Vercel Pro + ~$1 domains. Turso and R2 free-tier. |
-| Creation live | **$20–30** + Claude tokens, initially covered by **Anthropic Claude for Startups** credits (~$25k). |
-| Viral (1M plays/day) | **~$50–200.** Bandwidth stays $0; growth is Vercel invocations and Turso reads. |
+| Launch | **$20** Vercel Pro + ~$1 domains; Turso, R2, Modal free-tier |
+| Steady state | **$20–30** infra + tokens, offset early by **Anthropic Claude for Startups** credits (~$25k) |
+| Viral (1M plays/day) | **~$50–200** — bandwidth stays $0; growth is Vercel invocations + Turso reads |
 
-**The number that decides the business:** measured Claude-token cost per published game (design → build → play-test → judge, up to 3 cycles). Benchmark it before pricing a credit. No architecture choice answers this.
+**Measure token cost per published game.** Run the existing pipeline ~10× across easy and hard prompts, logging tokens and cycles per stage; take the mean **and the p90** (the tail is what a 3-cycle game costs). That number sets the credit price, the free grant, and whether the judges need a cheaper model. Nothing architectural can answer it, and it's the only thing between this plan and a launch that makes money.
 
 ---
 
-## What we deliberately did not build
+## Deliberately not built
 
-Elegance here is mostly subtraction.
+No queue service (`.spawn()` + one `generations` row *is* the queue; QStash's 60s timeout can't even run the job) · no Redis (Next caching covers the read paths) · no migration tool · no container orchestration · no tax engine (Polar is MoR) · no email service.
 
-- **No queue service.** Modal's `.spawn()` plus one `generations` row *is* the queue. Inngest/Trigger.dev are redundant; QStash's 60-second timeout can't even run the job.
-- **No Redis or cache layer.** Next's built-in caching covers the read-heavy paths.
-- **No migration tool.** The schema self-migrates.
-- **No container orchestration, no servers to patch.** Vercel and Modal each own their runtime.
-- **No tax engine.** Polar is Merchant-of-Record.
-- **No separate email service at launch.** The in-app tray covers "your game is ready."
+**Consolidations tried and rejected:**
+- **Vercel Blob instead of R2** — metered egress (~$300/mo at 1M plays/day vs $0), and it would put untrusted games on the app's own domain, destroying the main safety boundary.
+- **Vercel Postgres instead of Turso** — turns a near-verbatim port into a real migration and re-welds the DB to the host.
+- **Stripe instead of Polar** — ~2 points cheaper, but then a solo dev owns worldwide VAT registration and filing. Revisit when revenue justifies the ops.
+- **Generation on Vercel** — impossible: ~13 min ceiling, no Chromium, and it would run a shell-wielding agent inside the app's runtime.
 
-**The two consolidations I tried and rejected:**
+## Open
 
-- **Vercel Blob instead of R2** (would drop a vendor): Blob egress is metered. At a million plays a day that's roughly $300/mo instead of $0, and it would put untrusted games on the app's own domain — losing the primary safety boundary. R2 earns its place on both counts.
-- **Vercel Postgres instead of Turso** (would drop a vendor): it's Postgres, turning a near-verbatim schema port into a real migration, and it re-welds the database to the host. Turso is the same SQLite engine the app already speaks.
-
-## Open decisions
-
-- Domain names (app + game origin).
-- Credits per game, and free credits per new account — both blocked on the token benchmark.
+Domain names (app + game origin) · credit price, pack size, subscription tier, free grant — all blocked on the benchmark.
