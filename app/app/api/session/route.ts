@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
-import { db, getGame } from '@/lib/db';
+import { db, getGameAny } from '@/lib/db';
 import { readJson } from '@/lib/http';
 
 // A play session is minted when a game page loads. Score submits require a
@@ -8,7 +8,7 @@ import { readJson } from '@/lib/http';
 export async function POST(req: NextRequest) {
   const body = await readJson(req);
   const slug = typeof body?.slug === 'string' ? body.slug : null;
-  if (!slug || !getGame(slug)) return NextResponse.json({ error: 'unknown game' }, { status: 404 });
+  if (!slug || !getGameAny(slug)) return NextResponse.json({ error: 'unknown game' }, { status: 404 });
 
   const sessionId = crypto.randomBytes(16).toString('hex');
   const now = Date.now();

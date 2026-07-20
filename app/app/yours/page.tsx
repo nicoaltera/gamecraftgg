@@ -3,15 +3,22 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { listCreations, type Creation } from '@/lib/creations';
+import { getRef } from '@/lib/ref';
 
 type Status = { status: 'running' | 'published' | 'failed' | 'archived'; slug: string | null };
+type MyGame = { slug: string; title: string; verb: string; status: string; rating: number; ratingCount: number; parentSlug: string };
 
 export default function YoursPage() {
   const [creations, setCreations] = useState<Creation[] | null>(null);
   const [statuses, setStatuses] = useState<Record<string, Status>>({});
+  const [myGames, setMyGames] = useState<MyGame[]>([]);
 
   useEffect(() => {
     setCreations(listCreations());
+    fetch(`/api/mine?ref=${getRef()}`)
+      .then((r) => r.json())
+      .then((d) => setMyGames(d.games ?? []))
+      .catch(() => {});
   }, []);
 
   const refresh = useCallback(async (list: Creation[]) => {
@@ -64,11 +71,29 @@ export default function YoursPage() {
         Games you’ve made. Ones still cooking keep building even if you leave this page — go play something while you wait.
       </p>
 
-      {creations.length === 0 ? (
+      {myGames.length > 0 && (
+        <ul style={{ listStyle: 'none', padding: 0, maxWidth: 720, marginBottom: 8 }}>
+          {myGames.map((g) => (
+            <li key={g.slug} style={{ display: 'flex', gap: 16, alignItems: 'center', padding: '14px 0', borderBottom: '1px solid rgba(26,24,21,0.12)' }}>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <Link href={`/g/${g.slug}`} style={{ color: 'var(--ink)', fontWeight: 500 }}>{g.title}</Link>
+                <span style={{ color: 'var(--graphite)', fontSize: 13, marginLeft: 8 }}>
+                  {g.status === 'draft' ? 'draft' : `● live${g.ratingCount > 0 ? ` · ★ ${g.rating.toFixed(1)}` : ''}`}
+                </span>
+              </span>
+              <Link className={g.status === 'draft' ? 'btn' : 'btn btn-biro'} href={`/g/${g.slug}`}>
+                {g.status === 'draft' ? 'Review & publish' : 'Open'}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {creations.length === 0 && myGames.length === 0 ? (
         <p className="about-game">
           You haven’t made a game yet. <Link href="/#make">Make one →</Link>
         </p>
-      ) : (
+      ) : creations.length === 0 ? null : (
         <ul style={{ listStyle: 'none', padding: 0, maxWidth: 720 }}>
           {creations.map((c) => {
             const s = statuses[c.id];

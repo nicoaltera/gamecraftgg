@@ -313,3 +313,28 @@ main {
 .building-dot { color: var(--biro); font-size: 10px; }
 .build-leave { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 16px; padding: 12px 14px; border: 1.5px dashed rgba(36,71,214,0.4); border-radius: 8px; font-size: 14px; color: var(--graphite); }
 .build-leave .btn { padding: 8px 14px; font-size: 14px; }
+
+/* ---------- ratings ---------- */
+.stars { display: inline-flex; gap: 1px; }
+.star-wrap { position: relative; display: inline-block; }
+.star { font-size: 20px; color: rgba(26,24,21,0.18); line-height: 1; }
+.star.full { color: var(--highlighter); -webkit-text-stroke: 1px var(--ink); }
+.star.half { background: linear-gradient(90deg, var(--highlighter) 50%, rgba(26,24,21,0.18) 50%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; -webkit-text-stroke: 1px var(--ink); }
+.star-hit { position: absolute; top: 0; width: 50%; height: 100%; background: none; border: none; padding: 0; cursor: pointer; }
+.star-hit.left { left: 0; } .star-hit.right { right: 0; }
+.rating { margin-bottom: 20px; }
+.rating-avg { display: flex; align-items: center; gap: 8px; }
+.rating-num { color: var(--graphite); font-size: 13px; }
+.rating-you { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 13px; color: var(--graphite); }
+.card-rating { color: var(--ink); }
+
+/* ---------- owner / draft / remix actions ---------- */
+.game-actions-bar { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 6px; }
+.lineage { font-size: 13px; color: var(--graphite); margin: 0; }
+.draft-box { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border: 1.5px dashed rgba(36,71,214,0.4); border-radius: 8px; }
+.draft-badge { font-family: var(--font-mono), monospace; font-size: 12px; color: var(--redpencil); letter-spacing: 0.02em; }
+.live-badge { font-size: 13px; color: var(--biro); }
+.edit-area { }
+.edit-row { display: flex; gap: 8px; max-width: 560px; }
+.edit-input { flex: 1; border: 1.5px solid var(--ink); border-radius: 6px; padding: 9px 12px; font-size: 15px; font-family: var(--font-body), sans-serif; background: var(--paper); color: var(--ink); }
+.actions-note { font-size: 13px; color: var(--biro); }

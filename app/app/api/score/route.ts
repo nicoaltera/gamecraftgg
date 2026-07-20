@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, getGame, getLeaderboard, parseBoards } from '@/lib/db';
+import { db, getGameAny, getLeaderboard, parseBoards } from '@/lib/db';
 import { cleanName } from '@/lib/names';
 import { readJson } from '@/lib/http';
 
@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
   const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
   const name = cleanName(body?.name);
 
-  const game = getGame(slug);
+  const game = getGameAny(slug);
   if (!game) return NextResponse.json({ error: 'unknown game' }, { status: 404 });
   if (!name) return NextResponse.json({ error: 'pick a cleaner name' }, { status: 400 });
 

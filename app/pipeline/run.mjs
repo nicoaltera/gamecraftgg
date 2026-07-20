@@ -24,8 +24,10 @@ function arg(name) {
 }
 const prompt = arg('prompt');
 const genId = arg('id') ?? crypto.randomBytes(8).toString('hex');
+const creatorRef = arg('ref') ?? '';        // owner of the resulting game
+const editSlug = arg('edit') ?? '';          // if set, iterate an existing game in place
 if (!prompt) {
-  console.error('usage: node pipeline/run.mjs --prompt "..." [--id <id>]');
+  console.error('usage: node pipeline/run.mjs --prompt "..." [--id <id>] [--ref <ref>] [--edit <slug>]');
   process.exit(2);
 }
 
@@ -156,10 +158,44 @@ const rubric = fs.readFileSync(path.join(APP, '..', '03-quality-rubric.md'), 'ut
 const designGuidance = fs.readFileSync(path.join(APP, '..', '02-generation-pipeline.md'), 'utf8');
 
 try {
-  // ---------- 1. designer ----------
-  trace('designer', 'Designing the game…');
-  const designerOut = await claude(
-    `You are the GameSight DESIGNER agent — heavy planning, high taste, before any code.
+  let brief, meta, gameDir;
+  let editSnapshot = null; // for edit mode: restore the game if the edit fails to pass
+  const editRow = editSlug ? db.prepare('SELECT * FROM games WHERE slug = ?').get(editSlug) : null;
+
+  if (editRow) {
+    // ---------- 1b. designer (EDIT MODE) — amend an existing game in place ----------
+    trace('designer', `Editing "${editRow.title}" per your prompt…`);
+    gameDir = path.join(APP, 'games', editSlug);
+    // snapshot the live game so a failed edit reverts cleanly (never break a good game)
+    const snap = (f) => (fs.existsSync(path.join(gameDir, f)) ? fs.readFileSync(path.join(gameDir, f)) : null);
+    editSnapshot = { 'index.html': snap('index.html'), 'cover.svg': snap('cover.svg'), 'DESIGN_BRIEF.md': snap('DESIGN_BRIEF.md') };
+    const prevBrief = fs.existsSync(path.join(gameDir, 'DESIGN_BRIEF.md'))
+      ? fs.readFileSync(path.join(gameDir, 'DESIGN_BRIEF.md'), 'utf8')
+      : '(no prior brief on disk)';
+    const designerOut = await claude(
+      `You are the GameSight DESIGNER agent editing an EXISTING game. Apply the creator's change to the current design — keep everything that works, change only what the prompt asks. Output the FULL updated DESIGN_BRIEF (not a diff).
+
+Guidance:
+${designGuidance}
+
+CURRENT DESIGN_BRIEF:
+${prevBrief}
+
+Creator's change request: "${prompt}"
+
+Output the complete updated brief inside a \`\`\`markdown fence. Nothing else.`,
+      { phase: 'designer' }
+    );
+    brief = extractBlock(designerOut, 'markdown') ?? designerOut;
+    meta = JSON.parse(fs.readFileSync(path.join(gameDir, 'meta.json'), 'utf8')); // keep slug/title/boards
+    fs.writeFileSync(path.join(gameDir, 'DESIGN_BRIEF.md'), brief);
+    setGen({ slug: editSlug, brief });
+    trace('designer', `Edit brief ready for ${editSlug}`);
+  } else {
+    // ---------- 1. designer (NEW GAME) ----------
+    trace('designer', 'Designing the game…');
+    const designerOut = await claude(
+      `You are the GameSight DESIGNER agent — heavy planning, high taste, before any code.
 
 Guidance (follow the "Stage 1 — Designer agent" section exactly, including the fun-drive dials and the wide creative space):
 ${designGuidance}
@@ -171,27 +207,28 @@ Produce:
 2. A meta.json object per the conventions (slug: kebab-case, unique-feeling, not colliding with common words).
 
 Output format: the brief inside a \`\`\`markdown fence, then the meta inside a \`\`\`json fence. Nothing else.`,
-    { phase: 'designer' }
-  );
-  const brief = extractBlock(designerOut, 'markdown') ?? designerOut;
-  const meta = extractJson(designerOut);
-  if (!meta.slug || !/^[a-z0-9-]{3,40}$/.test(meta.slug)) throw new Error('designer produced invalid slug');
-  if (!Array.isArray(meta.dials) || meta.dials.length === 0) meta.dials = ['mastery'];
-  meta.title = meta.title ?? meta.slug;
-  // Atomically claim the game dir: mkdir (non-recursive) fails with EEXIST if a
-  // concurrent run already took the slug, so we never clobber another game.
-  let gameDir = path.join(APP, 'games', meta.slug);
-  try {
-    fs.mkdirSync(gameDir);
-  } catch (e) {
-    if (e.code !== 'EEXIST') throw e;
-    meta.slug = `${meta.slug}-${genId.slice(0, 4)}`;
+      { phase: 'designer' }
+    );
+    brief = extractBlock(designerOut, 'markdown') ?? designerOut;
+    meta = extractJson(designerOut);
+    if (!meta.slug || !/^[a-z0-9-]{3,40}$/.test(meta.slug)) throw new Error('designer produced invalid slug');
+    if (!Array.isArray(meta.dials) || meta.dials.length === 0) meta.dials = ['mastery'];
+    meta.title = meta.title ?? meta.slug;
+    // Atomically claim the game dir: mkdir (non-recursive) fails with EEXIST if a
+    // concurrent run already took the slug, so we never clobber another game.
     gameDir = path.join(APP, 'games', meta.slug);
-    fs.mkdirSync(gameDir, { recursive: true });
+    try {
+      fs.mkdirSync(gameDir);
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      meta.slug = `${meta.slug}-${genId.slice(0, 4)}`;
+      gameDir = path.join(APP, 'games', meta.slug);
+      fs.mkdirSync(gameDir, { recursive: true });
+    }
+    fs.writeFileSync(path.join(gameDir, 'DESIGN_BRIEF.md'), brief);
+    setGen({ slug: meta.slug, brief });
+    trace('designer', `Brief ready: "${meta.title}" (${meta.slug}) — dials: ${JSON.stringify(meta.dials)}`);
   }
-  fs.writeFileSync(path.join(gameDir, 'DESIGN_BRIEF.md'), brief);
-  setGen({ slug: meta.slug, brief });
-  trace('designer', `Brief ready: "${meta.title}" (${meta.slug}) — dials: ${JSON.stringify(meta.dials)}`);
 
   // ---------- 2/3/4. build + verify + judge loop ----------
   let critique = '';
@@ -262,6 +299,8 @@ Harness hard-fail: ${verifyFailed}
 
 Your working directory IS this game's folder. The game's code is at ./index.html and screenshots from the play-test are in ./_shots/ — READ the code and LOOK at every screenshot with the Read tool before scoring. Judge art direction from the screenshots like an art director. Read ONLY files within this folder.
 
+PHYSICS INTEGRITY (rubric U3a — weight this heavily, it's the #1 failure mode): if the game has simulated motion, do NOT pass it unless you can justify from the code + evidence that (1) a run reliably TERMINATES — reaching a goal/death/end; flag any "flies forever / never loses / unbounded run with no resolution" as a CRITICAL fail; (2) the run is WINNABLE/completable by skilled play — read the level/goal geometry and the physics constants and reason about whether the goal is actually reachable; an unwinnable or impossible layout is a CRITICAL fail; (3) the feel is FORGIVING (not instant-death/brittle); (4) nothing freezes, tunnels, sticks, NaNs, or launches to infinity. Reason explicitly about termination and winnability in your critique. Do not assume the constants are tuned right — check them.
+
 Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "critique": "specific, actionable, ordered by importance", "verdict": "publish" | "fix"}`,
       { tools: 'Read', cwd: gameDir, phase: 'judge' }
     );
@@ -277,14 +316,15 @@ Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "crit
   }
 
   if (published) {
-    // Publish authority = the DB insert here PLUS a published.json marker on disk
-    // (the marker is what lets syncGamesFromDisk surface it; without it, the built
-    // files stay invisible). Column set mirrors syncGamesFromDisk — including
-    // `boards` — so a multi-board game's leaderboard works immediately, not after
-    // the next 30s sync (M2).
+    // A judge-passed game becomes a DRAFT owned by its creator — it does NOT hit
+    // the public library until the creator clicks Publish. The published.json
+    // marker means "vetted & real" (lets syncGamesFromDisk see it); the DB
+    // `status` (draft/published) controls public visibility. ON CONFLICT (edit
+    // mode) preserves status + creator_ref so an edit doesn't un-publish or
+    // re-own the game. Column set mirrors syncGamesFromDisk incl. `boards` (M2).
     db.prepare(
-      `INSERT INTO games (slug, title, description, verb, dials, orientation, mode, score_label, score_order, boards, palette, author, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO games (slug, title, description, verb, dials, orientation, mode, score_label, score_order, boards, palette, author, status, creator_ref, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
        ON CONFLICT(slug) DO UPDATE SET title=excluded.title, description=excluded.description, verb=excluded.verb,
          dials=excluded.dials, orientation=excluded.orientation, mode=excluded.mode,
          score_label=excluded.score_label, score_order=excluded.score_order, boards=excluded.boards, palette=excluded.palette`
@@ -292,13 +332,20 @@ Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "crit
       meta.slug, meta.title, meta.description ?? '', meta.verb ?? '', JSON.stringify(meta.dials ?? []),
       meta.orientation ?? 'landscape', meta.mode ?? 'sp', meta.scoreLabel ?? '',
       meta.scoreOrder === 'asc' ? 'asc' : 'desc', JSON.stringify(Array.isArray(meta.boards) ? meta.boards : []),
-      JSON.stringify(meta.palette ?? []), 'creator', Date.now()
+      JSON.stringify(meta.palette ?? []), creatorRef, Date.now()
     );
     fs.writeFileSync(path.join(gameDir, 'published.json'), JSON.stringify({ genId, at: Date.now() }));
-    setGen({ status: 'published' });
-    trace('publish', `Published: /g/${meta.slug}`);
+    setGen({ status: 'published' });   // generation status (done), not game visibility
+    trace('publish', editSlug ? `Updated: /g/${meta.slug}` : `Ready to publish: /g/${meta.slug} (draft — click Publish)`);
+  } else if (editSnapshot) {
+    // A failed EDIT must never break the live game — restore the pre-edit files.
+    for (const [f, buf] of Object.entries(editSnapshot)) {
+      if (buf) fs.writeFileSync(path.join(gameDir, f), buf);
+    }
+    setGen({ status: 'failed' });
+    trace('fail', 'The edit did not pass — your game is unchanged. Try a different change.');
   } else {
-    // Not vetted — remove the build so it can never be sync-published (C1).
+    // New game, not vetted — remove the build so it can never be sync-published (C1).
     try { fs.rmSync(gameDir, { recursive: true, force: true }); } catch { /* ignore */ }
     setGen({ status: 'failed' });
     trace('fail', 'Cycle budget exhausted — not published. The critique is available for a re-prompt.');

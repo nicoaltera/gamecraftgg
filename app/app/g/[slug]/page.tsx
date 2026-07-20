@@ -1,10 +1,12 @@
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import type { Metadata } from 'next';
-import { getGame, parseBoards } from '@/lib/db';
+import { getGame, getGameAny, parseBoards } from '@/lib/db';
 import GameStage from '@/components/GameStage';
 import Leaderboard from '@/components/Leaderboard';
 import ReportButton from '@/components/ReportButton';
+import StarRating from '@/components/StarRating';
+import GameActions from '@/components/GameActions';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,9 +34,10 @@ export async function generateMetadata({ params, searchParams }: Params): Promis
 
 export default async function GamePage({ params }: Params) {
   const { slug } = await params;
-  const game = getGame(slug);
+  const game = getGameAny(slug); // owners can view their own drafts
   if (!game) notFound();
   const boards = parseBoards(game);
+  const isPublished = game.status === 'published';
 
   return (
     <main className="game-page">
@@ -46,10 +49,12 @@ export default async function GamePage({ params }: Params) {
       <div className="game-columns">
         <div>
           <GameStage slug={game.slug} title={game.title} boards={boards} />
+          <GameActions slug={game.slug} title={game.title} status={game.status} creatorRef={game.creator_ref} parentSlug={game.parent_slug} />
           <p className="about-game">{game.description}</p>
-          <ReportButton slug={game.slug} />
+          {isPublished && <ReportButton slug={game.slug} />}
         </div>
         <aside>
+          {isPublished && <StarRating slug={game.slug} />}
           <Leaderboard slug={game.slug} boards={boards} />
         </aside>
       </div>

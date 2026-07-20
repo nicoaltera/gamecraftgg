@@ -48,6 +48,8 @@ function migrate(d: Database.Database) {
       palette TEXT DEFAULT '[]',
       author TEXT DEFAULT 'gamesight',
       status TEXT DEFAULT 'published',
+      creator_ref TEXT DEFAULT '',
+      parent_slug TEXT DEFAULT '',
       created_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS plays (
@@ -99,6 +101,13 @@ function migrate(d: Database.Database) {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS ratings (
+      slug TEXT NOT NULL,
+      ref TEXT NOT NULL,
+      stars REAL NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (slug, ref)
+    );
     CREATE INDEX IF NOT EXISTS idx_scores_slug ON scores(slug, board, quarantined, score);
     CREATE INDEX IF NOT EXISTS idx_plays_slug ON plays(slug, started_at);
     CREATE INDEX IF NOT EXISTS idx_edges_slug ON referral_edges(slug, kind);
@@ -110,6 +119,10 @@ function migrate(d: Database.Database) {
   if (!gameCols.includes('boards')) d.exec("ALTER TABLE games ADD COLUMN boards TEXT DEFAULT '[]'");
   const scoreCols = (d.prepare('PRAGMA table_info(scores)').all() as { name: string }[]).map((c) => c.name);
   if (!scoreCols.includes('board')) d.exec("ALTER TABLE scores ADD COLUMN board TEXT NOT NULL DEFAULT ''");
+  if (!gameCols.includes('creator_ref')) d.exec("ALTER TABLE games ADD COLUMN creator_ref TEXT DEFAULT ''");
+  if (!gameCols.includes('parent_slug')) d.exec("ALTER TABLE games ADD COLUMN parent_slug TEXT DEFAULT ''");
+  // index goes AFTER the column exists (the column is ALTER-added for old DBs)
+  d.exec('CREATE INDEX IF NOT EXISTS idx_games_creator ON games(creator_ref)');
 }
 
 export type Board = { key: string; label: string; order: 'asc' | 'desc'; primary: boolean; challenge: boolean };
@@ -212,14 +225,48 @@ export type GameRow = {
   palette: string;
   author: string;
   status: string;
+  creator_ref: string;
+  parent_slug: string;
   created_at: number;
 };
 
+// Public lookup (feed, OG). Only published games.
 export function getGame(slug: string): GameRow | undefined {
   return db().prepare('SELECT * FROM games WHERE slug = ? AND status = ?').get(slug, 'published') as GameRow | undefined;
 }
+// Any-status lookup (owner viewing a draft, publish/remix/edit flows).
+export function getGameAny(slug: string): GameRow | undefined {
+  return db().prepare("SELECT * FROM games WHERE slug = ? AND status != 'unlisted'").get(slug) as GameRow | undefined;
+}
 
-export type FeedItem = GameRow & { plays: number; total_plays: number; avg_runs: number; heat: number };
+export function getRating(slug: string): { avg: number; count: number } {
+  const r = db().prepare('SELECT AVG(stars) AS avg, COUNT(*) AS count FROM ratings WHERE slug = ?').get(slug) as {
+    avg: number | null;
+    count: number;
+  };
+  return { avg: r.avg ?? 0, count: r.count };
+}
+
+export function getUserGames(ref: string): (GameRow & { rating: number; ratingCount: number })[] {
+  if (!ref) return [];
+  return db()
+    .prepare(
+      `SELECT g.*, COALESCE(AVG(r.stars),0) AS rating, COUNT(r.stars) AS ratingCount
+       FROM games g LEFT JOIN ratings r ON r.slug = g.slug
+       WHERE g.creator_ref = ? AND g.status != 'unlisted'
+       GROUP BY g.slug ORDER BY g.created_at DESC`
+    )
+    .all(ref) as (GameRow & { rating: number; ratingCount: number })[];
+}
+
+export type FeedItem = GameRow & {
+  plays: number;
+  total_plays: number;
+  avg_runs: number;
+  heat: number;
+  rating: number;
+  rating_count: number;
+};
 
 // Retention-ranked feed: recent (7-day) plays weighted by how much people replay
 // and stick drive `heat`; `total_plays` is the lifetime count shown on the card
@@ -232,7 +279,10 @@ export function getFeed(limit = 24): FeedItem[] {
       COALESCE(p.plays, 0) AS plays,
       COALESCE(t.total_plays, 0) AS total_plays,
       COALESCE(p.avg_runs, 0) AS avg_runs,
+      COALESCE(rt.rating, 0) AS rating,
+      COALESCE(rt.rating_count, 0) AS rating_count,
       COALESCE(p.plays, 0) * (1.0 + COALESCE(p.avg_runs, 0)) * (1.0 + MIN(COALESCE(p.avg_dur, 0) / 60000.0, 5.0))
+        + COALESCE(rt.rating, 0) * COALESCE(rt.rating_count, 0) * 3
         + CASE WHEN g.created_at > (unixepoch() * 1000 - 72 * 3600 * 1000) THEN 50 ELSE 0 END
         AS heat
     FROM games g
@@ -244,6 +294,9 @@ export function getFeed(limit = 24): FeedItem[] {
     LEFT JOIN (
       SELECT slug, COUNT(*) AS total_plays FROM plays GROUP BY slug
     ) t ON t.slug = g.slug
+    LEFT JOIN (
+      SELECT slug, AVG(stars) AS rating, COUNT(*) AS rating_count FROM ratings GROUP BY slug
+    ) rt ON rt.slug = g.slug
     WHERE g.status = 'published'
     ORDER BY heat DESC, g.created_at DESC
     LIMIT ?

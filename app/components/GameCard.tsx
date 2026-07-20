@@ -15,6 +15,7 @@ export default function GameCard({ game }: { game: FeedItem }) {
       <div className="card-sub">
         <span>{game.verb}</span>
         <span className="mono">
+          {game.rating_count > 0 && <span className="card-rating">★ {game.rating.toFixed(1)} · </span>}
           {game.total_plays > 0
             ? `${game.total_plays.toLocaleString()} ${game.total_plays === 1 ? 'play' : 'plays'}`
             : 'new'}

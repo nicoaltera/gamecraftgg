@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { spawn, execSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { db } from '@/lib/db';
+import { db, getGameAny } from '@/lib/db';
 import { readJson } from '@/lib/http';
 
 // Spawns the generation pipeline (pipeline/run.mjs) detached; the build page
@@ -13,7 +13,16 @@ const DAILY_CAP = 20;
 export async function POST(req: NextRequest) {
   const body = await readJson(req);
   const prompt = typeof body?.prompt === 'string' ? body.prompt.trim().slice(0, 400) : '';
+  const ref = typeof body?.ref === 'string' ? body.ref.slice(0, 64) : '';
+  const editSlug = typeof body?.editSlug === 'string' ? body.editSlug : '';
   if (prompt.length < 8) return NextResponse.json({ error: 'Describe the game in a sentence or two.' }, { status: 400 });
+
+  // editing an existing game requires owning it
+  if (editSlug) {
+    const g = getGameAny(editSlug);
+    if (!g) return NextResponse.json({ error: 'unknown game' }, { status: 404 });
+    if (!ref || g.creator_ref !== ref) return NextResponse.json({ error: 'not your game' }, { status: 403 });
+  }
 
   try {
     execSync('which claude', { stdio: 'ignore' });
@@ -37,11 +46,10 @@ export async function POST(req: NextRequest) {
   }
 
   const runner = path.join(process.cwd(), 'pipeline', 'run.mjs');
-  const child = spawn('node', [runner, '--prompt', prompt, '--id', id], {
-    cwd: process.cwd(),
-    detached: true,
-    stdio: 'ignore',
-  });
+  const args = [runner, '--prompt', prompt, '--id', id];
+  if (ref) args.push('--ref', ref);
+  if (editSlug) args.push('--edit', editSlug);
+  const child = spawn('node', args, { cwd: process.cwd(), detached: true, stdio: 'ignore' });
   child.unref();
 
   return NextResponse.json({ id });

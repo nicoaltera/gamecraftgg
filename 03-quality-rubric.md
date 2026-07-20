@@ -22,6 +22,7 @@ Derived from the full flash canon research (`research/top-flash-games-dna.md`, `
 - U1. ⛔ Game loads and is playable; no console errors that break play.
 - U2. Input produces visible response within ~100ms (next-frame feel). *Deliberately awkward mappings (QWOP-style) are allowed when the brief declares comedy — the response itself must still be instant.*
 - U3. Stable frame rate during normal play; no visible hitching; physics never explodes into NaN/offscreen chaos (wobble entertainingly, never break).
+- U3a. ⛔ **Physics actually works — verified, not assumed.** If the game has simulated motion, a run must (1) reliably **terminate** — reach an end/goal/death; a run that can go forever with no resolution (fly-forever, never-lose, unbounded loop) is a critical fail; (2) be **winnable/completable** under reasonable skilled play — an unwinnable or impossible run is a critical fail; (3) be **forgiving enough to be fun** — not brittle/instant-fail or fighting the player; (4) never get **stuck/broken** (frozen, tunneled through geometry, NaN, launched to infinity). The play-tester must demonstrate a real run reaching an end state AND that the goal is achievable — tuning constants alone are not evidence. Treat physics as a thing to prove, not hope.
 
 **Instantly legible**
 - U4. ⛔ Core verb learnable by doing within ~10 seconds, no text-wall tutorial. One verb, describable in ≤5 words.
