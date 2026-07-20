@@ -89,10 +89,17 @@ export default function BuildPage({ params }: { params: Promise<{ id: string }> 
 
       {gen.status === 'running' && (
         <div className="build-leave">
-          <span>This keeps building even if you leave — go play while you wait.</span>
+          <span>This keeps building even if you leave — go play while you wait, we’ll ping you.</span>
           <Link className="btn" href="/#games">Play other games</Link>
           <Link className="btn" href="/yours">Your games</Link>
         </div>
+      )}
+
+      {gen.brief && (
+        <section className="build-brief">
+          <h2>the plan ✎</h2>
+          <p>{gen.brief.length > 600 ? gen.brief.slice(0, 600).trimEnd() + '…' : gen.brief}</p>
+        </section>
       )}
 
       <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', marginTop: 18, fontSize: 13, color: 'var(--graphite)' }}>

@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Shantell_Sans, Instrument_Sans, IBM_Plex_Mono } from 'next/font/google';
 import Link from 'next/link';
 import YoursLink from '@/components/YoursLink';
+import CookingTray from '@/components/CookingTray';
 import './globals.css';
 
 const shantell = Shantell_Sans({ subsets: ['latin'], weight: ['500', '600', '700'], variable: '--font-display' });
@@ -28,6 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </nav>
         </header>
         {children}
+        <CookingTray />
         <footer className="site-footer">
           <span>drawn into existence, one sentence at a time</span>
         </footer>

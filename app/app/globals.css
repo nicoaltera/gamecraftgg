@@ -338,3 +338,75 @@ main {
 .edit-row { display: flex; gap: 8px; max-width: 560px; }
 .edit-input { flex: 1; border: 1.5px solid var(--ink); border-radius: 6px; padding: 9px 12px; font-size: 15px; font-family: var(--font-body), sans-serif; background: var(--paper); color: var(--ink); }
 .actions-note { font-size: 13px; color: var(--biro); }
+
+/* ---------- cooking tray (in-progress builds, follows you site-wide) ---------- */
+.cook-tray {
+  position: fixed; right: 20px; bottom: 20px; z-index: 60;
+  width: 320px; max-width: calc(100vw - 40px);
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  border-radius: 12px;
+  box-shadow: 3px 4px 0 rgba(26,24,21,0.12);
+  font-size: 13.5px;
+  overflow: hidden;
+}
+.cook-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: none; cursor: pointer;
+  padding: 11px 13px; text-align: left; color: var(--ink);
+  font-family: var(--font-display), cursive; font-weight: 600; font-size: 14px;
+}
+.cook-pen { color: var(--biro); animation: cook-pulse 1.6s ease-in-out infinite; }
+.cook-title { flex: 1; }
+.cook-toggle { color: var(--graphite); font-size: 12px; }
+.cook-body { padding: 4px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
+.cook-row { position: relative; display: flex; align-items: center; }
+.cook-link {
+  display: flex; align-items: baseline; gap: 8px; flex: 1;
+  padding: 7px 8px; border-radius: 8px; color: var(--ink);
+  border: 1px solid transparent; min-width: 0;
+}
+.cook-link:hover { background: rgba(26,24,21,0.04); }
+.cook-prompt {
+  flex: 1; min-width: 0; color: var(--graphite);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cook-phase { color: var(--biro); font-family: var(--font-mono), monospace; font-size: 11px; white-space: nowrap; }
+.cook-spinner { color: var(--biro); animation: cook-pulse 1.6s ease-in-out infinite; }
+.cook-check { color: var(--biro); }
+.cook-x { color: var(--redpencil); }
+.cook-ready-link { background: rgba(255,233,74,0.28); border-color: rgba(26,24,21,0.14); animation: cook-pop 0.4s ease-out; }
+.cook-ready-link:hover { background: rgba(255,233,74,0.5); }
+.cook-play { color: var(--ink); font-weight: 600; white-space: nowrap; }
+.cook-dismiss {
+  position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; color: var(--graphite); font-size: 16px;
+  cursor: pointer; padding: 2px 6px; line-height: 1;
+}
+.cook-dismiss:hover { color: var(--redpencil); }
+.cook-notify {
+  margin-top: 2px; background: none; border: 1.5px solid var(--biro);
+  color: var(--biro); border-radius: 999px; padding: 6px 12px; font-size: 12.5px;
+  cursor: pointer; align-self: flex-start; font-family: var(--font-body), sans-serif;
+}
+.cook-notify:hover { background: rgba(36,71,214,0.06); }
+.cook-foot { margin: 4px 2px 0; color: var(--graphite); font-size: 11.5px; line-height: 1.35; }
+.cook-collapsed { width: auto; }
+@keyframes cook-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }
+@keyframes cook-pop { from { transform: scale(0.96); opacity: 0.4 } to { transform: scale(1); opacity: 1 } }
+@media (prefers-reduced-motion: reduce) {
+  .cook-pen, .cook-spinner { animation: none; }
+  .cook-ready-link { animation: none; }
+}
+@media (max-width: 640px) {
+  .cook-tray { right: 12px; left: 12px; bottom: 12px; width: auto; }
+}
+
+/* early design-brief reveal on the build page */
+.build-brief {
+  margin-top: 18px; max-width: 760px; padding: 14px 16px;
+  border: 1.5px solid rgba(36,71,214,0.35); border-radius: 10px;
+  background: rgba(36,71,214,0.03);
+}
+.build-brief h2 { font-family: var(--font-display), cursive; font-weight: 600; font-size: 15px; color: var(--biro); margin: 0 0 6px; }
+.build-brief p { margin: 0; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
