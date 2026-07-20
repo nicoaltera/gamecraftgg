@@ -228,7 +228,7 @@ let eGold = 0, eXp = 0, eAge = 0, eTurret = 0, eAgeCap = 0, ePopCap = 6, eInc = 
 // forts
 const fort = [{ hp: 720, max: 720, shake: 0 }, { hp: 380, max: 380, shake: 0 }];
 // timers / juice
-let battleTime = 0, shake = 0, siege = 0, drumInt = 1.4, drumClock = 0, minerFxT = 0;
+let battleTime = 0, shake = 0, siege = 0, frenzy = 1, drumInt = 1.4, drumClock = 0, minerFxT = 0;
 let ageFlash = [0, 0], flashCol = null, flashPop = 0;
 let ageWaveT = 0, ageWaveSide = YOU;   // expanding shockwave for the age-up moment
 let banner = null, bannerT = 0;      // {txt, sub, col}
@@ -305,7 +305,7 @@ function spawnUnit(side, ci) {
   return u;
 }
 function hurt(u, dmg, bySide, hx) {
-  if (u.dying) return; u.hp -= dmg; u.hpFlash = 1;
+  if (u.dying) return; u.hp -= dmg * frenzy; u.hpFlash = 1;
   inkSplat(hx != null ? hx : u.x, GY - 26, COL[u.side], 3);
   if (u.hp <= 0) {
     u.dying = true; u.deathT = 0.45; u.hp = 0;
@@ -384,7 +384,7 @@ function updateProjs(dt) {
 // ============================================================
 function hitFort(target, dmg, u) {
   if (state !== ST.BATTLE) return;
-  const f = fort[target]; f.hp -= dmg; f.shake = Math.min(7, f.shake + 1.6);
+  const f = fort[target]; f.hp -= dmg * frenzy; f.shake = Math.min(7, f.shake + 1.6);
   shake = Math.min(8, shake + 0.8);
   const fx = target === YOU ? YOU_WALL : FOE_WALL;
   inkSplat(fx, GY - 40, INK, 2);
@@ -563,15 +563,15 @@ function update(dt) {
   updateAI(dt);
   // sim
   updateUnits(dt); updateProjs(dt); updateTurrets(dt);
-  // siege / war-exhaustion — guarantees termination
+  // war frenzy — after a long stalemate the armies fight harder so a real breakthrough resolves it.
+  // This NEVER touches fort HP directly: forts only lose HP in hitFort(), i.e. when a unit or arrow
+  // actually reaches and strikes the structure. Frenzy just scales every blow (unit AND fort, equally,
+  // so a fort still takes "the same smacks" a soldier does) to sharpen the fight and guarantee an end.
   if (battleTime > SIEGE_START) {
     siege = battleTime - SIEGE_START;
-    const frac = 0.0045 * siege * dt;
-    fort[YOU].hp -= fort[YOU].max * frac; fort[FOE].hp -= fort[FOE].max * frac;
+    frenzy = 1 + siege * 0.05;
     if (rng() < siege * dt * 3) { ember(camX + rand(0, W), GY + rand(-4, 6)); ember(camX + rand(0, W), rand(90, 130)); }
-    if (fort[FOE].hp <= 0) { fort[FOE].hp = 0; endBattle(FOE); }
-    else if (fort[YOU].hp <= 0) { fort[YOU].hp = 0; endBattle(YOU); }
-  }
+  } else { frenzy = 1; }
   // march drum, tempo scales with army size
   const total = countUnits(YOU) + countUnits(FOE);
   drumInt = clamp(1.4 - total * 0.05, 0.42, 1.4);
@@ -1198,7 +1198,7 @@ function drawSiegeFX() {
   if (siege <= 0 && battleTime < SIEGE_WARN) return;
   if (battleTime >= SIEGE_WARN && siege <= 0) {
     const p = 0.5 + 0.5 * Math.sin(performance.now() * 0.008);
-    ctx.globalAlpha = 0.6 + 0.4 * p; textSh('⚠ war exhaustion nears — end it soon', W / 2, 170, 16, '#B23A2C', 'center', '800'); ctx.globalAlpha = 1;
+    ctx.globalAlpha = 0.6 + 0.4 * p; textSh('⚠ the armies grow frenzied — force a breakthrough', W / 2, 170, 16, '#B23A2C', 'center', '800'); ctx.globalAlpha = 1;
     return;
   }
   // charring edges
@@ -1208,7 +1208,7 @@ function drawSiegeFX() {
   const g2 = ctx.createLinearGradient(0, H, 0, H - edge); g2.addColorStop(0, 'rgba(42,25,20,' + (0.4 * v) + ')'); g2.addColorStop(1, 'rgba(42,25,20,0)');
   ctx.fillStyle = g2; ctx.fillRect(0, 440 - edge, W, edge);
   const p = 0.5 + 0.5 * Math.sin(performance.now() * 0.01);
-  ctx.globalAlpha = 0.7 + 0.3 * p; textSh('SUDDEN DEATH — WAR EXHAUSTION', W / 2, 170, 20, '#B23A2C', 'center', '800'); ctx.globalAlpha = 1;
+  ctx.globalAlpha = 0.7 + 0.3 * p; textSh('WAR FRENZY — every blow lands harder', W / 2, 170, 20, '#B23A2C', 'center', '800'); ctx.globalAlpha = 1;
 }
 function drawSplash() {
   ctx.fillStyle = 'rgba(244,236,216,0.55)'; ctx.fillRect(0, 0, W, H);
