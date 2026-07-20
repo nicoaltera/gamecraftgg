@@ -44,6 +44,9 @@ const PAPER = '#F4ECD8', PAPER2 = '#EAE0C6', INK = '#2A2320';
 const COL = ['#1F4E8C', '#B23A2C'];        // YOU ink / FOE ink
 const ACC = ['#5B9BD5', '#E0913C'];        // accents (plume/glow)
 const GOLDC = '#E0A32E', XPC = '#3AA6A0';
+// material tones for the higher-fidelity ages (a metal that reads as STEEL, not
+// as flat team ink). Team identity is kept via colored outline/plume/trim on top.
+const STEEL = '#98A0AC', STEEL_HI = '#DCE1E8', STEEL_SH = '#535A66';
 
 // ---------- canvas / letterbox ----------
 const canvas = document.getElementById('c');
@@ -166,12 +169,16 @@ const AGE_XP = [220, 520, 1000, 1750];
 // Per-age STYLE — a visible fidelity LEAP each age (rubric P7 / "make advancement
 // unmistakable"). rough=hand-scribble jitter+passes, lw=stroke weight mult,
 // fill=torso fill alpha, shade=inner shading, torso=body silhouette, glow=energy.
+// STYLE is the DOMINANT age cue, not size: fills are near-SOLID materials (not a
+// faint team tint), the scribble->crisp fidelity leap is bold, and stroke weight
+// barely grows so bigger-ness never carries the signal. rough=hand-scribble
+// jitter+passes, lw=stroke weight mult, fill=body fill alpha, shade=inner shading.
 const AGE_STYLE = [
-  { name: 'stone',  rough: 2.3, passes: 3, lw: 0.92, fill: 0.00, shade: 0.00, torso: 'none',  glow: 0.0 },
-  { name: 'sword',  rough: 1.05, passes: 2, lw: 1.12, fill: 0.13, shade: 0.10, torso: 'tunic', glow: 0.0 },
-  { name: 'knight', rough: 0.45, passes: 1, lw: 1.34, fill: 0.20, shade: 0.30, torso: 'plate', glow: 0.12 },
-  { name: 'musket', rough: 0.18, passes: 1, lw: 1.52, fill: 0.26, shade: 0.44, torso: 'coat',  glow: 0.18 },
-  { name: 'future', rough: 0.0,  passes: 1, lw: 1.72, fill: 0.34, shade: 0.58, torso: 'suit',  glow: 1.0 },
+  { name: 'stone',  rough: 2.7, passes: 3, lw: 0.95, fill: 0.00, shade: 0.00, torso: 'none',  glow: 0.0 },
+  { name: 'sword',  rough: 1.20, passes: 2, lw: 1.05, fill: 0.90, shade: 0.20, torso: 'tunic', glow: 0.0 },
+  { name: 'knight', rough: 0.30, passes: 1, lw: 1.18, fill: 1.00, shade: 0.42, torso: 'plate', glow: 0.10 },
+  { name: 'musket', rough: 0.12, passes: 1, lw: 1.22, fill: 0.96, shade: 0.40, torso: 'coat',  glow: 0.16 },
+  { name: 'future', rough: 0.0,  passes: 1, lw: 1.20, fill: 1.00, shade: 0.55, torso: 'suit',  glow: 1.0 },
 ];
 // 3 classes: light (cheap swarm) / heavy (tanky, cleaves) / ranged (poke, fragile)
 // Speeds are tuned up for the wider battlefield so fronts still meet at a good clip.
@@ -729,16 +736,29 @@ function drawWeapon(u, hx, hy, d, s, col, acc) {
   }
 }
 function drawGear(u, hcx, hcy, hr, d, s, col, acc) {
-  const t = u.tier; ctx.strokeStyle = col; ctx.lineCap = 'round';
-  if (t === 1) { ctx.lineWidth = 2.4 * s; ctx.beginPath(); ctx.moveTo(hcx - hr, hcy - hr * 0.3); ctx.lineTo(hcx + hr, hcy - hr * 0.3); ctx.stroke(); }
-  else if (t === 2) { // knight helm + plume
-    ctx.lineWidth = 2.6 * s; ctx.beginPath(); ctx.arc(hcx, hcy, hr + 1.4 * s, Math.PI * 1.05, Math.PI * 1.95); ctx.stroke();
-    ctx.strokeStyle = acc; ctx.lineWidth = 2.6 * s; bow(hcx, hcy - hr, hcx - d * 5 * s, hcy - hr - 9 * s, 2.6 * s, d * 3); }
-  else if (t === 3) { // tricorn hat
-    ctx.lineWidth = 2.4 * s; ctx.beginPath(); ctx.moveTo(hcx - hr - 3 * s, hcy - hr * 0.4); ctx.lineTo(hcx + hr + 3 * s, hcy - hr * 0.4); ctx.lineTo(hcx, hcy - hr - 7 * s); ctx.closePath(); ctx.stroke(); }
-  else if (t === 4) { // visor + antenna
-    ctx.strokeStyle = XPC; ctx.lineWidth = 2.6 * s; ctx.beginPath(); ctx.moveTo(hcx - hr, hcy - 1 * s); ctx.lineTo(hcx + hr, hcy - 1 * s); ctx.stroke();
-    bow(hcx, hcy - hr, hcx + d * 2 * s, hcy - hr - 7 * s, 1.6 * s, 0); ctx.fillStyle = XPC; ctx.beginPath(); ctx.arc(hcx + d * 2 * s, hcy - hr - 8 * s, 1.8 * s, 0, 6.28); ctx.fill(); }
+  const t = u.tier; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (t === 1) {                                  // Sword: team cloth headband + tail
+    ctx.strokeStyle = acc; ctx.lineWidth = 2.6 * s;
+    ctx.beginPath(); ctx.moveTo(hcx - hr, hcy - hr * 0.3); ctx.lineTo(hcx + hr, hcy - hr * 0.3); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(hcx - d * hr, hcy - hr * 0.3); ctx.lineTo(hcx - d * (hr + 3 * s), hcy + 1 * s); ctx.stroke();
+  } else if (t === 2) {                           // Knight: full STEEL helm + team plume
+    ctx.fillStyle = STEEL; ctx.beginPath(); ctx.arc(hcx, hcy, hr + 1.6 * s, Math.PI * 0.98, Math.PI * 2.02); ctx.fill();
+    ctx.fillStyle = STEEL_HI; ctx.beginPath(); ctx.arc(hcx - d * hr * 0.4, hcy - hr * 0.4, hr * 0.5, 0, 6.28); ctx.fill();
+    ctx.strokeStyle = STEEL_SH; ctx.lineWidth = 1.6 * s; ctx.beginPath(); ctx.moveTo(hcx - hr * 0.7, hcy + 0.5 * s); ctx.lineTo(hcx + hr * 0.7, hcy + 0.5 * s); ctx.stroke();  // visor slit
+    ctx.strokeStyle = col; ctx.lineWidth = 1.8 * s; ctx.beginPath(); ctx.arc(hcx, hcy, hr + 1.6 * s, Math.PI * 0.98, Math.PI * 2.02); ctx.stroke();  // team rim
+    ctx.strokeStyle = acc; bow(hcx, hcy - hr - 1 * s, hcx - d * 6 * s, hcy - hr - 11 * s, 3 * s, d * 4);  // team plume
+  } else if (t === 3) {                           // Musket: team tricorn + gold trim + cockade
+    ctx.fillStyle = col; ctx.beginPath();
+    ctx.moveTo(hcx - hr - 4 * s, hcy - hr * 0.35); ctx.lineTo(hcx + hr + 4 * s, hcy - hr * 0.35); ctx.lineTo(hcx, hcy - hr - 8 * s); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = GOLDC; ctx.lineWidth = 1.6 * s; ctx.stroke();
+    ctx.fillStyle = acc; ctx.beginPath(); ctx.arc(hcx - d * (hr + 1 * s), hcy - hr * 0.35, 1.7 * s, 0, 6.28); ctx.fill();
+  } else if (t === 4) {                           // Future: team-tinted dome + glowing visor + antenna
+    ctx.fillStyle = acc; ctx.globalAlpha = 0.55; ctx.beginPath(); ctx.arc(hcx, hcy, hr + 1 * s, Math.PI * 0.9, Math.PI * 2.1); ctx.fill(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = XPC; ctx.lineWidth = 2.6 * s; ctx.shadowColor = XPC; ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.moveTo(hcx - hr, hcy - 0.5 * s); ctx.lineTo(hcx + hr, hcy - 0.5 * s); ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.strokeStyle = acc; ctx.lineWidth = 1.4 * s; bow(hcx, hcy - hr, hcx + d * 2 * s, hcy - hr - 7 * s, 1.4 * s, 0);
+    ctx.fillStyle = XPC; ctx.beginPath(); ctx.arc(hcx + d * 2 * s, hcy - hr - 8 * s, 1.8 * s, 0, 6.28); ctx.fill();
+  }
 }
 // ---- hand-drawn sketch helpers (per-age fidelity) ----
 let sketchPhase = 0;          // stepped ~11fps so the scribble "boils" like animation (no per-frame flicker)
@@ -763,41 +783,62 @@ function drawTorso(st, x, hipY, shX, shY, d, s, col, acc) {
   const halfSh = 5.4 * s, halfHip = 3.6 * s;
   const bx = (shX + x) / 2;
   ctx.save();
-  if (st.torso === 'tunic') {                    // Sword: simple filled tunic + belt
+  if (st.torso === 'tunic') {                    // Sword: SOLID cloth tunic + belt + team collar
     ctx.globalAlpha = st.fill; ctx.fillStyle = col;
     ctx.beginPath(); ctx.moveTo(shX - halfSh, shY + 2 * s); ctx.lineTo(shX + halfSh, shY + 2 * s);
     ctx.lineTo(x + halfHip, hipY); ctx.lineTo(x - halfHip, hipY); ctx.closePath(); ctx.fill();
-    ctx.globalAlpha = 1; ctx.strokeStyle = col; ctx.lineWidth = 1.6 * s; ctx.beginPath();
-    ctx.moveTo(x - halfHip - 0.5 * s, hipY - 1 * s); ctx.lineTo(x + halfHip + 0.5 * s, hipY - 1 * s); ctx.stroke();
-  } else if (st.torso === 'plate') {             // Knight: armored chest plate + pauldron + shading
+    ctx.globalAlpha = st.shade; ctx.fillStyle = INK;                                   // fold shading (rear half)
+    ctx.beginPath(); ctx.moveTo(bx, shY + 2 * s); ctx.lineTo(shX - d * halfSh, shY + 2 * s); ctx.lineTo(x - d * halfHip, hipY); ctx.lineTo(bx, hipY); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1; ctx.strokeStyle = INK; ctx.lineWidth = 2.2 * s; ctx.beginPath();
+    ctx.moveTo(x - halfHip - 0.6 * s, hipY - 1 * s); ctx.lineTo(x + halfHip + 0.6 * s, hipY - 1 * s); ctx.stroke();  // belt
+    ctx.strokeStyle = acc; ctx.lineWidth = 1.6 * s; ctx.beginPath();                    // team collar V
+    ctx.moveTo(shX - halfSh * 0.5, shY + 2 * s); ctx.lineTo(bx, shY + 6 * s); ctx.lineTo(shX + halfSh * 0.5, shY + 2 * s); ctx.stroke();
+  } else if (st.torso === 'plate') {             // Knight: STEEL cuirass — a different KIND of drawing
+    const p1x = shX - halfSh - 1 * s, p2x = shX + halfSh + 1 * s, p3x = x + halfHip + 1 * s, p4x = x - halfHip - 1 * s;
+    ctx.globalAlpha = 1; ctx.fillStyle = STEEL;                                         // base steel body
+    ctx.beginPath(); ctx.moveTo(p1x, shY + 1 * s); ctx.lineTo(p2x, shY + 1 * s); ctx.lineTo(p3x, hipY + 2 * s); ctx.lineTo(p4x, hipY + 2 * s); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 0.85; ctx.fillStyle = STEEL_HI;                                   // sheen on the facing edge
+    ctx.beginPath(); ctx.moveTo(bx, shY + 1 * s); ctx.lineTo(shX + d * (halfSh + 1 * s), shY + 1 * s); ctx.lineTo(x + d * (halfHip + 1 * s), hipY + 2 * s); ctx.lineTo(bx, hipY + 2 * s); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = st.shade; ctx.fillStyle = STEEL_SH;                               // shadow on the rear edge
+    ctx.beginPath(); ctx.moveTo(bx, shY + 1 * s); ctx.lineTo(shX - d * (halfSh + 1 * s), shY + 1 * s); ctx.lineTo(x - d * (halfHip + 1 * s), hipY + 2 * s); ctx.lineTo(bx, hipY + 2 * s); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1; ctx.strokeStyle = STEEL_SH; ctx.lineWidth = 1.2 * s;           // abdominal fauld line + rivets
+    ctx.beginPath(); ctx.moveTo(x - halfHip, hipY - 5 * s); ctx.lineTo(x + halfHip, hipY - 5 * s); ctx.stroke();
+    ctx.fillStyle = STEEL_SH;
+    for (let i = 0; i < 2; i++) { ctx.beginPath(); ctx.arc(shX - halfSh + 1.4 * s, shY + (3 + i * 4) * s, 0.9 * s, 0, 6.28); ctx.fill();
+      ctx.beginPath(); ctx.arc(shX + halfSh - 1.4 * s, shY + (3 + i * 4) * s, 0.9 * s, 0, 6.28); ctx.fill(); }
+    ctx.strokeStyle = col; ctx.lineWidth = 2 * s;                                       // TEAM outline (unmistakable side)
+    ctx.beginPath(); ctx.moveTo(p1x, shY + 1 * s); ctx.lineTo(p2x, shY + 1 * s); ctx.lineTo(p3x, hipY + 2 * s); ctx.lineTo(p4x, hipY + 2 * s); ctx.closePath(); ctx.stroke();
+    ctx.fillStyle = col; ctx.beginPath();                                               // team chest emblem
+    ctx.moveTo(bx, shY + 5 * s); ctx.lineTo(bx + 2.2 * s, shY + 8 * s); ctx.lineTo(bx, shY + 11 * s); ctx.lineTo(bx - 2.2 * s, shY + 8 * s); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = STEEL_HI; ctx.beginPath(); ctx.arc(shX - d * halfSh, shY + 2 * s, 3.4 * s, 0, 6.28); ctx.fill();  // steel pauldron
+    ctx.strokeStyle = col; ctx.lineWidth = 1.4 * s; ctx.beginPath(); ctx.arc(shX - d * halfSh, shY + 2 * s, 3.4 * s, 0, 6.28); ctx.stroke();
+  } else if (st.torso === 'coat') {              // Musket: tailored long coat + gold trim, buttons, collar
+    const hemY = hipY + 13 * s;
     ctx.globalAlpha = st.fill; ctx.fillStyle = col;
     ctx.beginPath(); ctx.moveTo(shX - halfSh, shY + 1 * s); ctx.lineTo(shX + halfSh, shY + 1 * s);
-    ctx.lineTo(x + halfHip, hipY + 2 * s); ctx.lineTo(x - halfHip, hipY + 2 * s); ctx.closePath(); ctx.fill();
-    ctx.globalAlpha = st.shade; ctx.fillStyle = INK;
-    ctx.beginPath(); ctx.moveTo(bx, shY + 2 * s); ctx.lineTo(bx + halfSh * 0.7 * d, shY + 3 * s); ctx.lineTo(x + halfHip * d, hipY); ctx.lineTo(bx, hipY); ctx.closePath(); ctx.fill();
-    ctx.globalAlpha = 1; ctx.strokeStyle = acc; ctx.lineWidth = 1.6 * s;
-    ctx.beginPath(); ctx.moveTo(shX - halfSh, shY + 1 * s); ctx.lineTo(shX + halfSh, shY + 1 * s); ctx.stroke();
-    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(shX - d * halfSh, shY + 2 * s, 3 * s, 0, 6.28); ctx.fill();   // pauldron
-  } else if (st.torso === 'coat') {              // Musket: long flared coat + collar + buttons + boots
-    const hemY = hipY + 12 * s;
-    ctx.globalAlpha = st.fill; ctx.fillStyle = col;
-    ctx.beginPath(); ctx.moveTo(shX - halfSh, shY + 1 * s); ctx.lineTo(shX + halfSh, shY + 1 * s);
-    ctx.lineTo(x + halfHip + 3 * s, hemY); ctx.lineTo(x - halfHip - 3 * s, hemY); ctx.closePath(); ctx.fill();
-    ctx.globalAlpha = st.shade; ctx.fillStyle = INK;
-    ctx.beginPath(); ctx.moveTo(bx, shY + 1 * s); ctx.lineTo(x - halfHip - 3 * s, hemY); ctx.lineTo(bx, hemY); ctx.closePath(); ctx.fill();
-    ctx.globalAlpha = 1; ctx.fillStyle = acc;
-    for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(bx, shY + (4 + i * 5) * s, 1.3 * s, 0, 6.28); ctx.fill(); }   // buttons
-    ctx.strokeStyle = acc; ctx.lineWidth = 2 * s; ctx.beginPath();
-    ctx.moveTo(shX - halfSh - 1 * s, shY + 1 * s); ctx.lineTo(bx, shY + 4 * s); ctx.lineTo(shX + halfSh + 1 * s, shY + 1 * s); ctx.stroke();  // collar
-  } else if (st.torso === 'suit') {              // Future: sleek gradient bodysuit + glowing energy seam
-    const g = ctx.createLinearGradient(0, shY, 0, hipY);
-    g.addColorStop(0, col); g.addColorStop(1, INK);
-    ctx.globalAlpha = 0.5 + st.fill; ctx.fillStyle = g;
+    ctx.lineTo(x + halfHip + 4 * s, hemY); ctx.lineTo(x - halfHip - 4 * s, hemY); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = st.shade; ctx.fillStyle = INK;                                    // half-shade for tailored volume
+    ctx.beginPath(); ctx.moveTo(bx, shY + 1 * s); ctx.lineTo(x - d * (halfHip + 4 * s), hemY); ctx.lineTo(bx, hemY); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1; ctx.strokeStyle = GOLDC; ctx.lineWidth = 1.8 * s; ctx.lineCap = 'round';  // brass lapels
+    ctx.beginPath(); ctx.moveTo(shX - halfSh * 0.6, shY + 2 * s); ctx.lineTo(bx, hemY - 2 * s);
+    ctx.moveTo(shX + halfSh * 0.6, shY + 2 * s); ctx.lineTo(bx, hemY - 2 * s); ctx.stroke();
+    ctx.fillStyle = GOLDC;                                                              // brass buttons
+    for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(bx, shY + (4 + i * 5) * s, 1.3 * s, 0, 6.28); ctx.fill(); }
+    ctx.strokeStyle = GOLDC; ctx.lineWidth = 2.2 * s; ctx.beginPath();                  // gold collar
+    ctx.moveTo(shX - halfSh - 1 * s, shY + 1 * s); ctx.lineTo(bx, shY + 4 * s); ctx.lineTo(shX + halfSh + 1 * s, shY + 1 * s); ctx.stroke();
+    ctx.lineWidth = 1.4 * s; ctx.beginPath();                                           // gold hem trim
+    ctx.moveTo(x - halfHip - 4 * s, hemY); ctx.lineTo(x + halfHip + 4 * s, hemY); ctx.stroke();
+  } else if (st.torso === 'suit') {              // Future: sleek gradient bodysuit + glowing energy seams
+    const g = ctx.createLinearGradient(0, shY, 0, hipY + 2 * s);
+    g.addColorStop(0, acc); g.addColorStop(0.5, col); g.addColorStop(1, INK);
+    ctx.globalAlpha = 1; ctx.fillStyle = g;
     ctx.beginPath(); ctx.moveTo(shX - halfSh, shY + 1 * s); ctx.lineTo(shX + halfSh, shY + 1 * s);
     ctx.lineTo(x + halfHip, hipY + 1 * s); ctx.lineTo(x - halfHip, hipY + 1 * s); ctx.closePath(); ctx.fill();
-    ctx.globalAlpha = 1; ctx.strokeStyle = XPC; ctx.lineWidth = 1.8 * s; ctx.shadowColor = XPC; ctx.shadowBlur = 6;
+    ctx.strokeStyle = XPC; ctx.lineWidth = 1.6 * s; ctx.shadowColor = XPC; ctx.shadowBlur = 7;  // energy seams
     ctx.beginPath(); ctx.moveTo(bx, shY + 2 * s); ctx.lineTo(bx, hipY); ctx.stroke();
-    ctx.beginPath(); ctx.arc(bx, shY + 6 * s, 2.2 * s, 0, 6.28); ctx.fillStyle = XPC; ctx.fill(); ctx.shadowBlur = 0;
+    ctx.beginPath(); ctx.moveTo(shX - halfSh, shY + 2 * s); ctx.lineTo(bx, shY + 7 * s); ctx.lineTo(shX + halfSh, shY + 2 * s); ctx.stroke();
+    ctx.shadowBlur = 0; ctx.shadowColor = acc; ctx.shadowBlur = 8; ctx.fillStyle = acc;         // team-color power core
+    ctx.beginPath(); ctx.arc(bx, shY + 7 * s, 2.4 * s, 0, 6.28); ctx.fill(); ctx.shadowBlur = 0;
   }
   ctx.restore();
 }
@@ -806,13 +847,16 @@ function drawStick(u) {
   const d = u.side === YOU ? 1 : -1;
   // cull off-screen (camera translate is applied by caller during battle)
   if (state === ST.BATTLE && (u.x - camX < -64 || u.x - camX > W + 64)) return;
-  const c = CLS[u.ci]; const s = c.sc + u.tier * 0.055; const st = AGE_STYLE[u.tier] || AGE_STYLE[0];
+  // Size grows only SLIGHTLY per age (tier*0.022, half of before): STYLE/material
+  // is the dominant age cue, not bigger-ness. Height offsets grow gently too.
+  const c = CLS[u.ci]; const s = c.sc + u.tier * 0.022; const st = AGE_STYLE[u.tier] || AGE_STYLE[0];
   const x = u.x, gy = GY, col = COL[u.side], acc = ACC[u.side];
   _sk = ((u.k * 971) | 0) + u.ci * 131 + (u.side ? 517 : 0);   // stable per-unit sketch seed
   ctx.save();
   if (u.dying) { const f = u.fall; ctx.translate(x, gy); ctx.rotate(d * f * 1.2); ctx.globalAlpha = 1 - f * 0.7; ctx.translate(-x, -gy); }
-  const hipY = gy - (20 + u.tier * 0.6) * s, shY = gy - (38 + u.tier) * s, headY = gy - (49 + u.tier * 1.4) * s, headR = (5.6 + u.tier * 0.3) * s;
-  const wp = u.walk; const sw = u.moving ? Math.sin(wp) * 7 * s : 2 * s, sw2 = u.moving ? Math.sin(wp + Math.PI) * 7 * s : -2 * s;
+  const hipY = gy - (20 + u.tier * 0.3) * s, shY = gy - (38 + u.tier * 0.5) * s, headY = gy - (49 + u.tier * 0.7) * s, headR = (5.6 + u.tier * 0.15) * s;
+  const gaitK = 1 - u.tier * 0.05;                             // late ages march tighter/crisper (less boil)
+  const wp = u.walk; const sw = u.moving ? Math.sin(wp) * 7 * s * gaitK : 2 * s, sw2 = u.moving ? Math.sin(wp + Math.PI) * 7 * s * gaitK : -2 * s;
   ctx.strokeStyle = col; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   // ground shadow (softer/tighter for higher fidelity)
   ctx.save(); ctx.globalAlpha = 0.13 + st.glow * 0.05; ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(x, gy + 3, 11 * s, 3.2, 0, 0, 6.28); ctx.fill(); ctx.restore();
@@ -1097,7 +1141,7 @@ function drawIcon(ci, tier, x, y) {
 }
 function drawStickAt(u, x, gy, mul) {
   // simplified inline draw for icons — reflects the current age's fidelity/style
-  const c = CLS[u.ci]; const s = (c.sc + u.tier * 0.055) * mul; const d = 1; const col = COL[YOU], acc = ACC[YOU];
+  const c = CLS[u.ci]; const s = (c.sc + u.tier * 0.022) * mul; const d = 1; const col = COL[YOU], acc = ACC[YOU];
   const st = AGE_STYLE[u.tier] || AGE_STYLE[0];
   const hipY = gy - 20 * s, shY = gy - 38 * s, headY = gy - 49 * s, headR = 5.6 * s;
   _sk = u.ci * 131 + 7;
