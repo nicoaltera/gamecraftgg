@@ -15,11 +15,13 @@ Open http://localhost:3311. The DB auto-creates at `data/gamesight.db` and seed 
 
 ## What's here
 
-- `app/` — routes: home (prompt hero + retention-ranked feed), `/g/[slug]` game pages (challenge banner, leaderboard, dare-a-friend), `/build/[id]` build theater, `/k` the K-factor dashboard, `/play/[slug]` sandboxed game serving (strict CSP: no network, inline+vendored scripts only).
-- `games/<slug>/` — one folder per game: `index.html` (self-contained), `meta.json`, `cover.svg`. The contract is `CONVENTIONS.md`.
-- `pipeline/run.mjs` — the generation pipeline: designer → builder → play-test harness → judge panel, up to 3 cycles, publishes only on pass. Requires the `claude` CLI. Also runnable directly: `node pipeline/run.mjs --prompt "..."`.
-- `scripts/` — `game-server.mjs` (production-identical static server for game dev), `verify-game.mjs` (Playwright play-evidence harness: console errors, bridge messages, desktop+mobile screenshots).
-- `lib/db.ts` — SQLite layer (portable schema; Postgres swap documented in ../05-architecture.md).
+- **18 curated + generated games** in `games/`, spanning the archetypes (mastery, progression, comedy/spectacle, toy, party-vs-bots, narrative). Each is a self-contained `index.html` + `meta.json` + `cover.svg` + a `published.json` publish marker. The contract is `CONVENTIONS.md`.
+- `app/` — routes: home (prompt hero + retention/rating-ranked feed with star ratings + play counts), `/g/[slug]` game pages (challenge banner, leaderboard(s), half-star ratings, Send-to-a-friend + Remix, owner draft/publish/continue-editing, start-over), `/yours` your creations (drafts + published + in-progress builds), `/build/[id]` live build theater (streams the agent loop), `/k` K-factor dashboard, `/play/[slug]` sandboxed game serving (strict CSP + injected scroll-guard).
+- **Player features:** multi-board leaderboards (metric matched to goal), half-star ratings (no comments), "start over" progress reset, challenge/share links with OG cards, retention+rating-ranked discovery feed.
+- **Creator features:** generated games are **drafts** until the creator clicks **Publish**; **remix** any public game into your own draft (slug-rewritten so it's isolated); **continue-editing** by re-prompting your game (pipeline edit mode, snapshot-safe). Login-less ownership via a per-browser ref.
+- `pipeline/run.mjs` — the generation pipeline: designer → builder → play-test harness → judge panel, up to 3 cycles, streams the loop to the build page, and only produces a (draft) game on judge pass; supports `--edit <slug>`. Requires the `claude` CLI.
+- `scripts/` — `game-server.mjs` (production-identical static server) + `verify-game.mjs` (Playwright play-evidence harness). That's it.
+- `lib/db.ts` — SQLite layer (portable schema; Postgres swap documented in ../05-architecture.md). Games table carries status (draft/published/unlisted), creator_ref, parent_slug, boards; plus ratings, plays, scores, referral_edges, generations.
 
 ## Bridge contract (deviation from the planning docs, deliberate)
 
