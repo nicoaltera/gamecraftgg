@@ -1,41 +1,72 @@
-# GameSight — Planning Folder
+# GameCraft ✎
 
-**Status:** Planning complete, design approved by founder (2026-07-18). Nothing has been built.
-**What this is:** A prompt-to-game site. Anyone prompts → agents design, build, and verify a browser game → it publishes to a shareable URL → anyone plays it instantly, no account. Single-player games get leaderboards and "beat my score" challenge links; multiplayer games get invite-link party rooms. The bet is the viral loop (K-factor), not the AI.
+**Games with your friends in 60 seconds.** Type a sentence → an agent pipeline designs, builds, play-tests, and judges a complete browser game → it publishes to a shareable URL. No downloads, no accounts to play. Dare a friend to beat your score.
 
-**Positioning rule:** never brand as "AI games" (player sentiment on gen-AI is ~85% negative). Brand: **"games with your friends in 60 seconds."** The AI is an implementation detail.
+**Live at [gamecraft.gg](https://gamecraft.gg).**
 
-## How to use this folder (for the implementing agent)
+## How a game gets made
 
-Read in order:
+One prompt spawns a pipeline of agents ([`app/pipeline/run.mjs`](app/pipeline/run.mjs)):
 
-1. `01-product-spec.md` — product shape, player/creator loops, viral mechanics, success metrics
-2. `02-generation-pipeline.md` — the agentic design→build→verify pipeline (the core of the product)
-3. `03-quality-rubric.md` — the judge rubric every game must pass before publishing
-4. `04-site-design-language.md` — **strict** site design system (founder-mandated: clean whites, hand-drawn, high taste). Follow exactly
-5. `05-architecture.md` — platform stack, APIs, party rooms, anti-cheat, moderation
-6. `06-roadmap.md` — phases, risks, deferred v2 backlog
-7. `07-open-questions.md` — decisions still owned by the founder; ask before resolving unilaterally
+```
+prompt ─→ DESIGNER ─→ BUILDER ─→ PLAY-TESTER ─→ JUDGE ─┐
+              ▲       (writes one self-contained        │ score ≥ 80,
+              │        index.html, pure Canvas2D        │ no critical fails
+              │        + WebAudio)                      │
+              └── fix cycle (≤3) ←── critique ←─────────┘
+                                                        └─→ published draft
+```
 
-`research/` contains the seven deep-research reports the design is grounded in. Cite them; don't re-derive. Note the deliberate breadth: `game-feel-quality-bar.md` (N/Heli Attack) is two data points, not the whole bar — `top-flash-games-dna.md` (the top-22 canon, cross-genre laws, and the **three fun-drive dials**: comedy/spectacle, mastery, progression), `launch-genre.md` (Learn to Fly/Flight and the bank-every-attempt pattern), and `physics-toys.md` (Line Rider/QWOP-class toys and spectacle) exist specifically so the generator's creative space stays wide. The rubric is archetype-conditional for the same reason.
+- **Designer** writes a full design brief first — mechanics, fun-drive dials, art direction, controls — before any code.
+- **Builder** implements it as **one self-contained `index.html`**: no build step, no network calls, art and sound generated in code. The contract is [`app/CONVENTIONS.md`](app/CONVENTIONS.md).
+- **Play-tester** is a real headless Chromium harness that plays the game on desktop and mobile viewports and captures console errors, bridge messages, and screenshots.
+- **Judge** scores against a strict [quality rubric](app/pipeline/docs/03-quality-rubric.md) — termination, winnability, feel, art direction — and either publishes or sends a critique back for a fix cycle.
 
-## Locked decisions (founder-confirmed 2026-07-18)
+Failed builds refund themselves. Judge-passed games are drafts until their creator hits Publish.
 
-| Decision | Choice |
+## Why the games are safe to play
+
+Generated games are untrusted code. They run inside a sandboxed iframe on a **separate origin** (`play.gamecraft.gg`), isolated from the app by the same-origin policy, with a CSP that allows no network access at all (`connect-src 'none'`). Scores travel over `postMessage` only.
+
+## Repo layout
+
+| Path | What it is |
 |---|---|
-| Ambition | Fast viral experiment — ship in days, invest more only if K-factor shows life |
-| Multiplayer scope v1 | Single-player + ≤8-player invite-link party rooms (Playroom Kit); live arenas deferred |
-| Generation model | **Pure freeform**: builder agent writes a self-contained `index.html`; no platform SDK; pinned CDN whitelist; conventions doc; **agents verify everything** |
-| Verification | **Agentic, not deterministic tests**: play-tester + judge agents in the build loop at runtime, scoring against the rubric. LLM-verified, iterate until pass |
-| Design phase | Heavy planning and clarification baked into the agent loop: a game-designer agent produces a design brief (mechanics, look, feel, high taste) before any code; clarifying questions to the creator when ambiguous |
-| Rendering | Both from day one: Phaser 3 (2D) and three.js (3D), orchestrator routes by prompt |
-| Mobile | **Touch required** — publish gate fails any game that doesn't play well on a phone |
-| Creation access | Play = zero friction, no account. Create = one-tap login (Google/Apple) + free daily generation quota |
-| V1 viral loops | Challenge links (score-in-URL + OG card) + retention-ranked discovery feed |
-| Deferred loops | Remix lineage, free-text name-tags/party memes → v2 |
-| Success metric | K-factor / share rate: invites-per-player and challenge-link conversion, aiming toward K≈1 in any cohort |
-| Anti-cheat v1 | Accept cheating, design around it (per-game boards, anomaly heuristics); replay validation is v2 |
+| [`app/`](app/) | The product: Next.js 16 app, SQLite, the agent pipeline, seed games |
+| [`app/pipeline/`](app/pipeline/) | Generation pipeline + the rubric/guidance docs the agents read |
+| [`app/games/`](app/games/) | Game library (each game = one folder: `index.html`, `cover.svg`, `meta.json`) |
+| [`docs/`](docs/planning-README.md), [`research/`](research/) | The original design docs and deep-research reports the product is grounded in |
 
-## The one-paragraph pitch
+## Running it locally
 
-The flash portal era proved the game itself is the viral unit (the SWF carried the brand and ads wherever it was rehosted) and Agar.io proved URL = instant session is the strongest referral mechanic ever shipped. Every current prompt-to-game competitor (Rosebud, Astrocade $56M, Roblox Build — launched July 2026) funds the creation side and ships broken, samey, keyboard-only games with no player-side platform. GameSight's edge: an agentic build loop with real taste and real verification (agents design, play, and judge every game before it publishes), platform-owned leaderboards/challenge-links/party-rooms, and a player experience tuned to one number — K.
+```bash
+cd app
+npm install
+npm run dev        # → http://localhost:3000
+```
+
+Playing the seed games needs nothing else. **Generating** games needs the [`claude` CLI](https://claude.com/claude-code) on `PATH` and these env vars in `app/.env.local`:
+
+| Variable | Purpose |
+|---|---|
+| `BETTER_AUTH_SECRET` | session signing — `openssl rand -hex 32` |
+| `ANTHROPIC_API_KEY` | the pipeline's agents |
+| `POLAR_*` | credit-pack checkout + webhook (optional locally; see [`app/lib/polar.ts`](app/lib/polar.ts)) |
+
+Economics: creating a game costs 1000 credits, an edit 50; new accounts start with 2000. 100 credits = $1.
+
+## Deploying
+
+One Fly.io machine + one volume. [`app/Dockerfile`](app/Dockerfile) (Playwright base + claude CLI) and [`app/fly.toml`](app/fly.toml) are the whole story; secrets go in `fly secrets set`. The SQLite file and the game library live on the volume and survive deploys.
+
+## Design language
+
+Hand-drawn sketchbook: paper whites, ink lines, wobble frames, biro-blue, highlighter-yellow for scores. The rules are strict and live in [`04-site-design-language.md`](04-site-design-language.md). Never branded as "AI games."
+
+## Contributing
+
+Issues and PRs are welcome — game ideas, pipeline improvements, bug reports. All merges go through the repo owner. Please don't submit games built outside the pipeline; the judge is the quality bar.
+
+## License
+
+[MIT](LICENSE)
