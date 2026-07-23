@@ -10,9 +10,14 @@ import type { NextConfig } from 'next';
 const GAME_ORIGIN = process.env.NEXT_PUBLIC_GAME_ORIGIN?.trim() || '';
 const frameSrc = ['\'self\'', GAME_ORIGIN].filter(Boolean).join(' ');
 
+// next dev serves eval-wrapped webpack chunks; without 'unsafe-eval' the app
+// silently never hydrates in dev (chunks load fine, React never boots — a
+// genuinely nasty one to debug). Production builds don't eval, so prod CSP
+// stays strict.
+const dev = process.env.NODE_ENV !== 'production';
 const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  `script-src 'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ''}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
