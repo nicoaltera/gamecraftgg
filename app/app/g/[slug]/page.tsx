@@ -1,9 +1,10 @@
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import type { Metadata } from 'next';
-import { getGame, getGameAny, parseBoards } from '@/lib/db';
+import { getFeed, getGame, getGameAny, parseBoards } from '@/lib/db';
 import GameStage from '@/components/GameStage';
 import Leaderboard from '@/components/Leaderboard';
+import NavRail from '@/components/NavRail';
 import ReportButton from '@/components/ReportButton';
 import StarRating from '@/components/StarRating';
 import GameActions from '@/components/GameActions';
@@ -25,7 +26,7 @@ export async function generateMetadata({ params, searchParams }: Params): Promis
     : `${game.title} — play it now`;
   const ogUrl = `/api/og/${slug}${challenge ? `?c=${challenge}` : ''}`;
   return {
-    title: `${game.title} — GameSight`,
+    title: `${game.title} — GameCraft`,
     description: game.description,
     openGraph: { title, description: game.description, images: [{ url: ogUrl, width: 1200, height: 630 }] },
     twitter: { card: 'summary_large_image', title, description: game.description, images: [ogUrl] },
@@ -39,6 +40,13 @@ export default async function GamePage({ params }: Params) {
   const boards = parseBoards(game);
   const isPublished = game.status === 'published';
 
+  // The feed order IS the swipe order: chevrons walk the same ranking the
+  // homepage shows. Drafts aren't in the feed — their viewer just has no next.
+  const order = getFeed(100).map((g) => g.slug);
+  const at = order.indexOf(slug);
+  const prevSlug = at > 0 ? order[at - 1] : null;
+  const nextSlug = at >= 0 && at < order.length - 1 ? order[at + 1] : at === -1 && order.length ? order[0] : null;
+
   return (
     <main className="game-page">
       <Link href="/#games" className="back-link">← all games</Link>
@@ -46,17 +54,27 @@ export default async function GamePage({ params }: Params) {
         <h1>{game.title}</h1>
         <span className="game-verb">{game.verb}</span>
       </div>
-      <div className="game-columns">
-        <div>
-          <GameStage slug={game.slug} title={game.title} boards={boards} status={game.status} creatorRef={game.creator_ref} />
-          <GameActions slug={game.slug} title={game.title} status={game.status} creatorRef={game.creator_ref} parentSlug={game.parent_slug} />
-          <p className="about-game">{game.description}</p>
-          {isPublished && <ReportButton slug={game.slug} />}
+      <div className="viewer">
+        <div className="game-columns">
+          <div>
+            <GameStage
+              slug={game.slug}
+              title={game.title}
+              boards={boards}
+              status={game.status}
+              creatorRef={game.creator_ref}
+              orientation={game.orientation}
+            />
+            <GameActions slug={game.slug} title={game.title} status={game.status} creatorRef={game.creator_ref} parentSlug={game.parent_slug} />
+            <p className="about-game">{game.description}</p>
+            {isPublished && <ReportButton slug={game.slug} />}
+          </div>
+          <aside>
+            {isPublished && <StarRating slug={game.slug} />}
+            <Leaderboard slug={game.slug} boards={boards} />
+          </aside>
         </div>
-        <aside>
-          {isPublished && <StarRating slug={game.slug} />}
-          <Leaderboard slug={game.slug} boards={boards} />
-        </aside>
+        <NavRail prevSlug={prevSlug} nextSlug={nextSlug} />
       </div>
     </main>
   );

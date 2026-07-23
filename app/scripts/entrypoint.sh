@@ -10,6 +10,13 @@ mkdir -p "$VOL/data" "$VOL/games"
 if [ -d /app/games-seed ]; then
   cp -rn /app/games-seed/. "$VOL/games/" 2>/dev/null || true
 fi
+# CRITICAL: `next build` touches db() during prerender, baking a real /app/data
+# dir (with a throwaway SQLite file) into the image. `ln -sfn` against an
+# EXISTING directory silently creates the link INSIDE it — leaving the app
+# writing to the ephemeral container disk and losing every user on restart.
+# Remove the container-local dirs first; these are image artifacts, never data
+# (the volume is only ever touched via $VOL).
+rm -rf /app/games /app/data
 ln -sfn "$VOL/games" /app/games
 ln -sfn "$VOL/data" /app/data
 

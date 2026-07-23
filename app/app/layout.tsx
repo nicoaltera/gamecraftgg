@@ -11,7 +11,7 @@ const instrument = Instrument_Sans({ subsets: ['latin'], weight: ['400', '500', 
 const plexMono = IBM_Plex_Mono({ subsets: ['latin'], weight: ['500'], variable: '--font-mono' });
 
 export const metadata: Metadata = {
-  title: 'GameSight — games with your friends in 60 seconds',
+  title: 'GameCraft — games with your friends in 60 seconds',
   description: 'Play instantly. Make a game from a sentence. Dare your friends to beat your score.',
 };
 
@@ -19,22 +19,33 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${shantell.variable} ${instrument.variable} ${plexMono.variable}`}>
       <body>
-        <header className="site-header">
-          <Link href="/" className="wordmark">
-            gamesight<span className="wordmark-pen">✎</span>
-          </Link>
-          <nav className="site-nav">
-            <Link href="/#games">play</Link>
-            <Link href="/#make">make</Link>
-            <YoursLink />
-            <AccountLink />
-          </nav>
-        </header>
-        {children}
+        <div className="shell">
+          {/* Persistent sketchbook sidebar (top bar on mobile). "Play" drops the
+              player straight into the hottest game; the viewer's chevrons take
+              it from there. */}
+          <aside className="side">
+            <Link href="/" className="wordmark">
+              gamecraft<span className="wordmark-pen">✎</span>
+            </Link>
+            <Link href="/watch" className="side-play">
+              ▶ Play
+            </Link>
+            <nav className="side-nav">
+              <Link href="/">home</Link>
+              <Link href="/#make">create</Link>
+              <YoursLink />
+              <AccountLink />
+            </nav>
+            <div className="side-foot">drawn into existence, one sentence at a time</div>
+          </aside>
+          <div className="content">
+            {children}
+            <footer className="site-footer">
+              <span>gamecraft — play instantly, make a game from a sentence</span>
+            </footer>
+          </div>
+        </div>
         <CookingTray />
-        <footer className="site-footer">
-          <span>drawn into existence, one sentence at a time</span>
-        </footer>
       </body>
     </html>
   );

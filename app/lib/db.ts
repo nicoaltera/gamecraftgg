@@ -349,6 +349,57 @@ export function getFeed(limit = 24): FeedItem[] {
   return rows;
 }
 
+// Newest published games — the "fresh off the pencil" row.
+export function getNewest(limit = 12): FeedItem[] {
+  return db()
+    .prepare(
+      `SELECT g.*, 0 AS plays, COALESCE(t.total_plays,0) AS total_plays, 0 AS avg_runs, 0 AS heat,
+              COALESCE(rt.rating,0) AS rating, COALESCE(rt.rating_count,0) AS rating_count
+       FROM games g
+       LEFT JOIN (SELECT slug, COUNT(*) AS total_plays FROM plays GROUP BY slug) t ON t.slug = g.slug
+       LEFT JOIN (SELECT slug, AVG(stars) AS rating, COUNT(*) AS rating_count FROM ratings GROUP BY slug) rt ON rt.slug = g.slug
+       WHERE g.status = 'published' ORDER BY g.created_at DESC LIMIT ?`
+    )
+    .all(limit) as FeedItem[];
+}
+
+// Lifetime most-played — pure social proof, no recency window.
+export function getMostPlayed(limit = 12): FeedItem[] {
+  return db()
+    .prepare(
+      `SELECT g.*, 0 AS plays, COALESCE(t.total_plays,0) AS total_plays, 0 AS avg_runs, 0 AS heat,
+              COALESCE(rt.rating,0) AS rating, COALESCE(rt.rating_count,0) AS rating_count
+       FROM games g
+       LEFT JOIN (SELECT slug, COUNT(*) AS total_plays FROM plays GROUP BY slug) t ON t.slug = g.slug
+       LEFT JOIN (SELECT slug, AVG(stars) AS rating, COUNT(*) AS rating_count FROM ratings GROUP BY slug) rt ON rt.slug = g.slug
+       WHERE g.status = 'published' ORDER BY COALESCE(t.total_plays,0) DESC, g.created_at DESC LIMIT ?`
+    )
+    .all(limit) as FeedItem[];
+}
+
+// Landing-page champions rail: raw scores aren't comparable ACROSS games (waves
+// vs meters vs ms), so the global board is "who owns the top spot of each hot
+// game today" — one champion per game, games ordered by 24h play volume.
+export type Champion = { slug: string; title: string; name: string; score: number; label: string };
+export function getDailyChampions(limit = 8): Champion[] {
+  const hot = db()
+    .prepare(
+      `SELECT g.slug, g.title, g.boards, g.score_label, g.score_order, COUNT(p.id) AS c
+       FROM games g LEFT JOIN plays p ON p.slug = g.slug AND p.started_at > (unixepoch()*1000 - 86400000)
+       WHERE g.status = 'published'
+       GROUP BY g.slug ORDER BY c DESC, g.created_at DESC LIMIT ?`
+    )
+    .all(limit) as (GameRow & { c: number })[];
+  const out: Champion[] = [];
+  for (const g of hot) {
+    const primary = parseBoards(g).find((b) => b.primary);
+    if (!primary) continue;
+    const top = getLeaderboard(g.slug, primary.order, 'day', primary.key)[0];
+    if (top) out.push({ slug: g.slug, title: g.title, name: top.name, score: top.score, label: primary.label });
+  }
+  return out;
+}
+
 export function getLeaderboard(slug: string, order: 'asc' | 'desc', window?: 'day', board = '') {
   const since = window === 'day' ? Date.now() - 86400_000 : 0;
   const agg = order === 'asc' ? 'MIN(score)' : 'MAX(score)';

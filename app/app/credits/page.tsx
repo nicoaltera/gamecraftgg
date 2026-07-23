@@ -5,9 +5,9 @@ import Link from 'next/link';
 import { useSession, signOut } from '@/lib/auth-client';
 
 const PACKS = [
-  { key: 'small', label: '100 credits', price: '$10', note: 'one game' },
-  { key: 'medium', label: '550 credits', price: '$50', note: 'five games + a bonus' },
-  { key: 'large', label: '1200 credits', price: '$100', note: 'twelve games, best rate' },
+  { key: 'small', label: '1000 credits', price: '$10', note: 'one game' },
+  { key: 'medium', label: '5500 credits', price: '$50', note: 'five games + a bonus' },
+  { key: 'large', label: '12000 credits', price: '$100', note: 'twelve games, best rate' },
 ];
 
 const REASON_LABEL: Record<string, string> = {
@@ -79,7 +79,7 @@ export default function CreditsPage() {
       <main className="hero draw-in">
         <h1>Credits</h1>
         <p className="hero-sub">
-          <Link href="/login">Sign in</Link> to see your credits — new accounts start with 200.
+          <Link href="/login">Sign in</Link> to see your credits — new accounts start with 2000.
         </p>
       </main>
     );
@@ -87,7 +87,7 @@ export default function CreditsPage() {
   return (
     <main className="hero draw-in" style={{ minHeight: '60vh' }}>
       <h1>{ledger ? `${ledger.balance} credits` : '…'}</h1>
-      <p className="hero-sub">{note ?? 'A game (or an edit) costs 100 credits. Failed builds refund themselves.'}</p>
+      <p className="hero-sub">{note ?? 'A game costs 1000 credits, an edit 50. Failed builds refund themselves.'}</p>
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'center', margin: '18px 0 28px' }}>
         {PACKS.map((p) => (

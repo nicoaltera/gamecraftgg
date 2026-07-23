@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { db, getGameAny } from '@/lib/db';
 import { auth } from '@/lib/auth';
-import { balance, addEntry, GENERATION_COST } from '@/lib/credits';
+import { balance, addEntry, GENERATION_COST, EDIT_COST } from '@/lib/credits';
 import { rateLimit, clientIp } from '@/lib/ratelimit';
 import { readJson } from '@/lib/http';
 
@@ -18,7 +18,7 @@ const DAILY_CAP = 100;
 export async function POST(req: NextRequest) {
   const session = await auth.api.getSession({ headers: req.headers });
   if (!session) {
-    return NextResponse.json({ error: 'Sign in to make games — new accounts start with 200 credits.', code: 'auth' }, { status: 401 });
+    return NextResponse.json({ error: 'Sign in to make games — new accounts start with 2000 credits.', code: 'auth' }, { status: 401 });
   }
   const userId = session.user.id;
 
@@ -65,8 +65,9 @@ export async function POST(req: NextRequest) {
       .prepare("SELECT COUNT(*) AS c FROM generations WHERE user_id = ? AND status = 'running' AND updated_at > ?")
       .get(userId, now - 90 * 60_000) as { c: number }).c;
     if (running > 0) return 'busy';
-    if (balance(userId) < GENERATION_COST) return 'credits';
-    addEntry(userId, -GENERATION_COST, 'debit', id);
+    const cost = editSlug ? EDIT_COST : GENERATION_COST;
+    if (balance(userId) < cost) return 'credits';
+    addEntry(userId, -cost, 'debit', id);
     db().prepare('INSERT INTO generations (id, prompt, status, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, prompt, 'running', userId, now, now);
     return 'ok';
@@ -75,7 +76,8 @@ export async function POST(req: NextRequest) {
   if (verdict === 'cap') return NextResponse.json({ error: 'The workshop hit today’s limit. Come back tomorrow.' }, { status: 429 });
   if (verdict === 'busy') return NextResponse.json({ error: 'You already have a game cooking — let it finish first.' }, { status: 429 });
   if (verdict === 'credits') {
-    return NextResponse.json({ error: `You’re out of credits — a game costs ${GENERATION_COST}.`, code: 'credits' }, { status: 402 });
+    const need = editSlug ? EDIT_COST : GENERATION_COST;
+    return NextResponse.json({ error: `You’re out of credits — this costs ${need}.`, code: 'credits' }, { status: 402 });
   }
 
   const runner = path.join(process.cwd(), 'pipeline', 'run.mjs');

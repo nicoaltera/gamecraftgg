@@ -9,9 +9,9 @@
 import crypto from 'node:crypto';
 
 export const PACKS = {
-  small: { credits: 100, usd: 10, label: '100 credits — $10' },
-  medium: { credits: 550, usd: 50, label: '550 credits — $50' },
-  large: { credits: 1200, usd: 100, label: '1200 credits — $100' },
+  small: { credits: 1000, usd: 10, label: '1000 credits — $10' },
+  medium: { credits: 5500, usd: 50, label: '5500 credits — $50' },
+  large: { credits: 12000, usd: 100, label: '12000 credits — $100' },
 } as const;
 export type PackKey = keyof typeof PACKS;
 

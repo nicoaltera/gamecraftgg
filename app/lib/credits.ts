@@ -1,11 +1,14 @@
 import { db } from './db';
 
-// Credit economics (plans/production-stack/PLAN.md): one generation or edit
-// costs 100 credits; signup grants 200 (= two games, enough to feel the loop).
+// Credit economics (founder-set 2026-07-23): 100 credits = $1. Creating a
+// game costs 1000 (= $10), editing costs 50 (= $0.50 — a deliberate loss-leader
+// on iteration; the pipeline's token cost per edit run is far higher, so watch
+// this in /k once real traffic lands). Signup grants 2000 (= two games).
 // The ledger is append-only — balance is always derived, never stored, so
 // there is no counter to corrupt and every credit movement has an audit row.
-export const GENERATION_COST = 100;
-export const SIGNUP_GRANT = 200;
+export const GENERATION_COST = 1000;
+export const EDIT_COST = 50;
+export const SIGNUP_GRANT = 2000;
 
 export type CreditReason = 'signup_grant' | 'purchase' | 'debit' | 'refund';
 

@@ -11,6 +11,10 @@ type Props = {
   boards: Board[];
   status: string;
   creatorRef: string;
+  // container geometry only — the game inside is untouched. All current games
+  // are landscape (16:9, exactly as before); 'portrait' gets a phone-shaped
+  // stage when such games ship.
+  orientation?: string;
 };
 
 // Set NEXT_PUBLIC_GAME_ORIGIN to a distinct host in production so untrusted
@@ -26,7 +30,7 @@ function playerRef(): string {
   return r;
 }
 
-export default function GameStage({ slug, title, boards, status, creatorRef }: Props) {
+export default function GameStage({ slug, title, boards, status, creatorRef, orientation }: Props) {
   const router = useRouter();
   const [remixing, setRemixing] = useState(false);
   const primaryBoard = boards.find((b) => b.primary) ?? boards[0];
@@ -289,7 +293,7 @@ export default function GameStage({ slug, title, boards, status, creatorRef }: P
           )}
         </p>
       )}
-      <div className="stage-wrap draw-in">
+      <div className={`stage-wrap draw-in${orientation === 'portrait' ? ' stage-portrait' : ''}`}>
         <HandFrame seed={`stage-${slug}`} strokeWidth={2} />
         <iframe
           ref={frameRef}

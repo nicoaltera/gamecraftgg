@@ -7,7 +7,7 @@ import { signIn, signUp } from '@/lib/auth-client';
 import { getRef } from '@/lib/ref';
 
 // Email + password only (no OAuth, no magic links — the launch stack has no
-// email service). New accounts start with 200 credits; the grant happens
+// email service). New accounts start with 2000 credits; the grant happens
 // server-side on user creation, not here.
 export default function LoginPage() {
   const [mode, setMode] = useState<'in' | 'up'>('up');
@@ -49,7 +49,7 @@ export default function LoginPage() {
 
   return (
     <main className="hero draw-in" style={{ minHeight: '60vh' }}>
-      <h1>{mode === 'up' ? 'Make an account, get 200 credits' : 'Welcome back'}</h1>
+      <h1>{mode === 'up' ? 'Make an account, get 2000 credits' : 'Welcome back'}</h1>
       <form className="prompt-row" onSubmit={submit} style={{ flexDirection: 'column', alignItems: 'center', gap: 14 }}>
         <div className="prompt-frame" style={{ width: 'min(420px, 90vw)' }}>
           <HandFrame seed="login-email" strokeWidth={1.8} />
@@ -83,7 +83,7 @@ export default function LoginPage() {
         </button>
       </form>
       <p className="hero-sub">
-        {note ?? (mode === 'up' ? 'Two free games on the house. A game costs 100 credits to make.' : '')}{' '}
+        {note ?? (mode === 'up' ? 'Two free games on the house. A game costs 1000 credits to make, an edit 50.' : '')}{' '}
         <button
           type="button"
           onClick={() => {

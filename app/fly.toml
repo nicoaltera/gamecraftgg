@@ -14,7 +14,7 @@
 # then set the two build args below to those https origins and redeploy —
 # NEXT_PUBLIC_* are build-time-inlined, so changing them means a rebuild.
 
-app = "gamesight"
+app = "gamecraft"
 primary_region = "sjc"
 
 [build]
@@ -23,7 +23,7 @@ primary_region = "sjc"
     NEXT_PUBLIC_GAME_ORIGIN = ""
 
 [mounts]
-  source = "gamesight_data"
+  source = "gamecraft_data"
   destination = "/vol"
 
 [http_service]

@@ -13,6 +13,14 @@ export const auth = betterAuth({
   // and email is unverified, so account farming is the #1 abuse vector. Per-IP
   // signup throttling is the launch-day defense; email verification is the
   // scheduled follow-up once an email service exists.
+  // Fly terminates TLS and forwards the real client IP in Fly-Client-IP.
+  // Without this, Better Auth can't attribute requests and collapses rate
+  // limiting into ONE shared bucket — 5 signups TOTAL per hour, site-wide.
+  advanced: {
+    ipAddress: {
+      ipAddressHeaders: ['fly-client-ip', 'x-forwarded-for'],
+    },
+  },
   rateLimit: {
     enabled: true,
     window: 60,

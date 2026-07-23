@@ -44,6 +44,132 @@ h1, h2, h3 { line-height: 1.1; margin: 0; }
 .display { font-family: var(--font-display), cursive; font-weight: 600; }
 .mono { font-family: var(--font-mono), monospace; font-variant-numeric: tabular-nums; }
 
+/* ---------- app shell: fixed sketchbook sidebar + content ----------
+   Netflix-style chrome, GameCraft's hand-drawn language. The sidebar is the
+   only persistent nav; on mobile it flattens into a top bar. */
+.shell { display: flex; min-height: 100vh; }
+.side {
+  width: 208px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 22px 18px;
+  border-right: var(--hairline);
+}
+.side .wordmark { margin-bottom: 14px; }
+.side-play {
+  display: block;
+  text-align: center;
+  border: 1.5px solid var(--biro);
+  color: var(--biro);
+  font-weight: 600;
+  font-size: 16px;
+  padding: 11px 10px;
+  border-radius: 8px;
+  margin-bottom: 18px;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.side-play:hover { text-decoration: none; transform: translate(-1px, -1px); box-shadow: var(--lift); }
+.side-nav { display: flex; flex-direction: column; gap: 4px; font-weight: 500; }
+.side-nav a {
+  color: var(--ink);
+  padding: 8px 10px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.side-nav a:hover { background: rgba(26, 24, 21, 0.05); text-decoration: none; }
+.side-foot { margin-top: auto; color: var(--graphite); font-size: 12px; line-height: 1.4; }
+.content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.content > main { width: 100%; }
+
+/* ---------- home: rows + right rail ---------- */
+.home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 290px;
+  gap: 40px;
+  align-items: start;
+}
+.rail { position: sticky; top: 20px; display: flex; flex-direction: column; gap: 22px; padding-top: 8px; }
+.rail-make {
+  display: block;
+  text-align: center;
+  border: 1.5px solid var(--biro);
+  color: var(--biro);
+  font-weight: 600;
+  font-size: 16px;
+  padding: 12px 10px;
+  border-radius: 8px;
+}
+.rail-make:hover { text-decoration: none; transform: translate(-1px, -1px); box-shadow: var(--lift); }
+.rail .board { border: var(--hairline); border-radius: 12px; padding: 16px 16px 10px; }
+.rail .board .board-game { color: var(--graphite); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px; }
+
+.card-row { margin: 30px 0 4px; }
+.row-scroll {
+  display: flex;
+  gap: 22px;
+  overflow-x: auto;
+  padding: 6px 4px 16px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+.row-scroll .game-card { flex: 0 0 218px; scroll-snap-align: start; }
+.row-scroll .card-title { font-size: 17px; }
+
+/* play-count badge drawn onto the cover, like a penciled sticker */
+.card-plays {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 3;
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  border-radius: 999px;
+  font-family: var(--font-mono), monospace;
+  font-size: 11.5px;
+  padding: 2px 9px;
+  box-shadow: var(--lift);
+}
+
+/* ---------- game viewer: centered stage + right action rail ---------- */
+.viewer { display: grid; grid-template-columns: minmax(0, 1fr) 64px; gap: 18px; align-items: start; }
+.nav-rail {
+  position: sticky;
+  top: 84px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+  padding-top: 46px;
+}
+.nav-rail a, .nav-rail button {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.nav-rail a:hover, .nav-rail button:hover { transform: translate(-1px, -1px); box-shadow: var(--lift); text-decoration: none; }
+.nav-rail .rail-label { font-size: 11px; color: var(--graphite); margin-top: -8px; }
+.nav-rail .rail-disabled { opacity: 0.3; pointer-events: none; }
+
+/* portrait games get a phone-shaped stage (dormant until a portrait game ships) */
+.stage-portrait { max-width: min(430px, 100%); margin-inline: auto; }
+.stage-portrait .game-stage { aspect-ratio: 9 / 16; }
+
 /* ---------- chrome ---------- */
 .site-header {
   max-width: 1200px;
@@ -287,13 +413,62 @@ main {
   .btn, .game-card .cover-wrap { transition: none; }
 }
 
+/* right rail folds under the rows before the sidebar folds */
+@media (max-width: 1080px) {
+  .home-grid { grid-template-columns: 1fr; }
+  .rail { position: static; max-width: 480px; }
+}
+
+/* sidebar flattens into a top bar; most players live here */
+@media (max-width: 820px) {
+  .shell { flex-direction: column; }
+  .side {
+    position: static;
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    border-right: none;
+    border-bottom: var(--hairline);
+    overflow-x: auto;
+  }
+  .side .wordmark { margin-bottom: 0; font-size: 22px; }
+  .side-play { margin-bottom: 0; padding: 7px 14px; font-size: 14px; white-space: nowrap; }
+  .side-nav { flex-direction: row; gap: 2px; font-size: 14px; }
+  .side-nav a { padding: 6px 8px; white-space: nowrap; }
+  .side-foot { display: none; }
+
+  .viewer { grid-template-columns: 1fr; }
+  /* the chevrons float over the page edge, TikTok-style — clear of the stage
+     so they never cover game controls */
+  .nav-rail {
+    position: fixed;
+    right: 10px;
+    bottom: 88px;
+    top: auto;
+    padding-top: 0;
+    z-index: 40;
+    gap: 10px;
+  }
+  .nav-rail a, .nav-rail button { width: 42px; height: 42px; font-size: 17px; }
+  .nav-rail .rail-label { display: none; }
+}
+
 @media (max-width: 640px) {
   .site-header, main, .site-footer { padding-left: 20px; padding-right: 20px; }
   .prompt-row { flex-direction: column; }
   .game-grid { gap: 24px 20px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
-  .hero { padding: 36px 0 20px; }
+  .hero { padding: 32px 0 16px; }
+  .hero h1 { font-size: clamp(24px, 6.4vw, 32px); }
   .feed-head { margin-top: 24px; }
   .feed-head .feed-note { display: none; }
+  .row-scroll .game-card { flex: 0 0 168px; }
+  .row-scroll { gap: 16px; }
+  .card-row { margin-top: 20px; }
+  .game-title-row h1 { font-size: 24px; }
+  .stage-actions .btn { padding: 10px 14px; font-size: 14px; }
 }
 
 .gs-blink { animation: gs-blink 1s steps(2) infinite; color: var(--biro); }
