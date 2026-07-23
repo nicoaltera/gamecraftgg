@@ -100,11 +100,20 @@ const MODELS = {
   builder: process.env.GS_MODEL_BUILDER || 'claude-opus-4-8',
   judge: process.env.GS_MODEL_JUDGE || 'claude-opus-4-8',
 };
+// Reasoning effort per role (founder-set 2026-07-23): the builder writes the
+// game — full effort; designer briefs and judge scoring hold quality at medium
+// with meaningfully less latency. Override per role via env.
+const EFFORT = {
+  designer: process.env.GS_EFFORT_DESIGNER || 'medium',
+  builder: process.env.GS_EFFORT_BUILDER || 'high',
+  judge: process.env.GS_EFFORT_JUDGE || 'medium',
+};
 
 function claude(rolePrompt, { tools, timeoutMin = 15, cwd = APP, phase = 'agent' } = {}) {
   return new Promise((resolve, reject) => {
     const cliArgs = ['-p', rolePrompt, '--output-format', 'stream-json', '--verbose'];
     if (MODELS[phase]) cliArgs.push('--model', MODELS[phase]);
+    if (EFFORT[phase]) cliArgs.push('--effort', EFFORT[phase]);
     if (tools) cliArgs.push('--allowedTools', tools, '--permission-mode', 'acceptEdits');
     const child = spawn('claude', cliArgs, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
 
