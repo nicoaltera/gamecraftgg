@@ -1,0 +1,43 @@
+# GameSight on Fly — one box, one volume (PLAN.md production stack).
+#
+# Secrets to set before first deploy (fly secrets set KEY=...):
+#   BETTER_AUTH_SECRET      openssl rand -hex 32
+#   BETTER_AUTH_URL         https://<app-domain>
+#   ANTHROPIC_API_KEY       pipeline agents
+#   POLAR_API_BASE          https://api.polar.sh (live) | https://sandbox-api.polar.sh
+#   POLAR_ACCESS_TOKEN      org access token
+#   POLAR_WEBHOOK_SECRET    webhook endpoint secret
+#   POLAR_PRODUCT_SMALL / POLAR_PRODUCT_MEDIUM / POLAR_PRODUCT_LARGE
+#
+# Domains (task: separate game origin): add BOTH certs to this one app
+#   fly certs add gamesight.example  &&  fly certs add play.gamesight.example
+# then set the two build args below to those https origins and redeploy —
+# NEXT_PUBLIC_* are build-time-inlined, so changing them means a rebuild.
+
+app = "gamesight"
+primary_region = "sjc"
+
+[build]
+  [build.args]
+    NEXT_PUBLIC_APP_ORIGIN = ""
+    NEXT_PUBLIC_GAME_ORIGIN = ""
+
+[mounts]
+  source = "gamesight_data"
+  destination = "/vol"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # Never auto-stop: detached pipeline children (game builds in progress) die
+  # with the machine, and a paying creator's build must not be collateral.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  # Builds run several claude CLI processes + Chromium during verify; 8GB keeps
+  # a couple of concurrent builds comfortable. Scale up before scaling out —
+  # SQLite + volume architecture wants exactly one machine.
+  size = "shared-cpu-4x"
+  memory = "8gb"
