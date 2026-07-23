@@ -617,6 +617,90 @@ main {
   .cook-tray { right: 12px; left: 12px; bottom: 12px; width: auto; }
 }
 
+/* ---------- build page: the loop ---------- */
+.loop-wrap { margin: 28px 0 6px; max-width: 860px; }
+.loop-row { display: flex; align-items: stretch; }
+.loop-node {
+  position: relative;
+  flex: 1;
+  border: 1.5px solid rgba(26, 24, 21, 0.3);
+  border-radius: 14px;
+  padding: 16px 10px 13px;
+  text-align: center;
+  background: var(--paper);
+  overflow: hidden;
+  transition: border-color 300ms ease, opacity 300ms ease, box-shadow 300ms ease;
+}
+.loop-node .ln-name { font-family: var(--font-display), cursive; font-weight: 600; font-size: 19px; }
+.loop-node .ln-desc { font-size: 11.5px; color: var(--graphite); margin-top: 3px; }
+.loop-node.pending { opacity: 0.38; }
+.loop-node.done { border-color: rgba(26, 24, 21, 0.75); }
+.loop-node.active { border-color: var(--biro); box-shadow: var(--lift); opacity: 1; }
+.loop-node.active .ln-name { color: var(--biro); }
+.loop-node.active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 25%, rgba(36, 71, 214, 0.14) 50%, transparent 75%);
+  transform: translateX(-100%);
+  animation: loop-shimmer 1.7s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes loop-shimmer { to { transform: translateX(100%); } }
+.loop-arrow { flex: 0 0 30px; display: flex; align-items: center; justify-content: center; color: var(--graphite); font-size: 17px; }
+.loop-under { position: relative; height: 52px; }
+.loop-return { position: absolute; inset: 4px 0 auto 0; width: 100%; height: 40px; color: rgba(26, 24, 21, 0.45); }
+.loop-cycle {
+  position: absolute;
+  left: 50%;
+  top: 21px;
+  transform: translateX(-50%);
+  background: var(--paper);
+  padding: 0 10px;
+  font-size: 11px;
+  color: var(--graphite);
+}
+.loop-cycle.hot { color: var(--biro); font-weight: 600; }
+.loop-exit { position: absolute; right: 0; top: 16px; font-size: 13px; color: var(--graphite); background: var(--paper); padding-left: 8px; }
+.loop-exit.published { color: var(--ink); font-weight: 600; }
+.loop-exit.published::before { content: ''; position: absolute; inset: 8% -3% 4% 4%; background: var(--highlighter); transform: skew(-8deg); z-index: -1; }
+.loop-exit.failed { color: var(--redpencil); font-weight: 600; }
+
+/* progress: countdown against the ~25 min average */
+.build-progress { max-width: 860px; margin: 10px 0 4px; }
+.build-bar { height: 7px; border: 1px solid rgba(26, 24, 21, 0.3); border-radius: 999px; overflow: hidden; background: var(--paper); }
+.build-bar-fill { height: 100%; background: var(--biro); border-radius: 999px; transition: width 1s linear; }
+.build-bar-fill.almost { animation: bar-breathe 1.6s ease-in-out infinite; }
+.build-bar-fill.done { background: var(--ink); }
+.build-bar-fill.failed { background: var(--redpencil); }
+@keyframes bar-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+.build-eta { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; font-size: 13px; color: var(--graphite); }
+.build-eta .eta-count { font-family: var(--font-mono), monospace; color: var(--ink); }
+
+/* the trace: footnotes in a bounded, scrollable notebook */
+.trace-box {
+  max-width: 860px;
+  max-height: 340px;
+  overflow-y: auto;
+  border: var(--hairline);
+  border-radius: 12px;
+  padding: 4px 16px 10px;
+  margin-top: 10px;
+  scrollbar-width: thin;
+}
+
+@media (max-width: 700px) {
+  .loop-node { padding: 10px 4px 9px; border-radius: 10px; }
+  .loop-node .ln-name { font-size: 13.5px; }
+  .loop-node .ln-desc { display: none; }
+  .loop-arrow { flex-basis: 16px; font-size: 13px; }
+  .loop-under { height: 46px; }
+  .trace-box { max-height: 300px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loop-node.active::after, .build-bar-fill.almost { animation: none; }
+}
+
 /* early design-brief reveal on the build page */
 .build-brief {
   margin-top: 18px; max-width: 760px; padding: 14px 16px;
