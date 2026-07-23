@@ -1,6 +1,18 @@
 import { betterAuth } from 'better-auth';
 import { db } from './db';
 import { grantSignupCredits } from './credits';
+import { randomGamertag } from './names';
+
+// Every player gets a generated gamertag at signup (DoodleFox42) — it's their
+// public identity on /u/<tag> and the leaderboards; emails stay private.
+function uniqueGamertag(): string {
+  for (let i = 0; i < 8; i++) {
+    const tag = randomGamertag();
+    const hit = db().prepare('SELECT 1 FROM user WHERE name = ?').get(tag);
+    if (!hit) return tag;
+  }
+  return `Player${Date.now().toString(36).slice(-6)}`; // astronomically unlikely
+}
 
 // Email + password only, by design: no OAuth console to configure, no email
 // service to stand up (launch stack is one box + Polar). Better Auth owns the
@@ -43,6 +55,8 @@ export const auth = betterAuth({
   databaseHooks: {
     user: {
       create: {
+        // gamertag replaces whatever name the signup form supplied
+        before: async (user) => ({ data: { ...user, name: uniqueGamertag() } }),
         // The signup grant rides the user-creation hook; addEntry is idempotent
         // on (signup_grant, userId) so a re-fired hook can't double-grant.
         after: async (user) => {

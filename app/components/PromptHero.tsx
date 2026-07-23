@@ -12,11 +12,20 @@ export default function PromptHero() {
   const [note, setNote] = useState<string | null>(null);
   // 'auth' | 'credits' from the API — turns the note into an actionable link
   const [errCode, setErrCode] = useState<string | null>(null);
+  // gentle nudge (wobble + red pencil stroke) when the prompt is empty
+  const [attn, setAttn] = useState(false);
   const router = useRouter();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!prompt.trim() || busy) return;
+    if (busy) return;
+    if (prompt.trim().length < 8) {
+      setNote(prompt.trim() ? 'Give it a full sentence — what should the game feel like?' : 'First, type the game you want to play — one sentence is plenty. ✎');
+      setErrCode(null);
+      setAttn(true);
+      setTimeout(() => setAttn(false), 700);
+      return;
+    }
     setBusy(true);
     setNote(null);
     setErrCode(null);
@@ -45,7 +54,7 @@ export default function PromptHero() {
     <section className="hero draw-in" id="make">
       <h1>What do you want to play into existence?</h1>
       <form className="prompt-row" onSubmit={submit}>
-        <div className="prompt-frame">
+        <div className={`prompt-frame${attn ? ' attn' : ''}`}>
           <HandFrame seed="prompt-box" strokeWidth={1.8} />
           <input
             className="prompt-input"

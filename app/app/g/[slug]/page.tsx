@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import type { Metadata } from 'next';
-import { getFeed, getGame, getGameAny, parseBoards } from '@/lib/db';
+import { getFeed, getGame, getGameAny, getMakerName, parseBoards } from '@/lib/db';
 import GameStage from '@/components/GameStage';
 import Leaderboard from '@/components/Leaderboard';
 import NavRail from '@/components/NavRail';
@@ -52,7 +52,17 @@ export default async function GamePage({ params }: Params) {
       <Link href="/#games" className="back-link">← all games</Link>
       <div className="game-title-row">
         <h1>{game.title}</h1>
-        <span className="game-verb">{game.verb}</span>
+        <span className="game-verb">
+          {game.verb}
+          {(() => {
+            const maker = getMakerName(game.creator_ref);
+            return maker ? (
+              <>
+                {game.verb ? ' · ' : ''}by <Link href={`/u/${encodeURIComponent(maker)}`}>{maker}</Link>
+              </>
+            ) : null;
+          })()}
+        </span>
       </div>
       <div className="viewer">
         <div className="game-columns">

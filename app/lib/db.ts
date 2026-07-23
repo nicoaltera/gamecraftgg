@@ -349,55 +349,58 @@ export function getFeed(limit = 24): FeedItem[] {
   return rows;
 }
 
-// Newest published games — the "fresh off the pencil" row.
-export function getNewest(limit = 12): FeedItem[] {
-  return db()
+// Public maker profile: gamertag → published games, lifetime plays, and rank
+// among all makers (by total plays across their published games).
+export type Profile = {
+  name: string;
+  memberSince: number;
+  games: FeedItem[];
+  totalPlays: number;
+  rank: number;
+  makers: number;
+};
+export function getProfile(name: string): Profile | null {
+  const u = db().prepare('SELECT id, name, createdAt FROM user WHERE name = ?').get(name) as
+    | { id: string; name: string; createdAt: string | number }
+    | undefined;
+  if (!u) return null;
+  const games = db()
     .prepare(
       `SELECT g.*, 0 AS plays, COALESCE(t.total_plays,0) AS total_plays, 0 AS avg_runs, 0 AS heat,
               COALESCE(rt.rating,0) AS rating, COALESCE(rt.rating_count,0) AS rating_count
        FROM games g
        LEFT JOIN (SELECT slug, COUNT(*) AS total_plays FROM plays GROUP BY slug) t ON t.slug = g.slug
        LEFT JOIN (SELECT slug, AVG(stars) AS rating, COUNT(*) AS rating_count FROM ratings GROUP BY slug) rt ON rt.slug = g.slug
-       WHERE g.status = 'published' ORDER BY g.created_at DESC LIMIT ?`
+       WHERE g.creator_ref = ? AND g.status = 'published'
+       ORDER BY COALESCE(t.total_plays,0) DESC, g.created_at DESC`
     )
-    .all(limit) as FeedItem[];
+    .all(u.id) as FeedItem[];
+  const totalPlays = games.reduce((s, g) => s + g.total_plays, 0);
+  // rank = 1 + makers with strictly more plays; ties share a rank
+  const standings = db()
+    .prepare(
+      `SELECT g.creator_ref AS ref, COUNT(p.id) AS plays
+       FROM games g LEFT JOIN plays p ON p.slug = g.slug
+       WHERE g.status = 'published' AND g.creator_ref != ''
+       GROUP BY g.creator_ref`
+    )
+    .all() as { ref: string; plays: number }[];
+  const rank = 1 + standings.filter((s) => s.plays > totalPlays).length;
+  return {
+    name: u.name,
+    memberSince: typeof u.createdAt === 'number' ? u.createdAt : Date.parse(String(u.createdAt)),
+    games,
+    totalPlays,
+    rank,
+    makers: standings.length || 1,
+  };
 }
 
-// Lifetime most-played — pure social proof, no recency window.
-export function getMostPlayed(limit = 12): FeedItem[] {
-  return db()
-    .prepare(
-      `SELECT g.*, 0 AS plays, COALESCE(t.total_plays,0) AS total_plays, 0 AS avg_runs, 0 AS heat,
-              COALESCE(rt.rating,0) AS rating, COALESCE(rt.rating_count,0) AS rating_count
-       FROM games g
-       LEFT JOIN (SELECT slug, COUNT(*) AS total_plays FROM plays GROUP BY slug) t ON t.slug = g.slug
-       LEFT JOIN (SELECT slug, AVG(stars) AS rating, COUNT(*) AS rating_count FROM ratings GROUP BY slug) rt ON rt.slug = g.slug
-       WHERE g.status = 'published' ORDER BY COALESCE(t.total_plays,0) DESC, g.created_at DESC LIMIT ?`
-    )
-    .all(limit) as FeedItem[];
-}
-
-// Landing-page champions rail: raw scores aren't comparable ACROSS games (waves
-// vs meters vs ms), so the global board is "who owns the top spot of each hot
-// game today" — one champion per game, games ordered by 24h play volume.
-export type Champion = { slug: string; title: string; name: string; score: number; label: string };
-export function getDailyChampions(limit = 8): Champion[] {
-  const hot = db()
-    .prepare(
-      `SELECT g.slug, g.title, g.boards, g.score_label, g.score_order, COUNT(p.id) AS c
-       FROM games g LEFT JOIN plays p ON p.slug = g.slug AND p.started_at > (unixepoch()*1000 - 86400000)
-       WHERE g.status = 'published'
-       GROUP BY g.slug ORDER BY c DESC, g.created_at DESC LIMIT ?`
-    )
-    .all(limit) as (GameRow & { c: number })[];
-  const out: Champion[] = [];
-  for (const g of hot) {
-    const primary = parseBoards(g).find((b) => b.primary);
-    if (!primary) continue;
-    const top = getLeaderboard(g.slug, primary.order, 'day', primary.key)[0];
-    if (top) out.push({ slug: g.slug, title: g.title, name: top.name, score: top.score, label: primary.label });
-  }
-  return out;
+// Gamertag for a game's creator_ref (a user id post-auth; anonymous refs → null).
+export function getMakerName(creatorRef: string): string | null {
+  if (!creatorRef) return null;
+  const u = db().prepare('SELECT name FROM user WHERE id = ?').get(creatorRef) as { name: string } | undefined;
+  return u?.name ?? null;
 }
 
 export function getLeaderboard(slug: string, order: 'asc' | 'desc', window?: 'day', board = '') {

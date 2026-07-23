@@ -89,39 +89,21 @@ h1, h2, h3 { line-height: 1.1; margin: 0; }
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .content > main { width: 100%; }
 
-/* ---------- home: rows + right rail ---------- */
-.home-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 290px;
-  gap: 40px;
-  align-items: start;
-}
-.rail { position: sticky; top: 20px; display: flex; flex-direction: column; gap: 22px; padding-top: 8px; }
-.rail-make {
-  display: block;
-  text-align: center;
-  border: 1.5px solid var(--biro);
-  color: var(--biro);
-  font-weight: 600;
-  font-size: 16px;
-  padding: 12px 10px;
-  border-radius: 8px;
-}
-.rail-make:hover { text-decoration: none; transform: translate(-1px, -1px); box-shadow: var(--lift); }
-.rail .board { border: var(--hairline); border-radius: 12px; padding: 16px 16px 10px; }
-.rail .board .board-game { color: var(--graphite); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px; }
-
+/* ---------- home: the one grid ---------- */
 .card-row { margin: 30px 0 4px; }
-.row-scroll {
-  display: flex;
-  gap: 22px;
-  overflow-x: auto;
-  padding: 6px 4px 16px;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
+.top-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 34px 26px;
+  padding: 6px 4px;
 }
-.row-scroll .game-card { flex: 0 0 218px; scroll-snap-align: start; }
-.row-scroll .card-title { font-size: 17px; }
+
+/* ---------- maker profile ---------- */
+.profile-page { padding-top: 40px; }
+.profile-head { text-align: center; margin-bottom: 36px; }
+.profile-head h1 { font-family: var(--font-display), cursive; font-weight: 600; font-size: clamp(30px, 4.6vw, 42px); }
+.profile-stats { margin-top: 12px; color: var(--graphite); font-size: 14px; position: relative; z-index: 0; }
+.profile-stats .swipe { color: var(--ink); padding: 0 5px; position: relative; }
 
 /* play-count badge drawn onto the cover, like a penciled sticker */
 .card-plays {
@@ -328,8 +310,12 @@ main {
   transform: skew(-8deg) rotate(-1deg);
   z-index: -1;
 }
-.game-columns { display: grid; grid-template-columns: 1fr 320px; gap: 40px; margin-top: 20px; }
-@media (max-width: 860px) { .game-columns { grid-template-columns: 1fr; } }
+/* the game gets the room; the boards are a margin note */
+.game-columns { display: grid; grid-template-columns: minmax(0, 1fr) 224px; gap: 34px; margin-top: 20px; }
+.game-columns aside { font-size: 14px; }
+.game-columns .board li { font-size: 13.5px; padding: 6px 2px; }
+.game-columns .board h3 { font-size: 17px; }
+@media (max-width: 960px) { .game-columns { grid-template-columns: 1fr; } }
 
 .board h3 { font-family: var(--font-display), cursive; font-weight: 600; font-size: 20px; margin-bottom: 10px; }
 .board-tabs { display: flex; gap: 14px; font-size: 13px; color: var(--graphite); margin-bottom: 8px; }
@@ -413,10 +399,20 @@ main {
   .btn, .game-card .cover-wrap { transition: none; }
 }
 
-/* right rail folds under the rows before the sidebar folds */
 @media (max-width: 1080px) {
-  .home-grid { grid-template-columns: 1fr; }
-  .rail { position: static; max-width: 480px; }
+  .top-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* gentle "type something first" nudge on the prompt — attention, not alarm */
+.prompt-frame.attn { animation: gc-nudge 260ms ease-out 2; }
+.prompt-frame.attn .hand-frame path { stroke: var(--redpencil); }
+@keyframes gc-nudge {
+  0%, 100% { transform: translateX(0); }
+  35% { transform: translateX(-4px); }
+  70% { transform: translateX(4px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prompt-frame.attn { animation: none; }
 }
 
 /* sidebar flattens into a top bar; most players live here */
@@ -464,8 +460,8 @@ main {
   .hero h1 { font-size: clamp(24px, 6.4vw, 32px); }
   .feed-head { margin-top: 24px; }
   .feed-head .feed-note { display: none; }
-  .row-scroll .game-card { flex: 0 0 168px; }
-  .row-scroll { gap: 16px; }
+  .top-grid { grid-template-columns: repeat(2, 1fr); gap: 22px 14px; }
+  .top-grid .card-title { font-size: 16px; }
   .card-row { margin-top: 20px; }
   .game-title-row h1 { font-size: 24px; }
   .stage-actions .btn { padding: 10px 14px; font-size: 14px; }

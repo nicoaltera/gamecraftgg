@@ -29,8 +29,13 @@ export default function AccountLink() {
   if (isPending) return null;
   if (!session) return <Link href="/login">sign in</Link>;
   return (
-    <Link href="/credits" title={session.user.email}>
-      ✎ {balance ?? '…'} credits
-    </Link>
+    <>
+      <Link href={`/u/${encodeURIComponent(session.user.name)}`} title="Your maker page">
+        {session.user.name}
+      </Link>
+      <Link href="/credits" title={session.user.email}>
+        ✎ {balance ?? '…'}
+      </Link>
+    </>
   );
 }
