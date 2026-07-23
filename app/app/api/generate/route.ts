@@ -5,6 +5,7 @@ import path from 'node:path';
 import { db, getGameAny } from '@/lib/db';
 import { auth } from '@/lib/auth';
 import { balance, addEntry, GENERATION_COST } from '@/lib/credits';
+import { rateLimit, clientIp } from '@/lib/ratelimit';
 import { readJson } from '@/lib/http';
 
 // Spawns the generation pipeline (pipeline/run.mjs) detached; the build page
@@ -20,6 +21,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Sign in to make games — new accounts start with 200 credits.', code: 'auth' }, { status: 401 });
   }
   const userId = session.user.id;
+
+  // Per-IP cap on top of per-account limits: signup throttling caps accounts
+  // per IP, this caps generation per IP, together bounding what a farm can
+  // extract from one connection regardless of how many accounts it makes.
+  if (!rateLimit(`gen:${clientIp(req.headers)}`, 12, 3600_000)) {
+    return NextResponse.json({ error: 'Too many games from this connection — take a breather.' }, { status: 429 });
+  }
 
   const body = await readJson(req);
   const prompt = typeof body?.prompt === 'string' ? body.prompt.trim().slice(0, 400) : '';
@@ -74,7 +82,20 @@ export async function POST(req: NextRequest) {
   // The signed-in user owns the result; their id IS the creator_ref for new work.
   const args = [runner, '--prompt', prompt, '--id', id, '--ref', userId];
   if (editSlug) args.push('--edit', editSlug);
-  const child = spawn('node', args, { cwd: process.cwd(), detached: true, stdio: 'ignore' });
+  // Scrubbed env: the pipeline runs agents on UNTRUSTED creator prompts, so the
+  // child gets only what the claude CLI needs — never BETTER_AUTH_SECRET,
+  // POLAR_ACCESS_TOKEN, or POLAR_WEBHOOK_SECRET. (The worker still opens the
+  // SQLite file for trace/status/refund writes; full filesystem isolation is
+  // the documented post-launch step, see run.mjs TODO(prod).)
+  const childEnv: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV };
+  for (const k of [
+    'PATH', 'HOME', 'TMPDIR', 'SHELL', 'LANG',
+    'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN',
+    'GS_MODEL_DESIGNER', 'GS_MODEL_BUILDER', 'GS_MODEL_JUDGE',
+  ]) {
+    if (process.env[k]) childEnv[k] = process.env[k];
+  }
+  const child = spawn('node', args, { cwd: process.cwd(), detached: true, stdio: 'ignore', env: childEnv });
   child.unref();
 
   return NextResponse.json({ id });

@@ -317,7 +317,9 @@ When both files are on disk, reply with only: DONE`,
       // The builder needs real write access: emitting a 70KB file through one
       // message hits the output limit, and on fix cycles Edit patches in place
       // instead of re-emitting everything (much cheaper). cwd IS the game dir.
-      { tools: 'Read,Write,Edit,Bash', cwd: gameDir, timeoutMin: 40, phase: 'builder' }
+      // NO Bash: the prompt is untrusted creator input, and a shell would let a
+      // hostile prompt read the host env/DB. Read/Write/Edit covers the job.
+      { tools: 'Read,Write,Edit', cwd: gameDir, timeoutMin: 40, phase: 'builder' }
     );
     // One retry on a mid-stream API failure: the builder is the longest, most
     // expensive call in the run, and a transient CLI/API drop should not burn a

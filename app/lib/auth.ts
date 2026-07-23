@@ -9,6 +9,19 @@ import { grantSignupCredits } from './credits';
 export const auth = betterAuth({
   database: db(),
   secret: process.env.BETTER_AUTH_SECRET,
+  // Free credits are sellable inventory (200cr = $20 of generation per account)
+  // and email is unverified, so account farming is the #1 abuse vector. Per-IP
+  // signup throttling is the launch-day defense; email verification is the
+  // scheduled follow-up once an email service exists.
+  rateLimit: {
+    enabled: true,
+    window: 60,
+    max: 60,
+    customRules: {
+      '/sign-up/email': { window: 3600, max: 5 },
+      '/sign-in/email': { window: 600, max: 10 },
+    },
+  },
   emailAndPassword: {
     enabled: true,
     // No email service at launch (deliberate) — so no verification mail and no
