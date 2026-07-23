@@ -65,7 +65,9 @@ async function dispatchMachine(id: string): Promise<{ mode: string; machine: str
         env,
         auto_destroy: true, // the machine deletes itself when run.mjs exits
         restart: { policy: 'no' },
-        init: { cmd: ['node', 'pipeline/run.mjs', '--job', id] },
+        // entrypoint override: bypass the image's web-server entrypoint
+        // entirely (it also honors argv as a fallback, but be explicit)
+        init: { entrypoint: ['node', 'pipeline/run.mjs', '--job', id] },
         metadata: { gc_role: 'build-worker' }, // NOT a fly process group: deploys ignore these machines
       },
     });

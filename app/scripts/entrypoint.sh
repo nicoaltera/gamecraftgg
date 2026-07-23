@@ -4,6 +4,11 @@
 # Seed games copy no-clobber: a redeploy refreshes nothing that players already
 # have state on, and never overwrites a runtime-generated game.
 set -e
+# Worker machines pass an explicit command (node pipeline/run.mjs --job …) —
+# exec it directly and skip the web-server/volume setup below entirely.
+if [ "$#" -gt 0 ]; then
+  exec "$@"
+fi
 VOL="${VOLUME_DIR:-/vol}"
 
 mkdir -p "$VOL/data" "$VOL/games"
