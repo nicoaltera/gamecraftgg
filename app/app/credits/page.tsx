@@ -87,7 +87,7 @@ export default function CreditsPage() {
   return (
     <main className="hero draw-in" style={{ minHeight: '60vh' }}>
       <h1>{ledger ? `${ledger.balance} credits` : '…'}</h1>
-      <p className="hero-sub">{note ?? 'A game costs 1000 credits, an edit 50. Failed builds refund themselves.'}</p>
+      <p className="hero-sub">{note ?? 'A game costs 1000 credits, an edit 200. Failed builds refund themselves.'}</p>
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'center', margin: '18px 0 28px' }}>
         {PACKS.map((p) => (

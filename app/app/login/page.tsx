@@ -90,7 +90,7 @@ export default function LoginPage() {
         </button>
       </form>
       <p className="hero-sub">
-        {note ?? (mode === 'up' ? 'Two free games on the house. A game costs 1000 credits to make, an edit 50.' : '')}{' '}
+        {note ?? (mode === 'up' ? 'Two free games on the house. A game costs 1000 credits to make, an edit 200.' : '')}{' '}
         <button
           type="button"
           onClick={() => {
