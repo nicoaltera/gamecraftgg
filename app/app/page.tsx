@@ -1,12 +1,13 @@
 import Link from 'next/link';
 import { getFeed, getNewest, getMostPlayed, getDailyChampions } from '@/lib/db';
 import CardRow from '@/components/CardRow';
+import GameCard from '@/components/GameCard';
 import PromptHero from '@/components/PromptHero';
 
 export const dynamic = 'force-dynamic';
 
 export default function Home() {
-  const trending = getFeed(12);
+  const trending = getFeed(18); // ~3 rows of the top-games grid on desktop
   const newest = getNewest(12);
   const mostPlayed = getMostPlayed(12);
   const champions = getDailyChampions(8);
@@ -23,16 +24,25 @@ export default function Home() {
             <p className="about-game">No games yet — the first one is yours to make.</p>
           ) : (
             <>
-              <CardRow title="Hot right now" note="ranked by what people actually replay" games={trending} />
-              {!sameOrder(newest, trending) && <CardRow title="Fresh off the pencil" games={newest} />}
-              {!sameOrder(mostPlayed, trending) && <CardRow title="Most played, ever" games={mostPlayed} />}
+              {/* the headline section is a wrapped grid (~3 rows), not a shelf */}
+              <section className="card-row">
+                <div className="feed-head">
+                  <h2>Today’s top games</h2>
+                  <span className="rule" />
+                  <span className="feed-note">ranked by what people actually replay</span>
+                </div>
+                <div className="game-grid">
+                  {trending.map((g) => (
+                    <GameCard key={g.slug} game={g} />
+                  ))}
+                </div>
+              </section>
+              {!sameOrder(newest, trending.slice(0, newest.length)) && <CardRow title="Fresh off the pencil" games={newest} />}
+              {!sameOrder(mostPlayed, trending.slice(0, mostPlayed.length)) && <CardRow title="Most played, ever" games={mostPlayed} />}
             </>
           )}
         </div>
         <aside className="rail">
-          <Link href="/#make" className="rail-make">
-            ✎ Make a game
-          </Link>
           <div className="board">
             <h3>Today’s champions</h3>
             {champions.length === 0 ? (
