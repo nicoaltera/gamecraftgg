@@ -108,6 +108,32 @@ function migrate(d: Database.Database) {
       created_at INTEGER NOT NULL,
       PRIMARY KEY (slug, ref)
     );
+    -- Better Auth tables (user/session/account/verification), mirrored from
+    -- \`npx @better-auth/cli generate\` so an empty volume self-initializes on
+    -- first boot. If a Better Auth upgrade adds columns, re-run generate and
+    -- update this block (additive ALTERs below the CREATE block, like the rest).
+    CREATE TABLE IF NOT EXISTS "user" ("id" text not null primary key, "name" text not null, "email" text not null unique, "emailVerified" integer not null, "image" text, "createdAt" date not null, "updatedAt" date not null);
+    CREATE TABLE IF NOT EXISTS "session" ("id" text not null primary key, "expiresAt" date not null, "token" text not null unique, "createdAt" date not null, "updatedAt" date not null, "ipAddress" text, "userAgent" text, "userId" text not null references "user" ("id") on delete cascade);
+    CREATE TABLE IF NOT EXISTS "account" ("id" text not null primary key, "accountId" text not null, "providerId" text not null, "userId" text not null references "user" ("id") on delete cascade, "accessToken" text, "refreshToken" text, "idToken" text, "accessTokenExpiresAt" date, "refreshTokenExpiresAt" date, "scope" text, "password" text, "createdAt" date not null, "updatedAt" date not null);
+    CREATE TABLE IF NOT EXISTS "verification" ("id" text not null primary key, "identifier" text not null, "value" text not null, "expiresAt" date not null, "createdAt" date not null, "updatedAt" date not null);
+    CREATE INDEX IF NOT EXISTS session_userId_idx ON session (userId);
+    CREATE INDEX IF NOT EXISTS account_userId_idx ON account (userId);
+    CREATE INDEX IF NOT EXISTS verification_identifier_idx ON verification (identifier);
+    -- Credits are an append-only ledger; balance = SUM(delta). Never UPDATE a
+    -- row. UNIQUE(reason, ref_id) is the idempotency key: a replayed Polar
+    -- webhook, a double-submitted signup grant, or a crash-looped pipeline
+    -- refund all collapse into one row. Every entry MUST carry a ref_id
+    -- (signup_grant: user id, purchase: polar order id, debit/refund: generation id).
+    CREATE TABLE IF NOT EXISTS credit_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      delta INTEGER NOT NULL,
+      reason TEXT NOT NULL, -- signup_grant | purchase | debit | refund
+      ref_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE(reason, ref_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_credits_user ON credit_entries(user_id);
     CREATE INDEX IF NOT EXISTS idx_scores_slug ON scores(slug, board, quarantined, score);
     CREATE INDEX IF NOT EXISTS idx_plays_slug ON plays(slug, started_at);
     CREATE INDEX IF NOT EXISTS idx_edges_slug ON referral_edges(slug, kind);
@@ -124,6 +150,8 @@ function migrate(d: Database.Database) {
   // per-generation agent spend: {total, byPhase:{...}, calls, model} — the input to credit pricing
   const genCols = (d.prepare('PRAGMA table_info(generations)').all() as { name: string }[]).map((c) => c.name);
   if (!genCols.includes('cost')) d.exec("ALTER TABLE generations ADD COLUMN cost TEXT DEFAULT '{}'");
+  // who paid for the run — drives the refund path and the one-running-job-per-account limit
+  if (!genCols.includes('user_id')) d.exec("ALTER TABLE generations ADD COLUMN user_id TEXT DEFAULT ''");
   // index goes AFTER the column exists (the column is ALTER-added for old DBs)
   d.exec('CREATE INDEX IF NOT EXISTS idx_games_creator ON games(creator_ref)');
 }

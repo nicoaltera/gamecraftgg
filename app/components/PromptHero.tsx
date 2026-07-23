@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import HandFrame from './HandFrame';
 import { addCreation } from '@/lib/creations';
 
@@ -9,6 +10,8 @@ export default function PromptHero() {
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // 'auth' | 'credits' from the API — turns the note into an actionable link
+  const [errCode, setErrCode] = useState<string | null>(null);
   const router = useRouter();
 
   async function submit(e: React.FormEvent) {
@@ -16,6 +19,7 @@ export default function PromptHero() {
     if (!prompt.trim() || busy) return;
     setBusy(true);
     setNote(null);
+    setErrCode(null);
     try {
       const res = await fetch('/api/generate', {
         method: 'POST',
@@ -28,6 +32,7 @@ export default function PromptHero() {
         router.push(`/build/${data.id}`);
       } else {
         setNote(data.error ?? 'That prompt broke our pencil. Try again.');
+        setErrCode(typeof data.code === 'string' ? data.code : null);
       }
     } catch {
       setNote('That prompt broke our pencil. Try again.');
@@ -55,7 +60,21 @@ export default function PromptHero() {
           {busy ? 'sharpening…' : 'Make a game'}
         </button>
       </form>
-      <p className="hero-sub">{note ?? 'No downloads. No accounts to play. Share a link, dare a friend.'}</p>
+      <p className="hero-sub">
+        {note ?? 'No downloads. No accounts to play. Share a link, dare a friend.'}
+        {errCode === 'auth' && (
+          <>
+            {' '}
+            <Link href="/login">Sign in →</Link>
+          </>
+        )}
+        {errCode === 'credits' && (
+          <>
+            {' '}
+            <Link href="/credits">Get credits →</Link>
+          </>
+        )}
+      </p>
     </section>
   );
 }

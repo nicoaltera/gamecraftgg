@@ -45,6 +45,14 @@ export default function GameStage({ slug, title, boards, status, creatorRef }: P
   const [nameLocked, setNameLocked] = useState(false);
   const [posted, setPosted] = useState<{ ranks: Record<string, number | null> } | null>(null);
   const [shareNote, setShareNote] = useState<string | null>(null);
+  // Whether this game is the viewer's own. playerRef() touches localStorage, so it
+  // must never run during render — on the server there is no usable localStorage,
+  // and creating the id is a side effect. Resolve it after mount instead.
+  const [mine, setMine] = useState(false);
+
+  useEffect(() => {
+    setMine(creatorRef === playerRef());
+  }, [creatorRef]);
 
   const better = (order: 'asc' | 'desc', a: number, b: number | undefined) =>
     b == null ? true : order === 'asc' ? a < b : a > b;
@@ -298,7 +306,7 @@ export default function GameStage({ slug, title, boards, status, creatorRef }: P
         <button className="btn btn-biro" onClick={shareChallenge} disabled={bestByBoard.current[dareBoard.key] == null && !lastScores}>
           Send to a friend
         </button>
-        {status === 'published' && creatorRef !== playerRef() && (
+        {status === 'published' && !mine && (
           <button className="btn" onClick={remixThis} disabled={remixing}>
             {remixing ? 'remixing…' : 'Remix this game'}
           </button>

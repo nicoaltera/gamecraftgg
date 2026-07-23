@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Shantell_Sans, Instrument_Sans, IBM_Plex_Mono } from 'next/font/google';
 import Link from 'next/link';
 import YoursLink from '@/components/YoursLink';
+import AccountLink from '@/components/AccountLink';
 import CookingTray from '@/components/CookingTray';
 import './globals.css';
 
@@ -26,6 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/#games">play</Link>
             <Link href="/#make">make</Link>
             <YoursLink />
+            <AccountLink />
           </nav>
         </header>
         {children}

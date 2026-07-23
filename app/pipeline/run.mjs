@@ -70,6 +70,24 @@ function setGen(fields) {
   db.prepare(`UPDATE generations SET ${sets}, updated_at = ? WHERE id = ?`).run(...Object.values(fields), Date.now(), genId);
 }
 
+// A failed run gives the credits back. The generate route debited (reason
+// 'debit', ref_id = this generation id) at admission; mirroring that row with
+// a 'refund' entry is idempotent — UNIQUE(reason, ref_id) means a crash-looped
+// pipeline can only ever refund once. Standalone CLI runs have no debit row,
+// so this is a no-op for them (and for pre-credits DBs, hence the try).
+function refundIfDebited() {
+  try {
+    const deb = db.prepare("SELECT user_id, delta FROM credit_entries WHERE reason = 'debit' AND ref_id = ?").get(genId);
+    if (!deb) return;
+    const r = db
+      .prepare("INSERT OR IGNORE INTO credit_entries (user_id, delta, reason, ref_id, created_at) VALUES (?, ?, 'refund', ?, ?)")
+      .run(deb.user_id, -deb.delta, genId, Date.now());
+    if (r.changes > 0) trace('fail', `Your ${-deb.delta} credits are back in your account.`);
+  } catch {
+    /* no credits schema in this DB — nothing to refund */
+  }
+}
+
 // ---------- agent spend (the input to credit pricing) ----------
 // Every `claude -p` run ends with a `result` event carrying total_cost_usd and
 // token usage, so the CLI does the price math for us. We accumulate per phase
@@ -280,7 +298,7 @@ Output format: the brief inside a \`\`\`markdown fence, then the meta inside a \
     _cycles = cycle;
     setGen({ cycles: cycle });
     trace('builder', cycle === 1 ? 'Writing the game…' : `Fixing per critique (cycle ${cycle})…`);
-    const builderOut = await claude(
+    const runBuilder = () => claude(
       `You are the GameSight BUILDER agent. Implement the design brief EXACTLY as one self-contained index.html per the conventions. Pure Canvas2D + WebAudio unless the brief demands Phaser (then use <script src="/vendor/phaser.min.js">).
 
 CONVENTIONS (binding contract):
@@ -301,6 +319,16 @@ When both files are on disk, reply with only: DONE`,
       // instead of re-emitting everything (much cheaper). cwd IS the game dir.
       { tools: 'Read,Write,Edit,Bash', cwd: gameDir, timeoutMin: 40, phase: 'builder' }
     );
+    // One retry on a mid-stream API failure: the builder is the longest, most
+    // expensive call in the run, and a transient CLI/API drop should not burn a
+    // whole judge cycle (which now costs the creator a credit refund round-trip).
+    let builderOut;
+    try {
+      builderOut = await runBuilder();
+    } catch (e) {
+      trace('builder', `builder run failed (${short(e.message, 120)}) — retrying once`, 'tool');
+      builderOut = await runBuilder();
+    }
     // Disk is the contract now, not the transcript.
     const htmlPath = path.join(gameDir, 'index.html');
     if (!fs.existsSync(htmlPath) || fs.statSync(htmlPath).size < 500) {
@@ -405,11 +433,13 @@ Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "crit
     }
     setGen({ status: 'failed' });
     trace('fail', 'The edit did not pass — your game is unchanged. Try a different change.');
+    refundIfDebited();
   } else {
     // New game, not vetted — remove the build so it can never be sync-published (C1).
     try { fs.rmSync(gameDir, { recursive: true, force: true }); } catch { /* ignore */ }
     setGen({ status: 'failed' });
     trace('fail', 'Cycle budget exhausted — not published. The critique is available for a re-prompt.');
+    refundIfDebited();
   }
   const byPhase = Object.entries(_cost.byPhase)
     .sort((a, b) => b[1].usd - a[1].usd)
@@ -419,6 +449,7 @@ Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "crit
 } catch (err) {
   setGen({ status: 'failed' });
   trace('error', err.message ?? String(err));
+  refundIfDebited();
   console.log(`\nCOST id=${genId} total=$${_cost.total.toFixed(3)} calls=${_cost.calls} status=error`);
   process.exit(1);
 }
