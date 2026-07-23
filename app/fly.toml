@@ -35,6 +35,11 @@ primary_region = "sjc"
   auto_start_machines = true
   min_machines_running = 1
 
+# OOM insurance: two judge agents loading play-test screenshots at the same
+# moment killed both pipelines dead (SIGKILL skips the refund path). Swap
+# absorbs the spike; the generate route also caps concurrent builds at 2.
+swap_size_mb = 4096
+
 [[vm]]
   # Builds run several claude CLI processes + Chromium during verify; 8GB keeps
   # a couple of concurrent builds comfortable. Scale up before scaling out —

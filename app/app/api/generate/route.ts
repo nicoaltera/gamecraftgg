@@ -56,9 +56,15 @@ export async function POST(req: NextRequest) {
   // + job insert in one transaction (better-sqlite3 is synchronous; no await gap).
   const id = crypto.randomBytes(8).toString('hex');
   const now = Date.now();
-  const admit = db().transaction((): 'ok' | 'cap' | 'busy' | 'credits' => {
+  const admit = db().transaction((): 'ok' | 'cap' | 'busy' | 'crowded' | 'credits' => {
     const today = (db().prepare('SELECT COUNT(*) AS c FROM generations WHERE created_at > ?').get(now - 86400_000) as { c: number }).c;
     if (today >= DAILY_CAP) return 'cap';
+    // The box comfortably runs TWO pipelines; a third judge loading play-test
+    // screenshots is what OOM-killed builds mid-run. Hard global cap.
+    const live = (db()
+      .prepare("SELECT COUNT(*) AS c FROM generations WHERE status = 'running' AND updated_at > ?")
+      .get(now - 15 * 60_000) as { c: number }).c;
+    if (live >= 2) return 'crowded';
     // One running job per account: a stuck 'running' row older than 90 min is
     // treated as dead (the pipeline hard-times-out well before that).
     const running = (db()
@@ -75,6 +81,9 @@ export async function POST(req: NextRequest) {
   const verdict = admit();
   if (verdict === 'cap') return NextResponse.json({ error: 'The workshop hit today’s limit. Come back tomorrow.' }, { status: 429 });
   if (verdict === 'busy') return NextResponse.json({ error: 'You already have a game cooking — let it finish first.' }, { status: 429 });
+  if (verdict === 'crowded') {
+    return NextResponse.json({ error: 'The workshop is at capacity right now — try again in a few minutes.' }, { status: 429 });
+  }
   if (verdict === 'credits') {
     const need = editSlug ? EDIT_COST : GENERATION_COST;
     return NextResponse.json({ error: `You’re out of credits — this costs ${need}.`, code: 'credits' }, { status: 402 });

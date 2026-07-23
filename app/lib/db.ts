@@ -19,6 +19,7 @@ export function db(): Database.Database {
     if (Date.now() - _lastSync > SYNC_INTERVAL_MS) {
       _lastSync = Date.now();
       syncGamesFromDisk(_db);
+      reapOrphanRuns(_db);
     }
     return _db;
   }
@@ -28,8 +29,40 @@ export function db(): Database.Database {
   _db.pragma('busy_timeout = 5000'); // app + detached pipeline share the WAL db
   migrate(_db);
   syncGamesFromDisk(_db);
+  reapOrphanRuns(_db);
   _lastSync = Date.now();
   return _db;
+}
+
+// A pipeline child killed without its catch (OOM SIGKILL, machine restart)
+// leaves a 'running' row that will never advance — and a creator staring at a
+// frozen build page. The pipeline streams trace writes constantly while alive,
+// so 15 minutes of total DB silence means the process is gone: mark the run
+// failed and give the credits back (idempotent on the ledger's unique key,
+// exactly like the pipeline's own refund path).
+function reapOrphanRuns(d: Database.Database) {
+  const cutoff = Date.now() - 15 * 60_000;
+  const dead = d
+    .prepare("SELECT id, trace FROM generations WHERE status = 'running' AND updated_at < ?")
+    .all(cutoff) as { id: string; trace: string }[];
+  for (const g of dead) {
+    let trace: unknown[] = [];
+    try {
+      trace = JSON.parse(g.trace || '[]');
+    } catch {
+      /* keep an empty trace rather than fail the reap */
+    }
+    trace.push({ t: Date.now(), kind: 'fail', detail: 'The build stopped unexpectedly — your credits are back in your account.' });
+    d.prepare("UPDATE generations SET status = 'failed', trace = ?, updated_at = ? WHERE id = ? AND status = 'running'")
+      .run(JSON.stringify(trace), Date.now(), g.id);
+    const deb = d
+      .prepare("SELECT user_id, delta FROM credit_entries WHERE reason = 'debit' AND ref_id = ?")
+      .get(g.id) as { user_id: string; delta: number } | undefined;
+    if (deb) {
+      d.prepare('INSERT OR IGNORE INTO credit_entries (user_id, delta, reason, ref_id, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(deb.user_id, -deb.delta, 'refund', g.id, Date.now());
+    }
+  }
 }
 
 function migrate(d: Database.Database) {
