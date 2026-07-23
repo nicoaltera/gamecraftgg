@@ -110,9 +110,9 @@ function short(s, n = 150) {
 // inheriting whatever the CLI defaults to (that default is not stable, which
 // makes spend unpredictable in production). Override per role via env.
 const MODELS = {
-  designer: process.env.GS_MODEL_DESIGNER || 'claude-sonnet-5',
-  builder: process.env.GS_MODEL_BUILDER || 'claude-sonnet-5',
-  judge: process.env.GS_MODEL_JUDGE || 'claude-sonnet-5',
+  designer: process.env.GS_MODEL_DESIGNER || 'claude-opus-4-8',
+  builder: process.env.GS_MODEL_BUILDER || 'claude-opus-4-8',
+  judge: process.env.GS_MODEL_JUDGE || 'claude-opus-4-8',
 };
 
 function claude(rolePrompt, { tools, timeoutMin = 15, cwd = APP, phase = 'agent' } = {}) {
@@ -309,14 +309,25 @@ When both files are on disk, reply with only: DONE`,
     fs.writeFileSync(path.join(gameDir, 'meta.json'), JSON.stringify(meta, null, 2));
     trace('builder', `index.html written (${(fs.statSync(htmlPath).size / 1024).toFixed(0)} KB)`);
 
-    // play-tester harness
+    // play-tester harness. Port 0 = OS-assigned, so concurrent builds can never
+    // collide on a port (a bind failure here would burn a whole cycle); we parse
+    // the actual port from the server's startup line, which doubles as the
+    // readiness signal (replaces the old fixed sleep).
     trace('playtest', 'Play-testing on desktop + mobile…');
-    const port = 9100 + Math.floor(Math.random() * 400);
-    const server = spawn('node', ['scripts/game-server.mjs', String(port)], { cwd: APP, stdio: 'ignore' });
+    const server = spawn('node', ['scripts/game-server.mjs', '0'], { cwd: APP, stdio: ['ignore', 'pipe', 'ignore'] });
     let verifyOut = '';
     let verifyFailed = false;
     try {
-      await new Promise((r) => setTimeout(r, 800));
+      const port = await new Promise((resolve, reject) => {
+        const to = setTimeout(() => reject(new Error('game server did not start within 10s')), 10_000);
+        let out = '';
+        server.stdout.on('data', (c) => {
+          out += c.toString();
+          const m = out.match(/localhost:(\d+)/);
+          if (m) { clearTimeout(to); resolve(Number(m[1])); }
+        });
+        server.on('exit', () => { clearTimeout(to); reject(new Error('game server exited before listening')); });
+      });
       try {
         verifyOut = execFileSync('node', ['scripts/verify-game.mjs', meta.slug, String(port)], {
           cwd: APP,

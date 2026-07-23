@@ -27,7 +27,13 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        source: '/:path*',
+        // Everything EXCEPT /play/*. Game responses set their own CSP in the
+        // play route handler (frame-ancestors 'self' + APP_ORIGIN); if the
+        // app-wide CSP also landed there the browser would enforce BOTH
+        // policies, and frame-ancestors 'self' + X-Frame-Options SAMEORIGIN
+        // would silently block every game the moment they're framed from the
+        // separate app origin.
+        source: '/((?!play/).*)',
         headers: [
           { key: 'Content-Security-Policy', value: csp },
           { key: 'X-Content-Type-Options', value: 'nosniff' },

@@ -21,7 +21,7 @@ const TYPES = {
   '.css': 'text/css; charset=utf-8',
 };
 
-http
+const server = http
   .createServer((req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     let filePath = null;
@@ -43,5 +43,7 @@ http
     }
     res.writeHead(200, { 'content-type': TYPES[path.extname(filePath)] || 'application/octet-stream' });
     fs.createReadStream(filePath).pipe(res);
-  })
-  .listen(PORT, () => console.log(`game server on http://localhost:${PORT}  (e.g. /play/<slug>/)`));
+  });
+// PORT 0 = OS-assigned (the pipeline uses this to avoid collisions between
+// concurrent builds); the startup line below is the contract it parses.
+server.listen(PORT, () => console.log(`game server on http://localhost:${server.address().port}  (e.g. /play/<slug>/)`));
