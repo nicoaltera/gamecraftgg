@@ -92,6 +92,9 @@ export async function POST(req: NextRequest) {
   const childEnv: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV };
   for (const k of [
     'PATH', 'HOME', 'TMPDIR', 'SHELL', 'LANG',
+    // the Playwright base image keeps browsers in /ms-playwright and points to
+    // them with this var — without it the verify harness can't launch Chromium
+    'PLAYWRIGHT_BROWSERS_PATH',
     'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN',
     'GS_MODEL_DESIGNER', 'GS_MODEL_BUILDER', 'GS_MODEL_JUDGE',
   ]) {

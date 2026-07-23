@@ -19,8 +19,8 @@ primary_region = "sjc"
 
 [build]
   [build.args]
-    NEXT_PUBLIC_APP_ORIGIN = ""
-    NEXT_PUBLIC_GAME_ORIGIN = ""
+    NEXT_PUBLIC_APP_ORIGIN = "https://gamecraft.gg"
+    NEXT_PUBLIC_GAME_ORIGIN = "https://play.gamecraft.gg"
 
 [mounts]
   source = "gamecraft_data"

@@ -9,6 +9,9 @@ import { grantSignupCredits } from './credits';
 export const auth = betterAuth({
   database: db(),
   secret: process.env.BETTER_AUTH_SECRET,
+  // canonical origin comes from BETTER_AUTH_URL; these extras keep sign-in
+  // working from www and the fly.dev fallback hostname
+  trustedOrigins: ['https://www.gamecraft.gg', 'https://gamecraft.fly.dev'],
   // Free credits are sellable inventory (200cr = $20 of generation per account)
   // and email is unverified, so account farming is the #1 abuse vector. Per-IP
   // signup throttling is the launch-day defense; email verification is the
