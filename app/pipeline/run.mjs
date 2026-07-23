@@ -214,11 +214,18 @@ function extractJson(text) {
   throw new Error('no JSON found in agent output');
 }
 
-const conventions = fs.readFileSync(path.join(APP, 'CONVENTIONS.md'), 'utf8');
-const rubric = fs.readFileSync(path.join(APP, '..', '03-quality-rubric.md'), 'utf8');
-const designGuidance = fs.readFileSync(path.join(APP, '..', '02-generation-pipeline.md'), 'utf8');
+// These live INSIDE the app tree (pipeline/docs) — the Docker build context is
+// the app folder, so a parent-relative path would be missing in production
+// (which is exactly how the first prod run died). And they load inside the try:
+// any startup crash must reach the catch, which marks the generation failed
+// and refunds the debit — a pre-try crash strands a paid 'running' row.
+let conventions, rubric, designGuidance;
 
 try {
+  conventions = fs.readFileSync(path.join(APP, 'CONVENTIONS.md'), 'utf8');
+  rubric = fs.readFileSync(path.join(APP, 'pipeline', 'docs', '03-quality-rubric.md'), 'utf8');
+  designGuidance = fs.readFileSync(path.join(APP, 'pipeline', 'docs', '02-generation-pipeline.md'), 'utf8');
+
   let brief, meta, gameDir;
   let editSnapshot = null; // for edit mode: restore the game if the edit fails to pass
   const editRow = editSlug ? db.prepare('SELECT * FROM games WHERE slug = ?').get(editSlug) : null;
