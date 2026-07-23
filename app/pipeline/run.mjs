@@ -1,91 +1,59 @@
-// GameSight generation pipeline (02-generation-pipeline.md), runnable as:
-//   node pipeline/run.mjs --prompt "a game about ..." [--id <generationId>]
+// GameCraft generation pipeline (pipeline/docs/02-generation-pipeline.md).
+//   Local/CLI mode:  node pipeline/run.mjs --prompt "a game about ..." [--id <id>] [--ref <ref>] [--edit <slug>]
+//   Fleet mode:      node pipeline/run.mjs --job <generationId>   (GC_REPORT_URL + GC_JOB_TOKEN in env)
 // Requires the `claude` CLI (Claude Code) on PATH. Agents in the loop:
 //   designer -> builder -> [play-tester harness + judge] x cycles -> publish
+// ALL side effects (trace, status, publish, refund) go through the Reporter —
+// this file never touches the DB or the ledger directly. See reporter.mjs.
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { createReporter } from './reporter.mjs';
 
-const require = createRequire(import.meta.url);
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const Database = require(path.join(APP, 'node_modules', 'better-sqlite3'));
 
 const MAX_CYCLES = 3;
 const PASS_SCORE = 80;
 
-// ---------- args ----------
+// ---------- args & reporter ----------
 const args = process.argv.slice(2);
 function arg(name) {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : undefined;
 }
-const prompt = arg('prompt');
-const genId = arg('id') ?? crypto.randomBytes(8).toString('hex');
-const creatorRef = arg('ref') ?? '';        // owner of the resulting game
-const editSlug = arg('edit') ?? '';          // if set, iterate an existing game in place
-if (!prompt) {
-  console.error('usage: node pipeline/run.mjs --prompt "..." [--id <id>] [--ref <ref>] [--edit <slug>]');
+const jobId = arg('job');            // fleet mode: fetch the job over HTTP
+const jobLocalId = arg('job-local'); // app-dispatched on this box: job from the DB row
+const remote = !!jobId;
+const genId = jobId ?? jobLocalId ?? arg('id') ?? crypto.randomBytes(8).toString('hex');
+if (!remote && !jobLocalId && !arg('prompt')) {
+  console.error('usage: node pipeline/run.mjs --prompt "..." [--id <id>] [--ref <ref>] [--edit <slug>]  |  --job <id>  |  --job-local <id>');
   process.exit(2);
 }
 
-// ---------- db trace ----------
-const db = new Database(path.join(APP, 'data', 'gamesight.db'));
-db.pragma('journal_mode = WAL');
-db.pragma('busy_timeout = 5000'); // shares the WAL db with the running app server
-// The pipeline is a separate process from the app, so it can run against a DB
-// whose schema predates a column it writes. Ensure the one column it owns.
-if (!db.prepare('PRAGMA table_info(generations)').all().some((c) => c.name === 'cost')) {
-  db.exec("ALTER TABLE generations ADD COLUMN cost TEXT DEFAULT '{}'");
-}
-db.prepare(
-  `INSERT INTO generations (id, prompt, status, created_at, updated_at) VALUES (?, ?, 'running', ?, ?)
-   ON CONFLICT(id) DO UPDATE SET status='running', updated_at=excluded.updated_at`
-).run(genId, prompt, Date.now(), Date.now());
+const R = await createReporter({
+  remote,
+  genId,
+  fromDb: !!jobLocalId,
+  prompt: arg('prompt'),
+  ref: arg('ref') ?? '',
+  editSlug: arg('edit') ?? '',
+});
+const job = await R.getJob();
+const prompt = job.prompt;
+const creatorRef = job.ref ?? '';   // owner of the resulting game
+const editSlug = job.editSlug ?? ''; // if set, iterate an existing game in place
+const GAMES_DIR = R.gamesDir();
 
-// The trace is the live feed the build page renders. `stream` marks fine-grained
-// agent activity (thinking / tool / say) vs. the coarse stage-boundary rows.
-const _events = (() => {
-  const row = db.prepare('SELECT trace FROM generations WHERE id = ?').get(genId);
-  return JSON.parse(row?.trace ?? '[]');
-})();
-let _lastFlush = 0;
-function flushTrace(force = false) {
-  const now = Date.now();
-  if (!force && now - _lastFlush < 400) return; // throttle DB writes during bursty streams
-  _lastFlush = now;
-  db.prepare('UPDATE generations SET trace = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(_events), now, genId);
-}
 function trace(kind, detail, stream) {
-  const ev = { t: Date.now(), kind, detail: String(detail).slice(0, 2000) };
-  if (stream) ev.stream = stream;
-  _events.push(ev);
-  flushTrace(!stream); // stage rows flush immediately; stream rows are throttled
+  R.trace(kind, detail, stream);
   console.log(`[${kind}${stream ? '/' + stream : ''}] ${String(detail).slice(0, 160)}`);
 }
-function setGen(fields) {
-  const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
-  db.prepare(`UPDATE generations SET ${sets}, updated_at = ? WHERE id = ?`).run(...Object.values(fields), Date.now(), genId);
-}
+const setGen = (fields) => void R.set(fields);
 
-// A failed run gives the credits back. The generate route debited (reason
-// 'debit', ref_id = this generation id) at admission; mirroring that row with
-// a 'refund' entry is idempotent — UNIQUE(reason, ref_id) means a crash-looped
-// pipeline can only ever refund once. Standalone CLI runs have no debit row,
-// so this is a no-op for them (and for pre-credits DBs, hence the try).
-function refundIfDebited() {
-  try {
-    const deb = db.prepare("SELECT user_id, delta FROM credit_entries WHERE reason = 'debit' AND ref_id = ?").get(genId);
-    if (!deb) return;
-    const r = db
-      .prepare("INSERT OR IGNORE INTO credit_entries (user_id, delta, reason, ref_id, created_at) VALUES (?, ?, 'refund', ?, ?)")
-      .run(deb.user_id, -deb.delta, genId, Date.now());
-    if (r.changes > 0) trace('fail', `Your ${-deb.delta} credits are back in your account.`);
-  } catch {
-    /* no credits schema in this DB — nothing to refund */
-  }
+if (remote && process.env.FLY_MACHINE_ID) {
+  trace('worker', `worker ${process.env.FLY_MACHINE_ID} picked up the job (${process.env.FLY_REGION ?? '?'})`);
 }
 
 // ---------- agent spend (the input to credit pricing) ----------
@@ -193,7 +161,7 @@ function claude(rolePrompt, { tools, timeoutMin = 15, cwd = APP, phase = 'agent'
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      flushTrace(true);
+      void R.set({}); // nudge a flush so the tail of this agent's stream lands
       if (fullText) resolve(fullText);
       else reject(new Error(`claude exited ${code} with no output${stderr ? ': ' + short(stderr, 300) : ''}`));
     });
@@ -228,18 +196,27 @@ try {
 
   let brief, meta, gameDir;
   let editSnapshot = null; // for edit mode: restore the game if the edit fails to pass
-  const editRow = editSlug ? db.prepare('SELECT * FROM games WHERE slug = ?').get(editSlug) : null;
+  const isEdit = !!editSlug && !!job.editFiles?.['index.html'];
+  if (editSlug && !isEdit) throw new Error(`edit requested but ${editSlug} has no game files`);
 
-  if (editRow) {
+  if (isEdit) {
     // ---------- 1b. designer (EDIT MODE) — amend an existing game in place ----------
-    trace('designer', `Editing "${editRow.title}" per your prompt…`);
-    gameDir = path.join(APP, 'games', editSlug);
-    // snapshot the live game so a failed edit reverts cleanly (never break a good game)
-    const snap = (f) => (fs.existsSync(path.join(gameDir, f)) ? fs.readFileSync(path.join(gameDir, f)) : null);
-    editSnapshot = { 'index.html': snap('index.html'), 'cover.svg': snap('cover.svg'), 'DESIGN_BRIEF.md': snap('DESIGN_BRIEF.md') };
-    const prevBrief = fs.existsSync(path.join(gameDir, 'DESIGN_BRIEF.md'))
-      ? fs.readFileSync(path.join(gameDir, 'DESIGN_BRIEF.md'), 'utf8')
-      : '(no prior brief on disk)';
+    // The job carries the current game files (locally read from disk; in fleet
+    // mode fetched from the app) — write them into the working dir, and keep
+    // the originals as the snapshot so a failed edit reverts cleanly.
+    gameDir = path.join(GAMES_DIR, editSlug);
+    fs.mkdirSync(gameDir, { recursive: true });
+    for (const [f, buf] of Object.entries(job.editFiles)) {
+      if (buf) fs.writeFileSync(path.join(gameDir, f), buf);
+    }
+    meta = JSON.parse(fs.readFileSync(path.join(gameDir, 'meta.json'), 'utf8')); // keep slug/title/boards
+    trace('designer', `Editing "${meta.title}" per your prompt…`);
+    editSnapshot = {
+      'index.html': job.editFiles['index.html'],
+      'cover.svg': job.editFiles['cover.svg'] ?? null,
+      'DESIGN_BRIEF.md': job.editFiles['DESIGN_BRIEF.md'] ?? null,
+    };
+    const prevBrief = job.editFiles['DESIGN_BRIEF.md']?.toString('utf8') ?? '(no prior brief on disk)';
     const designerOut = await claude(
       `You are the GameSight DESIGNER agent editing an EXISTING game. Apply the creator's change to the current design — keep everything that works, change only what the prompt asks. Output the FULL updated DESIGN_BRIEF (not a diff).
 
@@ -255,7 +232,6 @@ Output the complete updated brief inside a \`\`\`markdown fence. Nothing else.`,
       { phase: 'designer' }
     );
     brief = extractBlock(designerOut, 'markdown') ?? designerOut;
-    meta = JSON.parse(fs.readFileSync(path.join(gameDir, 'meta.json'), 'utf8')); // keep slug/title/boards
     fs.writeFileSync(path.join(gameDir, 'DESIGN_BRIEF.md'), brief);
     setGen({ slug: editSlug, brief });
     trace('designer', `Edit brief ready for ${editSlug}`);
@@ -284,13 +260,15 @@ Output format: the brief inside a \`\`\`markdown fence, then the meta inside a \
     meta.title = meta.title ?? meta.slug;
     // Atomically claim the game dir: mkdir (non-recursive) fails with EEXIST if a
     // concurrent run already took the slug, so we never clobber another game.
-    gameDir = path.join(APP, 'games', meta.slug);
+    // (In fleet mode each worker has its own fs — the app re-resolves slug
+    // collisions authoritatively at publish time.)
+    gameDir = path.join(GAMES_DIR, meta.slug);
     try {
       fs.mkdirSync(gameDir);
     } catch (e) {
       if (e.code !== 'EEXIST') throw e;
       meta.slug = `${meta.slug}-${genId.slice(0, 4)}`;
-      gameDir = path.join(APP, 'games', meta.slug);
+      gameDir = path.join(GAMES_DIR, meta.slug);
       fs.mkdirSync(gameDir, { recursive: true });
     }
     fs.writeFileSync(path.join(gameDir, 'DESIGN_BRIEF.md'), brief);
@@ -414,41 +392,27 @@ Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "crit
   }
 
   if (published) {
-    // A judge-passed game becomes a DRAFT owned by its creator — it does NOT hit
-    // the public library until the creator clicks Publish. The published.json
-    // marker means "vetted & real" (lets syncGamesFromDisk see it); the DB
-    // `status` (draft/published) controls public visibility. ON CONFLICT (edit
-    // mode) preserves status + creator_ref so an edit doesn't un-publish or
-    // re-own the game. Column set mirrors syncGamesFromDisk incl. `boards` (M2).
-    db.prepare(
-      `INSERT INTO games (slug, title, description, verb, dials, orientation, mode, score_label, score_order, boards, palette, author, status, creator_ref, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
-       ON CONFLICT(slug) DO UPDATE SET title=excluded.title, description=excluded.description, verb=excluded.verb,
-         dials=excluded.dials, orientation=excluded.orientation, mode=excluded.mode,
-         score_label=excluded.score_label, score_order=excluded.score_order, boards=excluded.boards, palette=excluded.palette`
-    ).run(
-      meta.slug, meta.title, meta.description ?? '', meta.verb ?? '', JSON.stringify(meta.dials ?? []),
-      meta.orientation ?? 'landscape', meta.mode ?? 'sp', meta.scoreLabel ?? '',
-      meta.scoreOrder === 'asc' ? 'asc' : 'desc', JSON.stringify(Array.isArray(meta.boards) ? meta.boards : []),
-      JSON.stringify(meta.palette ?? []), meta.author ?? 'gamesight', creatorRef, Date.now()
-    );
-    fs.writeFileSync(path.join(gameDir, 'published.json'), JSON.stringify({ genId, at: Date.now() }));
-    setGen({ status: 'published' });   // generation status (done), not game visibility
-    trace('publish', editSlug ? `Updated: /g/${meta.slug}` : `Ready to publish: /g/${meta.slug} (draft — click Publish)`);
+    // A judge-passed game becomes a DRAFT owned by its creator — it does NOT
+    // hit the public library until the creator clicks Publish. The reporter
+    // owns the mechanics (row + published.json locally; file upload + server-
+    // side slug resolution in fleet mode) and returns the final slug.
+    const finalSlug = await R.publish(meta, creatorRef, gameDir);
+    meta.slug = finalSlug;
+    setGen({ slug: finalSlug });
+    trace('publish', editSlug ? `Updated: /g/${finalSlug}` : `Ready to publish: /g/${finalSlug} (draft — click Publish)`);
+    await R.finish('published'); // generation status (done), not game visibility
   } else if (editSnapshot) {
     // A failed EDIT must never break the live game — restore the pre-edit files.
     for (const [f, buf] of Object.entries(editSnapshot)) {
       if (buf) fs.writeFileSync(path.join(gameDir, f), buf);
     }
-    setGen({ status: 'failed' });
     trace('fail', 'The edit did not pass — your game is unchanged. Try a different change.');
-    refundIfDebited();
+    await R.finish('failed'); // failed runs refund app-side (or via LocalReporter)
   } else {
     // New game, not vetted — remove the build so it can never be sync-published (C1).
     try { fs.rmSync(gameDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    setGen({ status: 'failed' });
     trace('fail', 'Cycle budget exhausted — not published. The critique is available for a re-prompt.');
-    refundIfDebited();
+    await R.finish('failed');
   }
   const byPhase = Object.entries(_cost.byPhase)
     .sort((a, b) => b[1].usd - a[1].usd)
@@ -456,9 +420,12 @@ Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "crit
     .join('  ');
   console.log(`\nCOST id=${genId} total=$${_cost.total.toFixed(3)} calls=${_cost.calls} cycles=${_cycles} phases: ${byPhase}`);
 } catch (err) {
-  setGen({ status: 'failed' });
   trace('error', err.message ?? String(err));
-  refundIfDebited();
+  try {
+    await R.finish('failed');
+  } catch (e) {
+    console.error('could not report failure:', e.message ?? e); // reaper will catch it
+  }
   console.log(`\nCOST id=${genId} total=$${_cost.total.toFixed(3)} calls=${_cost.calls} status=error`);
   process.exit(1);
 }

@@ -2,6 +2,68 @@ import { db } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
+// Fleet observability: every build in the last 24h — status, worker machine,
+// cycles, spend, and (for live builds) how long since the worker last spoke.
+// "Silent >5 min" is the pre-reaper warning shade.
+function BuildsPanel() {
+  const now = Date.now();
+  const builds = db()
+    .prepare(
+      `SELECT id, slug, prompt, status, cycles, cost, worker_machine, created_at, updated_at
+       FROM generations WHERE created_at > ? ORDER BY created_at DESC LIMIT 50`
+    )
+    .all(now - 86400_000) as {
+    id: string; slug: string | null; prompt: string; status: string; cycles: number;
+    cost: string; worker_machine: string; created_at: number; updated_at: number;
+  }[];
+  const running = builds.filter((b) => b.status === 'running').length;
+
+  return (
+    <>
+      <div className="feed-head" style={{ marginTop: 44 }}>
+        <h2>Builds — last 24h</h2>
+        <span className="rule" />
+        <span className="feed-note">{running} running · cap {process.env.GC_MAX_CONCURRENT || 2} · {process.env.GC_DISPATCH === 'machines' ? 'fleet' : 'local'} dispatch</span>
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13.5, maxWidth: 980 }}>
+        <thead>
+          <tr style={{ textAlign: 'left', color: 'var(--graphite)', fontSize: 12.5 }}>
+            <th style={{ padding: '6px 2px' }}>prompt</th>
+            <th>status</th>
+            <th>cycles</th>
+            <th>spend</th>
+            <th>machine</th>
+            <th>age</th>
+            <th>last event</th>
+          </tr>
+        </thead>
+        <tbody>
+          {builds.map((b) => {
+            const silent = Math.round((now - b.updated_at) / 60000);
+            let spend = '—';
+            try {
+              const c = JSON.parse(b.cost || '{}');
+              if (c.total) spend = `$${c.total.toFixed(2)}`;
+            } catch { /* unparsed cost never breaks the panel */ }
+            const color = b.status === 'failed' ? 'var(--redpencil)' : b.status === 'published' ? 'var(--ink)' : 'var(--biro)';
+            return (
+              <tr key={b.id} style={{ borderTop: '1px solid rgba(26,24,21,0.14)', background: b.status === 'running' && silent > 5 ? 'rgba(217,72,43,0.06)' : 'transparent' }}>
+                <td style={{ padding: '7px 2px', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.prompt}</td>
+                <td className="mono" style={{ color }}>{b.status}</td>
+                <td className="mono">{b.cycles || '—'}</td>
+                <td className="mono">{spend}</td>
+                <td className="mono">{b.worker_machine || 'local'}</td>
+                <td className="mono">{Math.round((now - b.created_at) / 60000)}m</td>
+                <td className="mono">{b.status === 'running' ? `${silent}m ago` : '—'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
 // The K dashboard (01-product-spec.md): the experiment's decision gate.
 // K = shares-per-player x share->player conversion, per 7-day window.
 export default function KDashboard() {
@@ -50,6 +112,8 @@ export default function KDashboard() {
         {stat('shares / player', sharesPerPlayer.toFixed(2))}
         {stat('share → play conversion', `${(conversion * 100).toFixed(0)}%`)}
       </div>
+
+      <BuildsPanel />
 
       <div className="feed-head" style={{ marginTop: 44 }}>
         <h2>By game</h2>

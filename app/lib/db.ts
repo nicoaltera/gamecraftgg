@@ -185,6 +185,11 @@ function migrate(d: Database.Database) {
   if (!genCols.includes('cost')) d.exec("ALTER TABLE generations ADD COLUMN cost TEXT DEFAULT '{}'");
   // who paid for the run — drives the refund path and the one-running-job-per-account limit
   if (!genCols.includes('user_id')) d.exec("ALTER TABLE generations ADD COLUMN user_id TEXT DEFAULT ''");
+  // fleet mode: job spec for workers, idempotency cursor for event batches,
+  // and which machine ran the build (observability)
+  if (!genCols.includes('edit_slug')) d.exec("ALTER TABLE generations ADD COLUMN edit_slug TEXT DEFAULT ''");
+  if (!genCols.includes('last_seq')) d.exec('ALTER TABLE generations ADD COLUMN last_seq INTEGER DEFAULT 0');
+  if (!genCols.includes('worker_machine')) d.exec("ALTER TABLE generations ADD COLUMN worker_machine TEXT DEFAULT ''");
   // index goes AFTER the column exists (the column is ALTER-added for old DBs)
   d.exec('CREATE INDEX IF NOT EXISTS idx_games_creator ON games(creator_ref)');
 }

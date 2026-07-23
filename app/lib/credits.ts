@@ -35,6 +35,18 @@ export function grantSignupCredits(userId: string): void {
   addEntry(userId, SIGNUP_GRANT, 'signup_grant', userId);
 }
 
+// Refund whatever was debited for a generation — idempotent (the ledger's
+// UNIQUE key), safe to call for runs that were never debited (CLI runs).
+// This is THE refund path: workers can't touch money; they report `finish`
+// and the app calls this.
+export function refundForGeneration(genId: string): boolean {
+  const deb = db()
+    .prepare("SELECT user_id, delta FROM credit_entries WHERE reason = 'debit' AND ref_id = ?")
+    .get(genId) as { user_id: string; delta: number } | undefined;
+  if (!deb) return false;
+  return addEntry(deb.user_id, -deb.delta, 'refund', genId);
+}
+
 export function entries(userId: string, limit = 50) {
   return db()
     .prepare('SELECT delta, reason, ref_id, created_at FROM credit_entries WHERE user_id = ? ORDER BY id DESC LIMIT ?')
