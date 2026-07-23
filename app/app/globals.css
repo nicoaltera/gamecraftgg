@@ -85,7 +85,47 @@ h1, h2, h3 { line-height: 1.1; margin: 0; }
   gap: 8px;
 }
 .side-nav a:hover { background: rgba(26, 24, 21, 0.05); text-decoration: none; }
-.side-foot { margin-top: auto; color: var(--graphite); font-size: 12px; line-height: 1.4; }
+/* the account card: a clearly-labeled block pinned above the sidebar footer */
+.account-card {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border: var(--hairline);
+  border-radius: 12px;
+  padding: 13px 14px;
+  margin-bottom: 14px;
+}
+.account-label {
+  font-family: var(--font-mono), monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--graphite);
+}
+.account-tag {
+  font-family: var(--font-display), cursive;
+  font-weight: 600;
+  font-size: 18px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-credits { color: var(--graphite); font-size: 13px; }
+.account-cta {
+  text-align: center;
+  border: 1.5px solid var(--biro);
+  color: var(--biro);
+  font-weight: 600;
+  font-size: 13.5px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  margin-top: 3px;
+}
+.account-cta:hover { text-decoration: none; transform: translate(-1px, -1px); box-shadow: var(--lift); }
+.account-hint { color: var(--graphite); font-size: 12px; }
+.side-foot { color: var(--graphite); font-size: 12px; line-height: 1.4; }
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .content > main { width: 100%; }
 
@@ -310,12 +350,10 @@ main {
   transform: skew(-8deg) rotate(-1deg);
   z-index: -1;
 }
-/* the game gets the room; the boards are a margin note */
-.game-columns { display: grid; grid-template-columns: minmax(0, 1fr) 224px; gap: 34px; margin-top: 20px; }
-.game-columns aside { font-size: 14px; }
-.game-columns .board li { font-size: 13.5px; padding: 6px 2px; }
-.game-columns .board h3 { font-size: 17px; }
-@media (max-width: 960px) { .game-columns { grid-template-columns: 1fr; } }
+/* below the full-width stage: description on the left, boards on the right */
+.under-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 44px; margin-top: 22px; align-items: start; }
+.under-grid aside { font-size: 14px; }
+@media (max-width: 820px) { .under-grid { grid-template-columns: 1fr; gap: 24px; } }
 
 .board h3 { font-family: var(--font-display), cursive; font-weight: 600; font-size: 20px; margin-bottom: 10px; }
 .board-tabs { display: flex; gap: 14px; font-size: 13px; color: var(--graphite); margin-bottom: 8px; }
@@ -435,6 +473,12 @@ main {
   .side-nav { flex-direction: row; gap: 2px; font-size: 14px; }
   .side-nav a { padding: 6px 8px; white-space: nowrap; }
   .side-foot { display: none; }
+  /* account card compacts into the top bar */
+  .account-card { margin: 0 0 0 auto; flex-direction: row; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 999px; }
+  .account-label, .account-hint { display: none; }
+  .account-tag { font-size: 14px; max-width: 110px; }
+  .account-credits { font-size: 12px; white-space: nowrap; }
+  .account-cta { padding: 5px 10px; font-size: 12px; margin-top: 0; white-space: nowrap; }
 
   .viewer { grid-template-columns: 1fr; }
   /* the chevrons float over the page edge, TikTok-style — clear of the stage

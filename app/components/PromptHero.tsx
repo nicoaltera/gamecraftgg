@@ -1,29 +1,56 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import HandFrame from './HandFrame';
 import { addCreation } from '@/lib/creations';
+import { useSession } from '@/lib/auth-client';
+
+// The key that carries a typed prompt through the login flow: hitting "Make a
+// game" while signed out stashes the prompt here, opens /login, and this hero
+// restores it when the player lands back — nothing they typed is lost.
+const PENDING_KEY = 'gc_pending_prompt';
 
 export default function PromptHero() {
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  // 'auth' | 'credits' from the API — turns the note into an actionable link
+  // 'credits' from the API turns the note into an actionable link
   const [errCode, setErrCode] = useState<string | null>(null);
   // gentle nudge (wobble + red pencil stroke) when the prompt is empty
   const [attn, setAttn] = useState(false);
+  const { data: session } = useSession();
   const router = useRouter();
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem(PENDING_KEY);
+    if (saved) {
+      sessionStorage.removeItem(PENDING_KEY);
+      setPrompt(saved);
+      setNote('Welcome back — your prompt is right where you left it.');
+    }
+  }, []);
+
+  function goSignIn(text: string) {
+    sessionStorage.setItem(PENDING_KEY, text);
+    router.push('/login?next=make');
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
-    if (prompt.trim().length < 8) {
-      setNote(prompt.trim() ? 'Give it a full sentence — what should the game feel like?' : 'First, type the game you want to play — one sentence is plenty. ✎');
+    const text = prompt.trim();
+    if (text.length < 8) {
+      setNote(text ? 'Give it a full sentence — what should the game feel like?' : 'First, type the game you want to play — one sentence is plenty.');
       setErrCode(null);
       setAttn(true);
       setTimeout(() => setAttn(false), 700);
+      return;
+    }
+    // Signed out? Take them straight to sign-in with the prompt preserved.
+    if (!session) {
+      goSignIn(text);
       return;
     }
     setBusy(true);
@@ -33,12 +60,14 @@ export default function PromptHero() {
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt.trim() }),
+        body: JSON.stringify({ prompt: text }),
       });
       const data = await res.json();
       if (res.ok && data.id) {
-        addCreation({ id: data.id, prompt: prompt.trim(), ts: Date.now() });
+        addCreation({ id: data.id, prompt: text, ts: Date.now() });
         router.push(`/build/${data.id}`);
+      } else if (data.code === 'auth') {
+        goSignIn(text); // stale session — same path, nothing lost
       } else {
         setNote(data.error ?? 'That prompt broke our pencil. Try again.');
         setErrCode(typeof data.code === 'string' ? data.code : null);
@@ -71,12 +100,6 @@ export default function PromptHero() {
       </form>
       <p className="hero-sub">
         {note ?? 'No downloads. No accounts to play. Share a link, dare a friend.'}
-        {errCode === 'auth' && (
-          <>
-            {' '}
-            <Link href="/login">Sign in →</Link>
-          </>
-        )}
         {errCode === 'credits' && (
           <>
             {' '}

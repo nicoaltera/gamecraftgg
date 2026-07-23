@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { Shantell_Sans, Instrument_Sans, IBM_Plex_Mono } from 'next/font/google';
 import Link from 'next/link';
 import YoursLink from '@/components/YoursLink';
-import AccountLink from '@/components/AccountLink';
+import AccountCard from '@/components/AccountCard';
 import CookingTray from '@/components/CookingTray';
 import './globals.css';
 
@@ -25,7 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               it from there. */}
           <aside className="side">
             <Link href="/" className="wordmark">
-              gamecraft<span className="wordmark-pen">✎</span>
+              gamecraft
             </Link>
             <Link href="/watch" className="side-play">
               ▶ Play
@@ -34,8 +34,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/">home</Link>
               <Link href="/#make">create</Link>
               <YoursLink />
-              <AccountLink />
             </nav>
+            <AccountCard />
             <div className="side-foot">drawn into existence, one sentence at a time</div>
           </aside>
           <div className="content">

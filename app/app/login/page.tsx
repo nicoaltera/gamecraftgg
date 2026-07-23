@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import HandFrame from '@/components/HandFrame';
 import { signIn, signUp } from '@/lib/auth-client';
@@ -15,7 +15,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // arrived mid-"Make a game"? Route back to the prompt after auth.
+  const [fromMake, setFromMake] = useState(false);
   const router = useRouter();
+
+  useEffect(() => {
+    setFromMake(new URLSearchParams(window.location.search).get('next') === 'make');
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -43,13 +49,14 @@ export default function LoginPage() {
     } catch {
       /* adopted next time they sign in */
     }
-    router.push('/');
+    router.push(fromMake ? '/#make' : '/');
     router.refresh();
   }
 
   return (
     <main className="hero draw-in" style={{ minHeight: '60vh' }}>
-      <h1>{mode === 'up' ? 'Make an account, get 2000 credits' : 'Welcome back'}</h1>
+      <h1>{mode === 'up' ? (fromMake ? 'One step from your game — 2000 free credits' : 'Make an account, get 2000 credits') : 'Welcome back'}</h1>
+      {fromMake && <p className="hero-sub">Your prompt is saved. Sign {mode === 'up' ? 'up' : 'in'} and we’ll put it right back.</p>}
       <form className="prompt-row" onSubmit={submit} style={{ flexDirection: 'column', alignItems: 'center', gap: 14 }}>
         <div className="prompt-frame" style={{ width: 'min(420px, 90vw)' }}>
           <HandFrame seed="login-email" strokeWidth={1.8} />

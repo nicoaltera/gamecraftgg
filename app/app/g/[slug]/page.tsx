@@ -65,24 +65,27 @@ export default async function GamePage({ params }: Params) {
         </span>
       </div>
       <div className="viewer">
-        <div className="game-columns">
-          <div>
-            <GameStage
-              slug={game.slug}
-              title={game.title}
-              boards={boards}
-              status={game.status}
-              creatorRef={game.creator_ref}
-              orientation={game.orientation}
-            />
-            <GameActions slug={game.slug} title={game.title} status={game.status} creatorRef={game.creator_ref} parentSlug={game.parent_slug} />
-            <p className="about-game">{game.description}</p>
-            {isPublished && <ReportButton slug={game.slug} />}
+        {/* the game gets the full column; boards live BELOW the stage/actions */}
+        <div>
+          <GameStage
+            slug={game.slug}
+            title={game.title}
+            boards={boards}
+            status={game.status}
+            creatorRef={game.creator_ref}
+            orientation={game.orientation}
+          />
+          <GameActions slug={game.slug} title={game.title} status={game.status} creatorRef={game.creator_ref} parentSlug={game.parent_slug} />
+          <div className="under-grid">
+            <div>
+              <p className="about-game">{game.description}</p>
+              {isPublished && <ReportButton slug={game.slug} />}
+            </div>
+            <aside>
+              {isPublished && <StarRating slug={game.slug} />}
+              <Leaderboard slug={game.slug} boards={boards} />
+            </aside>
           </div>
-          <aside>
-            {isPublished && <StarRating slug={game.slug} />}
-            <Leaderboard slug={game.slug} boards={boards} />
-          </aside>
         </div>
         <NavRail prevSlug={prevSlug} nextSlug={nextSlug} />
       </div>
