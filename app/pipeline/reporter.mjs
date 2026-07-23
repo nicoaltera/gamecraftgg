@@ -251,9 +251,11 @@ class RemoteReporter {
     if (!force && !this.shouldFlush(this.events.length, false)) return;
     if (this.inFlight) return; // one batch on the wire at a time; rest queues
     if (this.pending.length === 0 && Object.keys(this.pendingPatch).length === 0) return;
-    const events = this.pending;
+    // ≤100 events per batch (2KB details → ~200KB worst case, far under the
+    // server's 2MB bound); the remainder rides the next flush
+    const events = this.pending.slice(0, 100);
+    this.pending = this.pending.slice(100);
     const patch = this.pendingPatch;
-    this.pending = [];
     this.pendingPatch = {};
     this.inFlight = this.#post({ type: 'events', seq: ++this.seq, events, patch })
       .catch(() => {

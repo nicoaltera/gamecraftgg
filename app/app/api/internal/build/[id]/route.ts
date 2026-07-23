@@ -79,7 +79,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
   const gen = getGen(id);
   if (!gen) return NextResponse.json({ error: 'unknown job' }, { status: 404 });
-  const body = await readJson(req);
+  // 2MB: the publish payload is base64 game files (index.html cap 512KB →
+  // ~700KB encoded) plus trace batches with 2KB thinking chunks
+  const body = await readJson(req, 2 * 1024 * 1024);
   if (!body || typeof body.type !== 'string') return NextResponse.json({ error: 'bad payload' }, { status: 400 });
 
   if (typeof body.machine === 'string' && body.machine && !gen.worker_machine) {
