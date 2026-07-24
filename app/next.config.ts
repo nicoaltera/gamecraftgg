@@ -19,7 +19,10 @@ const csp = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ''}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  // game covers are SVGs served from the game origin (loaded via <img>, so
+  // their scripts can't execute) — the app CSP must allow that origin or the
+  // host gate's redirect leaves every cover broken
+  `img-src 'self' data: blob:${GAME_ORIGIN ? ' ' + GAME_ORIGIN : ''}`,
   "font-src 'self' data:",
   "connect-src 'self'",
   `frame-src ${frameSrc}`,

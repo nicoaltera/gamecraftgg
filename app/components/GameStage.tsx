@@ -44,6 +44,7 @@ export default function GameStage({ slug, title, boards, status, isOwner, draftP
   const dareBoard = boards.find((b) => b.challenge) ?? primaryBoard;
 
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const stageWrapRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<string | null>(null);
   const runsRef = useRef(0);
   const bestByBoard = useRef<Record<string, number>>({});
@@ -54,6 +55,45 @@ export default function GameStage({ slug, title, boards, status, isOwner, draftP
   const [nameLocked, setNameLocked] = useState(false);
   const [posted, setPosted] = useState<{ ranks: Record<string, number | null> } | null>(null);
   const [shareNote, setShareNote] = useState<string | null>(null);
+  // mobile viewing: landscape games are tiny on a portrait phone. Nudge the
+  // player to rotate + go fullscreen. Fullscreen the WRAPPER (not the iframe) so
+  // the game fills the screen; iOS Safari can't fullscreen a div, so there we
+  // lean on the rotate hint alone. Never blocks gameplay.
+  const [coarse, setCoarse] = useState(false);
+  const [portrait, setPortrait] = useState(false);
+  const [isFs, setIsFs] = useState(false);
+  const fsSupported = typeof document !== 'undefined' && !!document.documentElement.requestFullscreen;
+
+  useEffect(() => {
+    const c = matchMedia('(pointer: coarse)');
+    const o = matchMedia('(orientation: portrait)');
+    const upd = () => { setCoarse(c.matches); setPortrait(o.matches); };
+    upd();
+    c.addEventListener('change', upd);
+    o.addEventListener('change', upd);
+    const fs = () => setIsFs(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', fs);
+    return () => {
+      c.removeEventListener('change', upd);
+      o.removeEventListener('change', upd);
+      document.removeEventListener('fullscreenchange', fs);
+    };
+  }, []);
+
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else if (stageWrapRef.current?.requestFullscreen) {
+        await stageWrapRef.current.requestFullscreen();
+        // lock to landscape where supported (Android/Chrome); harmless no-op elsewhere
+        const so = screen.orientation as (ScreenOrientation & { lock?: (o: string) => Promise<void> }) | undefined;
+        so?.lock?.('landscape').catch(() => {});
+      }
+    } catch {
+      /* fullscreen denied — the rotate hint still guides the player */
+    }
+  }
 
   const better = (order: 'asc' | 'desc', a: number, b: number | undefined) =>
     b == null ? true : order === 'asc' ? a < b : a > b;
@@ -234,11 +274,15 @@ export default function GameStage({ slug, title, boards, status, isOwner, draftP
     }
   }
 
+  // Sharing is the viral core — it ALWAYS works, score or not. With a score it's
+  // a "beat my X" dare; without, it's just "come play this". Never gated.
   async function shareChallenge() {
     const score = bestByBoard.current[dareBoard.key] ?? lastScores?.[dareBoard.key];
-    if (score == null) return;
-    const url = `${location.origin}/g/${slug}?c=${score}&r=${playerRef()}`;
-    const text = `Beat my ${score.toLocaleString()}${dareBoard.label ? ` ${dareBoard.label}` : ''} on ${title}`;
+    const hasScore = score != null;
+    const url = `${location.origin}/g/${slug}?r=${playerRef()}${hasScore ? `&c=${score}` : ''}`;
+    const text = hasScore
+      ? `Beat my ${score.toLocaleString()}${dareBoard.label ? ` ${dareBoard.label}` : ''} on ${title}`
+      : `Play ${title} on GameCraft`;
     if (sessionRef.current) {
       fetch('/api/share', {
         method: 'POST',
@@ -251,12 +295,16 @@ export default function GameStage({ slug, title, boards, status, isOwner, draftP
         await navigator.share({ title: text, url });
         return;
       } catch {
-        /* fall through to clipboard */
+        /* user dismissed, or unsupported — fall through to clipboard */
       }
     }
-    await navigator.clipboard.writeText(`${text} — ${url}`);
-    setShareNote('Dare copied — paste it anywhere.');
-    setTimeout(() => setShareNote(null), 2500);
+    try {
+      await navigator.clipboard.writeText(`${text} — ${url}`);
+      setShareNote(hasScore ? 'Dare copied — paste it anywhere.' : 'Link copied — paste it anywhere.');
+    } catch {
+      setShareNote(url); // clipboard blocked (rare) — show the link to copy by hand
+    }
+    setTimeout(() => setShareNote(null), 3500);
   }
 
   // query for the game iframe: challenge target and/or the owner's draft token
@@ -295,8 +343,18 @@ export default function GameStage({ slug, title, boards, status, isOwner, draftP
           )}
         </p>
       )}
-      <div className={`stage-wrap draw-in${orientation === 'portrait' ? ' stage-portrait' : ''}`}>
+      {coarse && portrait && orientation !== 'portrait' && (
+        <div className="rotate-hint">
+          <span>↻ Turn your phone sideways for the full game{fsSupported ? ' — or tap ⛶ Fullscreen' : ''}</span>
+        </div>
+      )}
+      <div ref={stageWrapRef} className={`stage-wrap draw-in${orientation === 'portrait' ? ' stage-portrait' : ''}${isFs ? ' stage-fs' : ''}`}>
         <HandFrame seed={`stage-${slug}`} strokeWidth={2} />
+        {coarse && fsSupported && (
+          <button className="fs-btn" onClick={toggleFullscreen} aria-label={isFs ? 'Exit fullscreen' : 'Fullscreen'}>
+            {isFs ? '✕' : '⛶'}
+          </button>
+        )}
         <iframe
           ref={frameRef}
           className="game-stage"
@@ -309,7 +367,7 @@ export default function GameStage({ slug, title, boards, status, isOwner, draftP
         />
       </div>
       <div className="stage-actions">
-        <button className="btn btn-biro" onClick={shareChallenge} disabled={bestByBoard.current[dareBoard.key] == null && !lastScores}>
+        <button className="btn btn-biro" onClick={shareChallenge}>
           Send to a friend
         </button>
         {status === 'published' && !isOwner && (

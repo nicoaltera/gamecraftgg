@@ -192,6 +192,45 @@ h1, h2, h3 { line-height: 1.1; margin: 0; }
 .stage-portrait { max-width: min(430px, 100%); margin-inline: auto; }
 .stage-portrait .game-stage { aspect-ratio: 9 / 16; }
 
+/* mobile viewing aids: a rotate nudge above the stage + a fullscreen button */
+.rotate-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  padding: 9px 14px;
+  border: 1.5px dashed var(--biro);
+  border-radius: 10px;
+  background: rgba(36, 71, 214, 0.05);
+  color: var(--biro);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: center;
+}
+.fs-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  width: 38px;
+  height: 38px;
+  border: 1.5px solid var(--ink);
+  background: rgba(252, 249, 240, 0.9);
+  color: var(--ink);
+  border-radius: 8px;
+  font-size: 17px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fs-btn:active { transform: scale(0.94); }
+/* in fullscreen the wrapper IS the viewport — fill it, drop the sketch frame */
+.stage-fs { position: fixed; inset: 0; margin: 0; background: #0e0d0b; display: flex; }
+.stage-fs .game-stage { width: 100%; height: 100%; aspect-ratio: auto; }
+.stage-fs .hand-frame { display: none; }
+
 /* ---------- chrome ---------- */
 .site-header {
   max-width: 1200px;
