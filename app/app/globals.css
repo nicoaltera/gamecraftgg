@@ -138,15 +138,17 @@ h1, h2, h3 { line-height: 1.1; margin: 0; }
   padding: 6px 4px;
 }
 
-/* ---------- top makers leaderboard ---------- */
+/* ---------- top users leaderboard ---------- */
 .makers-page { padding-top: 8px; }
-.makers-list { list-style: none; padding: 0; margin: 20px 0 0; max-width: 620px; }
+/* centered, tight table that comfortably holds 100+ rows */
+.makers-page .feed-head { max-width: 640px; margin-inline: auto; }
+.makers-list { list-style: none; padding: 0; margin: 16px auto 0; max-width: 640px; }
 .makers-list li {
   display: flex;
   align-items: baseline;
-  gap: 16px;
-  padding: 12px 4px;
-  border-bottom: var(--hairline);
+  gap: 14px;
+  padding: 7px 4px;
+  border-bottom: 1px solid rgba(26, 24, 21, 0.1);
 }
 .maker-rank {
   flex: 0 0 34px;
@@ -169,17 +171,18 @@ h1, h2, h3 { line-height: 1.1; margin: 0; }
   transform: skew(-8deg);
   z-index: -1;
 }
+.maker-rank { flex: 0 0 30px; font-size: 14px; }
 .maker-name {
   flex: 1;
   font-family: var(--font-display), cursive;
   font-weight: 600;
-  font-size: 19px;
+  font-size: 17px;
   color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.maker-stat { font-size: 13.5px; color: var(--ink); white-space: nowrap; }
+.maker-stat { font-size: 13px; color: var(--ink); white-space: nowrap; }
 .maker-stat.dim { color: var(--graphite); }
 @media (max-width: 640px) {
   .maker-stat.dim { display: none; }

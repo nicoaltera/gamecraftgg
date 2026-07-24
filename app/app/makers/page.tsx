@@ -3,16 +3,16 @@ import type { Metadata } from 'next';
 import { getTopMakers } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
-export const metadata: Metadata = { title: 'Top makers — GameCraft' };
+export const metadata: Metadata = { title: 'Top users — GameCraft' };
 
 // The leaderboard of PEOPLE — gamertags ranked by how much the community plays
 // their games. The scoreboard the game leaderboards feed into.
 export default function MakersPage() {
-  const makers = getTopMakers(50);
+  const makers = getTopMakers(100);
   return (
     <main className="makers-page">
       <div className="feed-head">
-        <h2>Top makers</h2>
+        <h2>Top users</h2>
         <span className="rule" />
         <span className="feed-note">ranked by plays across their games</span>
       </div>
