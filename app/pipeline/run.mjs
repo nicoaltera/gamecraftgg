@@ -408,7 +408,7 @@ Output ONLY a \`\`\`json fence: {"score": 0-100, "criticalFails": ["..."], "crit
     const finalSlug = await R.publish(meta, creatorRef, gameDir);
     meta.slug = finalSlug;
     setGen({ slug: finalSlug });
-    trace('publish', editSlug ? `Updated: /g/${finalSlug}` : `Ready to publish: /g/${finalSlug} (draft — click Publish)`);
+    trace('publish', editSlug ? `Updated: /g/${finalSlug}` : `Live: /g/${finalSlug}`);
     await R.finish('published'); // generation status (done), not game visibility
   } else if (editSnapshot) {
     // A failed EDIT must never break the live game — restore the pre-edit files.

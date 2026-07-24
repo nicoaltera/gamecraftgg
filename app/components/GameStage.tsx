@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import HandFrame from './HandFrame';
+import { useSession } from '@/lib/auth-client';
 import type { Board } from '@/lib/db';
 
 type Props = {
@@ -37,6 +38,7 @@ function playerRef(): string {
 
 export default function GameStage({ slug, title, boards, status, isOwner, draftParam, orientation }: Props) {
   const router = useRouter();
+  const { data: sessionData } = useSession();
   const [remixing, setRemixing] = useState(false);
   const primaryBoard = boards.find((b) => b.primary) ?? boards[0];
   // the per-run "dare" uses the challenge board (a game's endless metric makes a
@@ -276,10 +278,13 @@ export default function GameStage({ slug, title, boards, status, isOwner, draftP
 
   // Sharing is the viral core — it ALWAYS works, score or not. With a score it's
   // a "beat my X" dare; without, it's just "come play this". Never gated.
+  // Signed-in shares carry the ACCOUNT id, which is what earns the share
+  // reward when a friend actually plays (anonymous refs track K, earn nothing).
   async function shareChallenge() {
     const score = bestByBoard.current[dareBoard.key] ?? lastScores?.[dareBoard.key];
     const hasScore = score != null;
-    const url = `${location.origin}/g/${slug}?r=${playerRef()}${hasScore ? `&c=${score}` : ''}`;
+    const shareRef = sessionData?.user.id ?? playerRef();
+    const url = `${location.origin}/g/${slug}?r=${shareRef}${hasScore ? `&c=${score}` : ''}`;
     const text = hasScore
       ? `Beat my ${score.toLocaleString()}${dareBoard.label ? ` ${dareBoard.label}` : ''} on ${title}`
       : `Play ${title} on GameCraft`;
@@ -300,7 +305,8 @@ export default function GameStage({ slug, title, boards, status, isOwner, draftP
     }
     try {
       await navigator.clipboard.writeText(`${text} — ${url}`);
-      setShareNote(hasScore ? 'Dare copied — paste it anywhere.' : 'Link copied — paste it anywhere.');
+      const earn = sessionData ? ' You earn 100 credits when a friend plays.' : '';
+      setShareNote((hasScore ? 'Dare copied — paste it anywhere.' : 'Link copied — paste it anywhere.') + earn);
     } catch {
       setShareNote(url); // clipboard blocked (rare) — show the link to copy by hand
     }

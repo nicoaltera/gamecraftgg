@@ -88,7 +88,7 @@ export default async function GamePage({ params }: Params) {
             draftParam={draftParam}
             orientation={game.orientation}
           />
-          <GameActions slug={game.slug} title={game.title} status={game.status} isOwner={isOwner} parentSlug={game.parent_slug} />
+          <GameActions slug={game.slug} isOwner={isOwner} parentSlug={game.parent_slug} />
           <div className="under-grid">
             <div>
               <p className="about-game">{game.description}</p>

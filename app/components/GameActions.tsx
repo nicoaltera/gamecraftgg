@@ -4,42 +4,23 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { addCreation } from '@/lib/creations';
 
-// Owner controls (draft badge, Publish, continue-editing). Ownership is
-// decided SERVER-SIDE on the game page and passed in — this component never
-// derives authority from anything the browser holds.
+// Owner controls. Games publish automatically when the judges pass them —
+// the only owner action left is iterating: "keep editing (prompt it)".
+// Ownership is decided SERVER-SIDE on the game page and passed in.
 export default function GameActions({
   slug,
-  title, // eslint-disable-line @typescript-eslint/no-unused-vars
-  status,
   isOwner,
   parentSlug,
 }: {
   slug: string;
-  title: string;
-  status: string;
   isOwner: boolean;
   parentSlug: string;
 }) {
-  const [state, setState] = useState(status);
   const [editing, setEditing] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const router = useRouter();
-
-  async function publish() {
-    setBusy(true);
-    const res = await fetch('/api/publish', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ slug }),
-    });
-    setBusy(false);
-    if (res.ok) {
-      setState('published');
-      setNote('Published to the library!');
-    } else setNote('Could not publish.');
-  }
 
   async function submitEdit(e: React.FormEvent) {
     e.preventDefault();
@@ -67,16 +48,6 @@ export default function GameActions({
           remixed from <a href={`/g/${parentSlug}`}>{parentSlug}</a>
         </p>
       )}
-
-      {isOwner && state === 'draft' && (
-        <div className="draft-box">
-          <span className="draft-badge">DRAFT — only you can see this</span>
-          <button className="btn btn-biro" onClick={publish} disabled={busy}>
-            Publish to library
-          </button>
-        </div>
-      )}
-      {isOwner && state === 'published' && <span className="live-badge">● live in the library</span>}
 
       {isOwner && (
         <div className="edit-area">

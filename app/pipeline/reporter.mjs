@@ -126,13 +126,13 @@ class LocalReporter {
       .run(...Object.values(fields), Date.now(), this.genId);
   }
 
-  // Judge-passed game becomes a draft row + published.json marker (see
-  // run.mjs publish comment for the full rationale).
+  // Judge-passed games go LIVE immediately — the judge is the quality gate,
+  // and inviting the world is the whole point. (No draft step: founder call.)
   async publish(meta, creatorRef, gameDir) {
     this.db
       .prepare(
         `INSERT INTO games (slug, title, description, verb, dials, orientation, mode, score_label, score_order, boards, palette, author, status, creator_ref, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?)
          ON CONFLICT(slug) DO UPDATE SET title=excluded.title, description=excluded.description, verb=excluded.verb,
            dials=excluded.dials, orientation=excluded.orientation, mode=excluded.mode,
            score_label=excluded.score_label, score_order=excluded.score_order, boards=excluded.boards, palette=excluded.palette`

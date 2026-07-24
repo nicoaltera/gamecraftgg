@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { db } from '@/lib/db';
 import { refundForGeneration } from '@/lib/credits';
+import { notifyOnFinish } from '@/lib/notify';
 import { verifyJobToken } from '@/lib/internal-auth';
 import { readJson } from '@/lib/http';
 
@@ -177,11 +178,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       fs.rmSync(staging, { recursive: true, force: true });
       return NextResponse.json({ error: e instanceof Error ? e.message : 'publish failed' }, { status: 400 });
     }
-    // draft row + vetted marker — mirrors LocalReporter.publish / syncGamesFromDisk
+    // judge-passed games go LIVE immediately — mirrors LocalReporter.publish
     db()
       .prepare(
         `INSERT INTO games (slug, title, description, verb, dials, orientation, mode, score_label, score_order, boards, palette, author, status, creator_ref, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?)
          ON CONFLICT(slug) DO UPDATE SET title=excluded.title, description=excluded.description, verb=excluded.verb,
            dials=excluded.dials, orientation=excluded.orientation, mode=excluded.mode,
            score_label=excluded.score_label, score_order=excluded.score_order, boards=excluded.boards, palette=excluded.palette`
@@ -198,8 +199,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   if (body.type === 'finish') {
     const status = body.status === 'published' ? 'published' : 'failed';
-    db().prepare("UPDATE generations SET status = ?, updated_at = ? WHERE id = ? AND status = 'running'").run(status, Date.now(), id);
-    if (status === 'failed') refundForGeneration(id);
+    const upd = db()
+      .prepare("UPDATE generations SET status = ?, updated_at = ? WHERE id = ? AND status = 'running'")
+      .run(status, Date.now(), id);
+    if (upd.changes > 0) {
+      if (status === 'failed') refundForGeneration(id);
+      await notifyOnFinish(id); // creator + friend emails (no-op if mail unconfigured)
+    }
     return NextResponse.json({ ok: true });
   }
 

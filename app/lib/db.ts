@@ -70,6 +70,9 @@ function reapOrphanRuns(d: Database.Database) {
       d.prepare('INSERT OR IGNORE INTO credit_entries (user_id, delta, reason, ref_id, created_at) VALUES (?, ?, ?, ?, ?)')
         .run(deb.user_id, -deb.delta, 'refund', g.id, Date.now());
     }
+    // tell the creator their orphaned build died (best-effort; dynamic import
+    // avoids a load-time cycle since notify imports db)
+    void import('./notify').then((m) => m.notifyOnFinish(g.id)).catch(() => {});
   }
 }
 
@@ -200,6 +203,10 @@ function migrate(d: Database.Database) {
   if (!genCols.includes('edit_slug')) d.exec("ALTER TABLE generations ADD COLUMN edit_slug TEXT DEFAULT ''");
   if (!genCols.includes('last_seq')) d.exec('ALTER TABLE generations ADD COLUMN last_seq INTEGER DEFAULT 0');
   if (!genCols.includes('worker_machine')) d.exec("ALTER TABLE generations ADD COLUMN worker_machine TEXT DEFAULT ''");
+  // up-to-3 friend emails to notify the moment the game is live; JSON array
+  if (!genCols.includes('notify_emails')) d.exec("ALTER TABLE generations ADD COLUMN notify_emails TEXT DEFAULT '[]'");
+  // guard against double-sending if finish fires more than once
+  if (!genCols.includes('notified')) d.exec('ALTER TABLE generations ADD COLUMN notified INTEGER DEFAULT 0');
   // index goes AFTER the column exists (the column is ALTER-added for old DBs)
   d.exec('CREATE INDEX IF NOT EXISTS idx_games_creator ON games(creator_ref)');
 }
@@ -444,7 +451,23 @@ export function getProfile(name: string): Profile | null {
   };
 }
 
-// Gamertag for a game's creator_ref (a user id post-auth; anonymous refs → null).
+// The makers leaderboard: gamertags ranked by lifetime plays across their
+// published games. Only real accounts with a published game appear.
+export type Maker = { name: string; games: number; plays: number };
+export function getTopMakers(limit = 50): Maker[] {
+  return db()
+    .prepare(
+      `SELECT u.name AS name, COUNT(DISTINCT g.slug) AS games, COUNT(p.id) AS plays
+       FROM user u
+       JOIN games g ON g.creator_ref = u.id AND g.status = 'published'
+       LEFT JOIN plays p ON p.slug = g.slug
+       GROUP BY u.id
+       ORDER BY plays DESC, games DESC
+       LIMIT ?`
+    )
+    .all(limit) as Maker[];
+}
+
 export function getMakerName(creatorRef: string): string | null {
   if (!creatorRef) return null;
   const u = db().prepare('SELECT name FROM user WHERE id = ?').get(creatorRef) as { name: string } | undefined;

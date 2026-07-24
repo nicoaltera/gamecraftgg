@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'node:crypto';
 import { db, getGame } from '@/lib/db';
-import { rateLimit, clientIp } from '@/lib/ratelimit';
+import { rateLimit, clientIp, ipHash } from '@/lib/ratelimit';
 import { readJson } from '@/lib/http';
 
 // Auto-unlist requires UNLIST_THRESHOLD reports from DISTINCT IPs whose
@@ -10,11 +9,6 @@ import { readJson } from '@/lib/http';
 // to unlist a rival's game. IPs are stored as salted hashes (we count them,
 // we don't keep them).
 const UNLIST_THRESHOLD = 5;
-
-function ipHash(ip: string): string {
-  const salt = process.env.GC_INTERNAL_SECRET || process.env.BETTER_AUTH_SECRET || '';
-  return crypto.createHash('sha256').update(`report:${salt}:${ip}`).digest('hex').slice(0, 24);
-}
 
 export async function POST(req: NextRequest) {
   const ip = clientIp(req.headers);

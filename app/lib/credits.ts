@@ -9,8 +9,13 @@ import { db } from './db';
 export const GENERATION_COST = 1000;
 export const EDIT_COST = 200;
 export const SIGNUP_GRANT = 2000;
+// Earned when YOUR share link brings in a real new player (not a click — a
+// converted play). Deduped per (sharer, game, player-IP) and capped daily:
+// a genuine super-sharer earns a free game a day, a farmer earns nothing.
+export const SHARE_REWARD = 100;
+export const SHARE_REWARD_DAILY_CAP = 10;
 
-export type CreditReason = 'signup_grant' | 'purchase' | 'debit' | 'refund';
+export type CreditReason = 'signup_grant' | 'purchase' | 'debit' | 'refund' | 'share_reward';
 
 export function balance(userId: string): number {
   const r = db()

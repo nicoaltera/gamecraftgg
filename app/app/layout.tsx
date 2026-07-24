@@ -32,7 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </Link>
             <nav className="side-nav">
               <Link href="/">home</Link>
-              <Link href="/#make">create</Link>
+              <Link href="/makers">makers</Link>
               <YoursLink />
             </nav>
             <AccountCard />

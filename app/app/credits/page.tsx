@@ -15,6 +15,7 @@ const REASON_LABEL: Record<string, string> = {
   purchase: 'credit pack',
   debit: 'made a game',
   refund: 'build failed — refunded',
+  share_reward: 'a friend played your game',
 };
 
 type Ledger = { balance: number; entries: { delta: number; reason: string; ref_id: string; created_at: number }[] };

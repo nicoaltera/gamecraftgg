@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 // In-memory sliding-window rate limiter. Single-box deployment by design
 // (PLAN.md), so process memory IS the shared state; if the app ever scales
 // past one machine this moves to the DB or Redis.
@@ -27,4 +29,11 @@ export function clientIp(headers: Headers): string {
     headers.get('x-forwarded-for')?.split(',')[0].trim() ??
     'local'
   );
+}
+
+// Salted IP hash for abuse counting (reports, share-reward dedupe): we count
+// distinct people, we never store addresses.
+export function ipHash(ip: string): string {
+  const salt = process.env.GC_INTERNAL_SECRET || process.env.BETTER_AUTH_SECRET || '';
+  return crypto.createHash('sha256').update(`ip:${salt}:${ip}`).digest('hex').slice(0, 24);
 }

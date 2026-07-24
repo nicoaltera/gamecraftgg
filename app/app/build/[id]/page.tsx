@@ -63,7 +63,7 @@ function friendly(e: Ev): string | null {
       }
       return 'The judges are playing it…';
     case 'publish':
-      return 'Your game is ready to play';
+      return 'Your game is live';
     case 'fail':
       if (d.includes('credits')) return 'It didn’t make the cut — your credits are back in your account';
       if (d.includes('unchanged')) return 'The edit didn’t pass — your game is safe and unchanged';
@@ -81,6 +81,18 @@ export default function BuildPage({ params }: { params: Promise<{ id: string }> 
   const [missing, setMissing] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const notebookRef = useRef<HTMLDivElement>(null);
+  const [emails, setEmails] = useState(['', '', '']);
+  const [emailSaved, setEmailSaved] = useState(false);
+
+  async function saveEmails() {
+    const list = emails.map((e) => e.trim()).filter(Boolean);
+    const res = await fetch('/api/notify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id, emails: list }),
+    });
+    if (res.ok) setEmailSaved(true);
+  }
 
   useEffect(() => {
     let alive = true;
@@ -176,6 +188,36 @@ export default function BuildPage({ params }: { params: Promise<{ id: string }> 
           <span>No need to watch — go play, we’ll keep cooking.</span>
           <Link className="btn btn-biro" href="/#games">Play games</Link>
           <Link className="btn" href="/yours">Your games</Link>
+        </div>
+      )}
+
+      {running && (
+        <div className="email-invite">
+          {emailSaved ? (
+            <p className="ei-done">✓ We’ll email them the link the moment it’s live. Go play something.</p>
+          ) : (
+            <>
+              <p className="ei-head">Send it to friends the moment it’s ready</p>
+              <div className="ei-rows">
+                {emails.map((v, i) => (
+                  <input
+                    key={i}
+                    className="ei-input"
+                    type="email"
+                    inputMode="email"
+                    value={v}
+                    onChange={(e) => setEmails((p) => p.map((x, j) => (j === i ? e.target.value : x)))}
+                    placeholder="friend@email.com"
+                    aria-label={`Friend email ${i + 1}`}
+                  />
+                ))}
+              </div>
+              <button className="btn btn-biro" onClick={saveEmails} disabled={!emails.some((e) => e.trim())}>
+                Notify them
+              </button>
+              <span className="ei-note">Optional — we’ll email you too when it’s done.</span>
+            </>
+          )}
         </div>
       )}
 
