@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { rateLimit, clientIp } from '@/lib/ratelimit';
 import { readJson } from '@/lib/http';
 
 export async function POST(req: NextRequest) {
+  if (!rateLimit(`beat:${clientIp(req.headers)}`, 120, 60_000)) {
+    return NextResponse.json({ ok: false }, { status: 429 });
+  }
   const body = await readJson(req);
   const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : null;
   if (!sessionId) return NextResponse.json({ ok: false }, { status: 400 });

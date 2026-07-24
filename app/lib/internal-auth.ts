@@ -17,8 +17,33 @@ export function jobToken(genId: string): string {
 export function verifyJobToken(genId: string, token: string | null): boolean {
   if (!token) return false;
   const expected = jobToken(genId);
+  return safeEqual(token, expected);
+}
+
+// Draft-play tokens: unpublished games are owner-only, but the game iframe
+// loads from the separate game origin where the app's session cookie does not
+// exist. The game page mints a short-lived signed token for the owner and the
+// play route verifies it — capability, not identity, scoped to one slug.
+const DRAFT_TTL_MS = 6 * 60 * 60 * 1000;
+
+export function draftToken(slug: string, ttlMs = DRAFT_TTL_MS): string {
+  const exp = Date.now() + ttlMs;
+  const sig = crypto.createHmac('sha256', secret()).update(`draft:${slug}:${exp}`).digest('hex');
+  return `${exp}.${sig}`;
+}
+
+export function verifyDraftToken(slug: string, token: string | null): boolean {
+  if (!token) return false;
+  const [expStr, sig] = token.split('.');
+  const exp = Number(expStr);
+  if (!Number.isFinite(exp) || exp < Date.now() || !sig) return false;
+  const expected = crypto.createHmac('sha256', secret()).update(`draft:${slug}:${exp}`).digest('hex');
+  return safeEqual(sig, expected);
+}
+
+function safeEqual(a: string, b: string): boolean {
   try {
-    return token.length === expected.length && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected));
+    return a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
   } catch {
     return false;
   }

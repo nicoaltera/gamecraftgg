@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, getGame, getRating } from '@/lib/db';
+import { rateLimit, clientIp } from '@/lib/ratelimit';
 import { readJson } from '@/lib/http';
 
 // Half-star ratings (0.5–5), one per player-ref (upsert). No comments.
 export async function POST(req: NextRequest) {
+  if (!rateLimit(`rate:${clientIp(req.headers)}`, 20, 60_000)) {
+    return NextResponse.json({ error: 'slow down' }, { status: 429 });
+  }
   const body = await readJson(req);
   const slug = typeof body?.slug === 'string' ? body.slug : '';
   const ref = typeof body?.ref === 'string' ? body.ref.slice(0, 64) : '';

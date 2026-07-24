@@ -48,7 +48,7 @@ Derived from the full flash canon research (`research/top-flash-games-dna.md`, `
 
 **Platform integration**
 - U13. ⛔ Touch controls work — the play-tester completed a real session on mobile emulation; thumb zones don't occlude critical info; layout correct in declared orientation, letterboxed elsewhere.
-- U14. ⛔ Score submits correctly (`POST /api/score`); game-over/session-end screen shows score + best + retry (retry is the focused default); challenge param (`?c=`) renders a visible target during play. Party games: room join via link works for a second client.
+- U14. ⛔ Score reports correctly via the postMessage bridge (`parent.postMessage({ gs: 'gameover', score })` — games NEVER touch the network; the platform posts to the leaderboard); game-over/session-end screen shows score + best + retry (retry is the focused default); challenge param (`?c=`) renders a visible target during play. Party games: room join via link works for a second client.
 - U15. Loads fast (<3s on normal connection, <8MB total); works in an incognito window.
 - U16. Best score persisted locally; shown next to current score at session end.
 

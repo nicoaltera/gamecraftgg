@@ -10,7 +10,12 @@ type Props = {
   title: string;
   boards: Board[];
   status: string;
-  creatorRef: string;
+  // ownership is decided SERVER-SIDE (session user vs creator_ref) and passed
+  // down — the browser ref below is analytics identity, never authority
+  isOwner: boolean;
+  // signed short-lived token letting the owner's iframe load a DRAFT from the
+  // cookie-less game origin; null for published games
+  draftParam: string | null;
   // container geometry only — the game inside is untouched. All current games
   // are landscape (16:9, exactly as before); 'portrait' gets a phone-shaped
   // stage when such games ship.
@@ -30,7 +35,7 @@ function playerRef(): string {
   return r;
 }
 
-export default function GameStage({ slug, title, boards, status, creatorRef, orientation }: Props) {
+export default function GameStage({ slug, title, boards, status, isOwner, draftParam, orientation }: Props) {
   const router = useRouter();
   const [remixing, setRemixing] = useState(false);
   const primaryBoard = boards.find((b) => b.primary) ?? boards[0];
@@ -49,14 +54,6 @@ export default function GameStage({ slug, title, boards, status, creatorRef, ori
   const [nameLocked, setNameLocked] = useState(false);
   const [posted, setPosted] = useState<{ ranks: Record<string, number | null> } | null>(null);
   const [shareNote, setShareNote] = useState<string | null>(null);
-  // Whether this game is the viewer's own. playerRef() touches localStorage, so it
-  // must never run during render — on the server there is no usable localStorage,
-  // and creating the id is a side effect. Resolve it after mount instead.
-  const [mine, setMine] = useState(false);
-
-  useEffect(() => {
-    setMine(creatorRef === playerRef());
-  }, [creatorRef]);
 
   const better = (order: 'asc' | 'desc', a: number, b: number | undefined) =>
     b == null ? true : order === 'asc' ? a < b : a > b;
@@ -206,11 +203,12 @@ export default function GameStage({ slug, title, boards, status, creatorRef, ori
     const res = await fetch('/api/remix', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ slug, ref: playerRef() }),
+      body: JSON.stringify({ slug }),
     });
     const d = await res.json();
     setRemixing(false);
     if (res.ok && d.slug) router.push(`/g/${d.slug}`);
+    else if (res.status === 401) router.push('/login');
     else {
       setShareNote(d.error ?? 'Could not remix.');
       setTimeout(() => setShareNote(null), 3000);
@@ -261,7 +259,11 @@ export default function GameStage({ slug, title, boards, status, creatorRef, ori
     setTimeout(() => setShareNote(null), 2500);
   }
 
-  const challengeSrc = challenge != null ? `?c=${challenge}` : '';
+  // query for the game iframe: challenge target and/or the owner's draft token
+  const stageQuery = [challenge != null ? `c=${challenge}` : '', draftParam ? `dt=${encodeURIComponent(draftParam)}` : '']
+    .filter(Boolean)
+    .join('&');
+  const challengeSrc = stageQuery ? `?${stageQuery}` : '';
   const runSummary =
     lastScores &&
     boards
@@ -310,7 +312,7 @@ export default function GameStage({ slug, title, boards, status, creatorRef, ori
         <button className="btn btn-biro" onClick={shareChallenge} disabled={bestByBoard.current[dareBoard.key] == null && !lastScores}>
           Send to a friend
         </button>
-        {status === 'published' && !mine && (
+        {status === 'published' && !isOwner && (
           <button className="btn" onClick={remixThis} disabled={remixing}>
             {remixing ? 'remixing…' : 'Remix this game'}
           </button>

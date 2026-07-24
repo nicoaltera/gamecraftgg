@@ -13,6 +13,14 @@ let _lastSync = 0;
 const SYNC_INTERVAL_MS = 30_000;
 
 export function db(): Database.Database {
+  // `next build` imports route modules across parallel workers while collecting
+  // page data; letting them all open + migrate the real DB races (SQLITE_BUSY)
+  // and mutates runtime state from a build. Builds get an isolated in-memory DB.
+  if (!_db && process.env.NEXT_PHASE === 'phase-production-build') {
+    _db = new Database(':memory:');
+    migrate(_db);
+    return _db;
+  }
   if (_db) {
     // The pipeline publishes new game folders while the server runs — pick
     // them up without a restart, cheaply.
@@ -174,6 +182,8 @@ function migrate(d: Database.Database) {
   // additive migrations for DBs created before a column existed
   const reportCols = (d.prepare('PRAGMA table_info(reports)').all() as { name: string }[]).map((c) => c.name);
   if (!reportCols.includes('session_id')) d.exec('ALTER TABLE reports ADD COLUMN session_id TEXT');
+  // salted IP hash — auto-unlist counts distinct people, not free-to-mint sessions
+  if (!reportCols.includes('ip')) d.exec('ALTER TABLE reports ADD COLUMN ip TEXT');
   const gameCols = (d.prepare('PRAGMA table_info(games)').all() as { name: string }[]).map((c) => c.name);
   if (!gameCols.includes('boards')) d.exec("ALTER TABLE games ADD COLUMN boards TEXT DEFAULT '[]'");
   const scoreCols = (d.prepare('PRAGMA table_info(scores)').all() as { name: string }[]).map((c) => c.name);

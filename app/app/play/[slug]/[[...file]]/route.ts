@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs';
 import path from 'node:path';
+import { db } from '@/lib/db';
+import { verifyDraftToken } from '@/lib/internal-auth';
 
-// Serves game bundles. Games are untrusted generated code: strict CSP means a
-// game can run itself (inline script + vendored libs) and nothing else — no
-// network, no navigation. Production upgrade path: move to a separate origin
-// (05-architecture.md); the CSP here is the local-prod equivalent.
+// Serves game bundles. Games are untrusted generated code — THREE layers:
+//  1. HOST GATE: when a dedicated game origin is configured, this route only
+//     serves from that hostname; requests on the app origin get a 308 to the
+//     game origin. A generated game can therefore never execute with the
+//     application's origin (cookies, localStorage), even opened top-level.
+//  2. CSP: no network (connect-src 'none'), no forms, no <base> tricks, and a
+//     sandbox equivalent to the embedding iframe's.
+//  3. DRAFT PRIVACY: unpublished games require a signed, expiring owner token
+//     (cover art is the one public exception — it's inert artwork).
 const GAMES_DIR = path.join(process.cwd(), 'games');
 
 const TYPES: Record<string, string> = {
@@ -21,12 +28,10 @@ const TYPES: Record<string, string> = {
   '.woff': 'font/woff',
 };
 
-// The app frames games from its own origin (dev) or NEXT_PUBLIC_APP_ORIGIN (prod,
-// when games are served from a separate origin) — the child must allow both as
-// frame-ancestors or the iframe won't render cross-origin. Games still make no
-// network calls (connect-src 'none'); 'self' on media/font lets a game load
-// bundled audio/webfonts it ships in its own folder.
 const APP_ORIGIN = process.env.NEXT_PUBLIC_APP_ORIGIN?.trim() || '';
+const GAME_ORIGIN = process.env.NEXT_PUBLIC_GAME_ORIGIN?.trim() || '';
+const GAME_HOST = GAME_ORIGIN.replace(/^https?:\/\//, '').replace(/\/$/, '');
+
 const CSP = [
   "default-src 'none'",
   "script-src 'self' 'unsafe-inline'",
@@ -35,13 +40,36 @@ const CSP = [
   "media-src 'self' data: blob:",
   "font-src 'self' data:",
   "connect-src 'none'",
+  "form-action 'none'",
+  "base-uri 'none'",
+  'sandbox allow-scripts allow-same-origin',
   `frame-ancestors 'self'${APP_ORIGIN ? ' ' + APP_ORIGIN : ''}`,
 ].join('; ');
 
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ slug: string; file?: string[] }> }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ slug: string; file?: string[] }> }) {
   const { slug, file } = await params;
   if (!/^[a-z0-9-]+$/.test(slug)) return new NextResponse('not found', { status: 404 });
   const rel = (file ?? ['index.html']).join('/');
+
+  // 1. host gate — only the dedicated game origin serves game bytes
+  if (GAME_HOST) {
+    const host = (req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? '').toLowerCase();
+    if (host !== GAME_HOST) {
+      const url = new URL(req.nextUrl.pathname + req.nextUrl.search, GAME_ORIGIN);
+      return NextResponse.redirect(url, 308);
+    }
+  }
+
+  // 3. draft privacy — a row exists for every published or draft game; only
+  // published games are public. Drafts need the owner's signed token (minted
+  // on the game page, carried on the iframe URL). No row at all = not served.
+  const row = db().prepare('SELECT status FROM games WHERE slug = ?').get(slug) as { status: string } | undefined;
+  if (!row) return new NextResponse('not found', { status: 404 });
+  if (row.status !== 'published' && rel !== 'cover.svg') {
+    const dt = req.nextUrl.searchParams.get('dt') ?? '';
+    if (!verifyDraftToken(slug, dt)) return new NextResponse('not found', { status: 404 });
+  }
+
   const filePath = path.resolve(GAMES_DIR, slug, rel);
   if (!filePath.startsWith(path.resolve(GAMES_DIR, slug) + path.sep) || rel.includes('_shots'))
     return new NextResponse('not found', { status: 404 });
@@ -68,7 +96,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ slu
     if (/<head[^>]*>/i.test(html)) body = html.replace(/(<head[^>]*>)/i, `$1${shim}`);
     else if (/<body[^>]*>/i.test(html)) body = html.replace(/(<body[^>]*>)/i, `$1${shim}`);
     else if (/<html[^>]*>/i.test(html)) body = html.replace(/(<html[^>]*>)/i, `$1${shim}`);
-    else body = html.replace(/(<!doctype[^>]*>)/i, `$1${shim}`) === html ? shim + html : html.replace(/(<!doctype[^>]*>)/i, `$1${shim}`);
+    else body = shim + html;
   }
 
   return new NextResponse(body, {
@@ -76,7 +104,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ slu
       'content-type': TYPES[ext] ?? 'application/octet-stream',
       'content-security-policy': CSP,
       'x-content-type-options': 'nosniff',
-      'cache-control': 'public, max-age=60',
+      // drafts must never be cached by shared caches; published games may be
+      'cache-control': row.status === 'published' ? 'public, max-age=60' : 'private, no-store',
     },
   });
 }

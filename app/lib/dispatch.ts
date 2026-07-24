@@ -17,6 +17,12 @@ export function dispatchMode(): 'machines' | 'local' {
 
 export async function dispatchBuild(id: string): Promise<{ mode: string; machine?: string }> {
   if (dispatchMode() === 'machines') return dispatchMachine(id);
+  // FAIL CLOSED in production: a misconfigured fleet must never silently run
+  // untrusted builds on the web box next to the DB and secrets. The caller
+  // refunds and tells the user the workshop is down.
+  if (process.env.NODE_ENV === 'production' && process.env.FLY_APP_NAME) {
+    throw new Error('machines dispatch not configured — refusing local builds in production');
+  }
   return dispatchLocal(id);
 }
 
@@ -47,6 +53,18 @@ async function dispatchMachine(id: string): Promise<{ mode: string; machine: str
   const app = process.env.FLY_APP_NAME;
   const image = process.env.FLY_IMAGE_REF; // the exact image THIS release runs
   if (!app || !image) throw new Error('machines dispatch needs FLY_APP_NAME and FLY_IMAGE_REF');
+
+  // Idempotency: an ambiguous earlier create (timeout with the machine actually
+  // made) must not spawn a second worker for one charged build. Workers are
+  // findable by their job metadata.
+  const existing = await fetch(`${MACHINES_API}/apps/${app}/machines?metadata.gc_job=${id}`, {
+    headers: { authorization: `Bearer ${process.env.FLY_API_TOKEN}` },
+  })
+    .then((r) => (r.ok ? (r.json() as Promise<{ id: string }[]>) : []))
+    .catch(() => []);
+  if (Array.isArray(existing) && existing.length > 0) {
+    return { mode: 'machines', machine: existing[0].id };
+  }
   const env: Record<string, string> = {
     NODE_ENV: 'production',
     GC_REPORT_URL: process.env.BETTER_AUTH_URL ?? `https://${app}.fly.dev`,
@@ -68,7 +86,7 @@ async function dispatchMachine(id: string): Promise<{ mode: string; machine: str
         // entrypoint override: bypass the image's web-server entrypoint
         // entirely (it also honors argv as a fallback, but be explicit)
         init: { entrypoint: ['node', 'pipeline/run.mjs', '--job', id] },
-        metadata: { gc_role: 'build-worker' }, // NOT a fly process group: deploys ignore these machines
+        metadata: { gc_role: 'build-worker', gc_job: id }, // NOT a fly process group: deploys ignore these machines
       },
     });
 

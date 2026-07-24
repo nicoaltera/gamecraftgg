@@ -36,13 +36,15 @@ export async function POST(req: NextRequest) {
   const editSlug = typeof body?.editSlug === 'string' ? body.editSlug : '';
   if (prompt.length < 8) return NextResponse.json({ error: 'Describe the game in a sentence or two.' }, { status: 400 });
 
-  // Editing an existing game requires owning it — either as the signed-in user
-  // or via the browser's anonymous ref for games made before sign-in existed
-  // (those get adopted into the account on sign-in, but don't strand stragglers).
+  // Editing an existing game requires owning it — as the signed-in user, or
+  // via a legacy 8-hex anonymous ref for pre-auth drafts that were never
+  // adopted. User ids never match the 8-hex shape, so a leaked/guessed ref
+  // can never edit an account's games.
   if (editSlug) {
     const g = getGameAny(editSlug);
     if (!g) return NextResponse.json({ error: 'unknown game' }, { status: 404 });
-    if (g.creator_ref !== userId && !(ref && g.creator_ref === ref)) {
+    const ownsAsLegacyRef = /^[0-9a-f]{8}$/.test(ref) && g.creator_ref === ref;
+    if (g.creator_ref !== userId && !ownsAsLegacyRef) {
       return NextResponse.json({ error: 'not your game' }, { status: 403 });
     }
   }

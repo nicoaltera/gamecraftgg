@@ -1,25 +1,25 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getRef } from '@/lib/ref';
 import { addCreation } from '@/lib/creations';
 
-// Owner controls (draft badge, Publish, continue-editing) + Remix for everyone.
+// Owner controls (draft badge, Publish, continue-editing). Ownership is
+// decided SERVER-SIDE on the game page and passed in — this component never
+// derives authority from anything the browser holds.
 export default function GameActions({
   slug,
-  title,
+  title, // eslint-disable-line @typescript-eslint/no-unused-vars
   status,
-  creatorRef,
+  isOwner,
   parentSlug,
 }: {
   slug: string;
   title: string;
   status: string;
-  creatorRef: string;
+  isOwner: boolean;
   parentSlug: string;
 }) {
-  const [mine, setMine] = useState(false);
   const [state, setState] = useState(status);
   const [editing, setEditing] = useState(false);
   const [prompt, setPrompt] = useState('');
@@ -27,16 +27,12 @@ export default function GameActions({
   const [note, setNote] = useState<string | null>(null);
   const router = useRouter();
 
-  useEffect(() => {
-    setMine(!!creatorRef && getRef() === creatorRef);
-  }, [creatorRef]);
-
   async function publish() {
     setBusy(true);
     const res = await fetch('/api/publish', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ slug, ref: getRef() }),
+      body: JSON.stringify({ slug }),
     });
     setBusy(false);
     if (res.ok) {
@@ -52,7 +48,7 @@ export default function GameActions({
     const res = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: prompt.trim(), ref: getRef(), editSlug: slug }),
+      body: JSON.stringify({ prompt: prompt.trim(), editSlug: slug }),
     });
     const d = await res.json();
     setBusy(false);
@@ -62,6 +58,8 @@ export default function GameActions({
     } else setNote(d.error ?? 'Could not start that edit.');
   }
 
+  if (!isOwner && !parentSlug) return null;
+
   return (
     <div className="game-actions-bar">
       {parentSlug && (
@@ -70,7 +68,7 @@ export default function GameActions({
         </p>
       )}
 
-      {mine && state === 'draft' && (
+      {isOwner && state === 'draft' && (
         <div className="draft-box">
           <span className="draft-badge">DRAFT — only you can see this</span>
           <button className="btn btn-biro" onClick={publish} disabled={busy}>
@@ -78,9 +76,9 @@ export default function GameActions({
           </button>
         </div>
       )}
-      {mine && state === 'published' && <span className="live-badge">● live in the library</span>}
+      {isOwner && state === 'published' && <span className="live-badge">● live in the library</span>}
 
-      {mine && (
+      {isOwner && (
         <div className="edit-area">
           {editing ? (
             <form className="edit-row" onSubmit={submitEdit}>

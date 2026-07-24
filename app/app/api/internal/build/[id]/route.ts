@@ -88,6 +88,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     db().prepare('UPDATE generations SET worker_machine = ? WHERE id = ?').run(body.machine.slice(0, 32), id);
   }
 
+  // Terminal rows accept nothing more: a reaped (refunded) build must not be
+  // able to publish a "free" game or resurrect its trace. 409 is fatal to the
+  // worker's reporter — the orphaned process gives up and the machine dies.
+  if (gen.status !== 'running' && body.type !== 'finish') {
+    return NextResponse.json({ error: 'build is no longer running' }, { status: 409 });
+  }
+
   if (body.type === 'events') {
     const seq = Number(body.seq);
     if (!Number.isInteger(seq)) return NextResponse.json({ error: 'bad seq' }, { status: 400 });
@@ -138,15 +145,38 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // are resolved HERE, against the real games dir
     if (!isEdit && fs.existsSync(path.join(GAMES_DIR, slug))) slug = `${slug}-${id.slice(0, 4)}`;
     const dir = path.join(GAMES_DIR, slug);
-    fs.mkdirSync(dir, { recursive: true });
-    for (const [name, limit] of Object.entries(FILE_LIMITS)) {
-      const b64 = files[name];
-      if (b64 == null) continue;
-      const buf = Buffer.from(String(b64), 'base64');
-      if (buf.length > limit) return NextResponse.json({ error: `${name} too large` }, { status: 400 });
-      fs.writeFileSync(path.join(dir, name), buf);
+
+    // ATOMIC publish: everything lands in a staging dir first and is validated
+    // there; the live dir is swapped in one rename. A crash or bad payload can
+    // never leave a half-updated public game. Staging dirs start with '.' so
+    // the disk-sync (readdir + slug regex) can never see them as games.
+    const staging = path.join(GAMES_DIR, `.staging-${id}`);
+    fs.rmSync(staging, { recursive: true, force: true });
+    fs.mkdirSync(staging, { recursive: true });
+    try {
+      for (const [name, limit] of Object.entries(FILE_LIMITS)) {
+        const b64 = files[name];
+        if (b64 == null) continue;
+        const buf = Buffer.from(String(b64), 'base64');
+        if (buf.length > limit) throw new Error(`${name} too large`);
+        fs.writeFileSync(path.join(staging, name), buf);
+      }
+      if (!fs.existsSync(path.join(staging, 'index.html'))) throw new Error('no game file');
+      fs.writeFileSync(path.join(staging, 'published.json'), JSON.stringify({ genId: id, at: Date.now() }));
+      // swap: edits replace the existing dir via rename-aside; new games rename in
+      if (fs.existsSync(dir)) {
+        const old = path.join(GAMES_DIR, `.old-${id}`);
+        fs.rmSync(old, { recursive: true, force: true });
+        fs.renameSync(dir, old);
+        fs.renameSync(staging, dir);
+        fs.rmSync(old, { recursive: true, force: true });
+      } else {
+        fs.renameSync(staging, dir);
+      }
+    } catch (e) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      return NextResponse.json({ error: e instanceof Error ? e.message : 'publish failed' }, { status: 400 });
     }
-    if (!fs.existsSync(path.join(dir, 'index.html'))) return NextResponse.json({ error: 'no game file' }, { status: 400 });
     // draft row + vetted marker — mirrors LocalReporter.publish / syncGamesFromDisk
     db()
       .prepare(
@@ -163,7 +193,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         JSON.stringify(Array.isArray(meta.boards) ? meta.boards : []), JSON.stringify(meta.palette ?? []),
         String(meta.author ?? 'gamecraft').slice(0, 40), gen.user_id, Date.now()
       );
-    fs.writeFileSync(path.join(dir, 'published.json'), JSON.stringify({ genId: id, at: Date.now() }));
     return NextResponse.json({ ok: true, slug });
   }
 

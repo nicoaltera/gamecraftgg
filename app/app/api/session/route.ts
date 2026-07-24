@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db, getGameAny } from '@/lib/db';
+import { rateLimit, clientIp } from '@/lib/ratelimit';
 import { readJson } from '@/lib/http';
 
 // A play session is minted when a game page loads. Score submits require a
 // live session — the cheapest honest layer of the accept-cheating-v1 posture.
+// Per-IP limited: sessions are the raw material of fake engagement.
 export async function POST(req: NextRequest) {
+  if (!rateLimit(`sess:${clientIp(req.headers)}`, 30, 60_000)) {
+    return NextResponse.json({ error: 'slow down' }, { status: 429 });
+  }
   const body = await readJson(req);
   const slug = typeof body?.slug === 'string' ? body.slug : null;
   if (!slug || !getGameAny(slug)) return NextResponse.json({ error: 'unknown game' }, { status: 404 });

@@ -1,6 +1,9 @@
 import { notFound } from 'next/navigation';
+import { headers } from 'next/headers';
 import Link from 'next/link';
 import type { Metadata } from 'next';
+import { auth } from '@/lib/auth';
+import { draftToken } from '@/lib/internal-auth';
 import { getFeed, getGame, getGameAny, getMakerName, parseBoards } from '@/lib/db';
 import GameStage from '@/components/GameStage';
 import Leaderboard from '@/components/Leaderboard';
@@ -35,10 +38,19 @@ export async function generateMetadata({ params, searchParams }: Params): Promis
 
 export default async function GamePage({ params }: Params) {
   const { slug } = await params;
-  const game = getGameAny(slug); // owners can view their own drafts
+  const game = getGameAny(slug);
   if (!game) notFound();
   const boards = parseBoards(game);
   const isPublished = game.status === 'published';
+
+  // Ownership is the SESSION USER, decided server-side — the browser ref is
+  // analytics identity, never authority. Drafts are private: only their owner
+  // sees the page, and the owner gets a signed short-lived token so the game
+  // iframe can load from the cookie-less game origin.
+  const session = await auth.api.getSession({ headers: await headers() });
+  const isOwner = !!session && !!game.creator_ref && game.creator_ref === session.user.id;
+  if (!isPublished && !isOwner) notFound();
+  const draftParam = !isPublished && isOwner ? draftToken(slug) : null;
 
   // The feed order IS the swipe order: chevrons walk the same ranking the
   // homepage shows. Drafts aren't in the feed — their viewer just has no next.
@@ -72,10 +84,11 @@ export default async function GamePage({ params }: Params) {
             title={game.title}
             boards={boards}
             status={game.status}
-            creatorRef={game.creator_ref}
+            isOwner={isOwner}
+            draftParam={draftParam}
             orientation={game.orientation}
           />
-          <GameActions slug={game.slug} title={game.title} status={game.status} creatorRef={game.creator_ref} parentSlug={game.parent_slug} />
+          <GameActions slug={game.slug} title={game.title} status={game.status} isOwner={isOwner} parentSlug={game.parent_slug} />
           <div className="under-grid">
             <div>
               <p className="about-game">{game.description}</p>

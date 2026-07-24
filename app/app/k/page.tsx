@@ -1,6 +1,19 @@
+import { notFound } from 'next/navigation';
+import { headers } from 'next/headers';
+import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
+
+// Admin-only: this page shows prompts, spend, and worker internals. Gated on
+// ADMIN_EMAILS (comma-separated, a Fly secret); open in local dev for
+// convenience; 404 (not 403) so the URL doesn't advertise itself.
+async function requireAdmin() {
+  if (process.env.NODE_ENV !== 'production') return;
+  const admins = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session || !admins.includes(session.user.email.toLowerCase())) notFound();
+}
 
 // Fleet observability: every build in the last 24h — status, worker machine,
 // cycles, spend, and (for live builds) how long since the worker last spoke.
@@ -66,7 +79,8 @@ function BuildsPanel() {
 
 // The K dashboard (01-product-spec.md): the experiment's decision gate.
 // K = shares-per-player x share->player conversion, per 7-day window.
-export default function KDashboard() {
+export default async function KDashboard() {
+  await requireAdmin();
   const d = db();
   const now = Date.now();
   const week = now - 7 * 86400_000;
