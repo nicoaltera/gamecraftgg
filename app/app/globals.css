@@ -716,6 +716,21 @@ main {
 .build-eta { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; font-size: 13px; color: var(--graphite); }
 .build-eta .eta-count { font-family: var(--font-mono), monospace; color: var(--ink); }
 
+/* the creator's story: a short human timeline, no plumbing */
+.build-story { list-style: none; padding: 0; margin: 22px 0 0; max-width: 560px; }
+.build-story li {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 7px 0;
+  font-size: 15.5px;
+  border-bottom: 1px solid rgba(26, 24, 21, 0.08);
+}
+.build-story li.done { color: var(--graphite); }
+.build-story li.now { color: var(--ink); font-weight: 600; }
+.build-story .story-mark { flex: 0 0 18px; text-align: center; color: var(--biro); }
+.build-story li.now .story-mark { animation: cook-pulse 1.6s ease-in-out infinite; }
+
 /* the trace: footnotes in a bounded, scrollable notebook */
 .trace-box {
   max-width: 860px;
