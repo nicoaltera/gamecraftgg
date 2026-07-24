@@ -1524,6 +1524,23 @@ function drawHUD(){
       txt(isTouch?'tap FIRE to zap pigeons':'press F to fire the laser', isTouch?W*0.5:lx+lw, isTouch?H-92:ly-14, 14, col, isTouch?'center':'right', 0.5+0.4*Math.abs(Math.sin(T*4)));
     }
   }
+  // PERSISTENT touch pitch control. The nose-tilt input is a left-zone drag; on
+  // touch that zone was invisible, so once the coach text below faded a returning
+  // player couldn't find it. Draw a labeled left-edge track the whole time you're
+  // flying — purely a visible affordance over the already-existing input.
+  if(isTouch && state==='fly'){
+    const cx=40, cy=H*0.5, ch=Math.min(170, H*0.36);
+    ctx.save();
+    ctx.globalAlpha = touchPitchActive?0.95:0.5;
+    ctx.strokeStyle=INK; ctx.lineWidth=2; ctx.fillStyle='rgba(252,249,240,0.55)';
+    ctx.beginPath(); wrect(cx-17, cy-ch/2, 34, ch, 1.6, 4127); ctx.fill(); ctx.stroke();
+    txt('▲', cx, cy-ch/2+15, 16, INK, 'center');
+    txt('▼', cx, cy+ch/2-15, 16, INK, 'center');
+    txt('TILT', cx, cy+ch/2+15, 11, INK_SOFT, 'center');
+    ctx.strokeStyle='rgba(26,24,21,0.34)'; ctx.lineWidth=1.5;
+    for(let i=-1;i<=1;i++){ ctx.beginPath(); ctx.moveTo(cx-8, cy+i*8); ctx.lineTo(cx+8, cy+i*8); ctx.stroke(); }
+    ctx.restore();
+  }
   // pitch coaching — revealed the moment you're first airborne, anchored by the speed/alt meters
   // (the readouts the climb/dive tradeoff drives). Fades the instant you tilt the nose.
   if(state==='fly' && !save.coachDone.pitch && !run.usedPitch && run.air<8 && plane.y<GROUND-30){

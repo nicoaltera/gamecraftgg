@@ -61,10 +61,25 @@ results.push(
 );
 results.push(
   await run('mobile', { ...devices['iPhone 13'] }, async (page) => {
-    await page.touchscreen.tap(195, 422);
-    for (let i = 0; i < 10; i++) {
-      await page.touchscreen.tap(195 + (i % 3) * 40, 500);
-      await page.waitForTimeout(250);
+    // Exercise the full touch vocabulary so drag/hold-based controls actually
+    // fire and the "playing" screenshot reflects real touch — not just taps.
+    // (Pass criteria are unchanged: no console errors + a gs:'ready' bridge.)
+    await page.touchscreen.tap(195, 422); // start / primary
+    // a vertical drag in the left thumb-zone (pitch/steer/throttle-style controls)
+    for (const [x, y0, y1] of [[110, 300, 520], [110, 520, 300]]) {
+      await page.touchscreen.tap(x, y0);
+      await page.mouse.move(x, y0);
+      await page.mouse.down();
+      for (let s = 0; s <= 6; s++) {
+        await page.mouse.move(x, y0 + ((y1 - y0) * s) / 6);
+        await page.waitForTimeout(60);
+      }
+      await page.mouse.up();
+    }
+    // tap bursts on the right (fire/boost) + a couple of general taps
+    for (let i = 0; i < 8; i++) {
+      await page.touchscreen.tap(280 + (i % 3) * 30, 500);
+      await page.waitForTimeout(220);
     }
   })
 );
